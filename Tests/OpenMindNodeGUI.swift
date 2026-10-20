@@ -2,6 +2,10 @@ import AppKit
 import ApplicationServices
 import CryptoKit
 
+if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.loginwindow" {
+    fputs("GUI gate unavailable: locked desktop (loginwindow foreground)\n", stderr)
+    exit(2)
+}
 // Only a marked disposable own app may receive test actions; never select an old preview implicitly.
 guard AXIsProcessTrusted(),
       let rawPID = ProcessInfo.processInfo.environment["MINDMAP_GUI_PID"],
