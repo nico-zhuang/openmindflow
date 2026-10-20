@@ -29,6 +29,7 @@ enum CanvasCommandTests {
             doCommandBy: NSSelectorFromString("unrecognizedCommand:")))
         let appDelegate = AppDelegate()
         appDelegate.installMenu()
+        assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "Node"])
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let before = nodeMenu.item(withTitle: "New Sibling Before")!
         assert(before.keyEquivalent == "\r" && before.keyEquivalentModifierMask == [.option])

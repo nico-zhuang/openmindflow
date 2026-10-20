@@ -440,19 +440,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 
     func installMenu() {
         let main = NSMenu()
-        let app = NSMenuItem()
+        let app = NSMenuItem(title: "MindMap", action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit MindMap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
         main.addItem(app)
-        let file = NSMenuItem()
+        let file = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openFile(_:)), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Save", action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         file.submenu = fileMenu
         main.addItem(file)
-        let edit = NSMenuItem()
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Undo", action: #selector(undoEdit(_:)), keyEquivalent: "z").target = self
         let redo = editMenu.addItem(withTitle: "Redo", action: #selector(redoEdit(_:)), keyEquivalent: "Z")
@@ -460,7 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         redo.target = self
         edit.submenu = editMenu
         main.addItem(edit)
-        let node = NSMenuItem()
+        let node = NSMenuItem(title: "Node", action: nil, keyEquivalent: "")
         let nodeMenu = NSMenu(title: "Node")
         let entries: [(String, Selector, String, NSEvent.ModifierFlags)] = [
             ("New Child", #selector(newChild(_:)), "\t", []),
