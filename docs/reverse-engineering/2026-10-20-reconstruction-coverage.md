@@ -22,6 +22,7 @@
 | --- | --- | --- |
 | 原版安装物静态身份 | 主程序 SHA-256 重新核对为 `1e6eda8e897ff844c9dca4cc9dd4f7cba4f573187a53fc0a8d7fc21cf20abe12`，与 REA Evidence 目标一致；220 项有标题菜单、104 项带键，详见[快捷键覆盖审计](2026-10-20-shortcut-coverage.md) | 无原版 GUI 的菜单启用状态、真实按键与拖动阈值 |
 | 独立源码 | `bfeaf5a` 起实现节点改挂/同级移动/创建/分离，后续 `a3183d4` 修正顶层菜单标题；`ff53227` 的合成 AppKit 事件断言覆盖改挂和同级重排；模型有循环/无效索引防护和撤销 | 无自由定位、左右移动、多选、剪贴板/大纲、样式/附件/原格式写出 |
+| 独立性/只读边界 | 构建 Bundle ID 为 `local.mindmap.native-editor`；`otool -L` 只见 Apple/Swift 系统库、无原版 framework 动态依赖；原版主程序 SHA-256 与静态证据一致 | 动态链接独立不等于功能等价，也不能证明用户授权 `.mindnode` 的所有字段可往返 |
 | 无窗口验证 | `bash build.sh`、模型/布局/导入/CanvasCommand 四组断言、`plutil -lint` 在源码最后一次修改后通过；用户可重跑 [README 命令](../../README.md) | 无 GUI 手感、视觉和真实文本输入法的等价证据 |
 | 已安装版本 | `~/Applications/MindMap.app` 未被这些新构建覆盖；另存的 `dist/MindMap-macOS-arm64-a3183d4.zip` 也未启动验收 | 不能把源码新特性当作用户当前打开窗口的能力 |
 
