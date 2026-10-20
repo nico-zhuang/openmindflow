@@ -67,7 +67,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         bounds.fill()
         let nodes = visibleNodes()
         if nodes.isEmpty {
-            let message = "Empty map — open a .mindmap.json file to begin"
+            let message = "Empty map — no nodes to display. Open a .mindmap.json or .mindnode file."
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]
             (message as NSString).draw(at: CGPoint(x: 48, y: 60), withAttributes: attrs)
             return
@@ -307,6 +307,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.makeFirstResponder(canvas)
         } catch { alert("Could not open map", detail: error.localizedDescription) }
     }
+    @objc private func openMindNode(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        // Do not filter by UTType.package: installed MindNode UTType is not a package subtype.
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.message = "Select a .mindnode directory package. Only text, tree structure and fold state are copied; styles, notes and attachments are not round-tripped."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let roots = try MindNodeImporter.load(url)
+            guard confirmDiscardOrSave() else { return }
+            canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            fileURL = nil // Import never inherits a previous JSON destination or the source package.
+            dirty = false
+            updateTitle()
+            window.makeFirstResponder(canvas)
+            alert("MindNode imported read-only", detail: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
+        } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
+    }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     private func save() -> Bool {
         canvas.commitEditing()
@@ -347,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let file = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openFile(_:)), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Save", action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         file.submenu = fileMenu
         main.addItem(file)

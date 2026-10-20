@@ -1,0 +1,13 @@
+# Task 2 — Open-panel integration report
+
+Status: implemented within `Sources/App.swift`, `README.md`, this report and one focused GUI smoke check (`Tests/OpenMindNodeGUI.swift`).
+
+- File menu adds **Open MindNode (Read-only)…**. Its native open panel permits selecting directory packages without relying on `UTType.package` conformance; `MindNodeImporter.load` checks `.mindnode`, directory and v9 binary plist. Parsing happens before the unsaved-change guard, so a parse failure alerts without changing the current editor, JSON destination or dirty flag. After a successful parse and confirmed discard/save, a replacement `MapModel` selects the first root (or a fresh selection ID when empty), resets `fileURL` and dirty state, and displays the import limitations in an explicit alert. The empty canvas says “no nodes to display.” Save then requests a new `.mindmap.json` destination.
+- Validation run: `swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindmap-model-tests && /tmp/mindmap-model-tests` → `model tests passed`.
+- Validation run: `swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests` → `layout and JSON roundtrip tests passed`.
+- Validation run: `swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImporterTests.swift -o /tmp/mindmap-importer-tests && /tmp/mindmap-importer-tests` → `import tests passed` (synthetic valid, empty and malformed packages).
+- Validation run: `bash build.sh; test -x build/MindMap.app/Contents/MacOS/MindMap` → `Built build/MindMap.app`, executable exists.
+- GUI smoke: with exactly one locally built MindMap app and AX permission, `swiftc Tests/OpenMindNodeGUI.swift -o /tmp/mindmap-open-gui-check; /tmp/mindmap-open-gui-check` → `MindNode File menu and native open panel passed; package selection not exercised by this check`. The first GUI run raced panel creation and failed `MindNode open panel missing`; a bounded wait corrected the check and it passed on the later run. No pre-implementation behavioral RED was captured.
+- Approved source read: one compatible directory package under `/Users/nicozhuang/极境造物/会议纪要` parsed via `/tmp/mindmap-importer-tests` → `maps=1, nodes=18`. SHA-256 was computed on each of its 5 source files before and after the parse and every digest matched; no title prose was logged. No source package was written.
+
+GUI limitations: smoke verifies the new menu action reaches a native panel and can cancel it, not selecting a package, installing selection/empty state, parse-failure retention, warning alert or subsequent Save panel. Authorized sample was parsed through the importer, not selected in the GUI. No original app or REA MCP was used.
