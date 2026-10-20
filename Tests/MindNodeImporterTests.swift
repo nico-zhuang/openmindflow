@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @main
 enum MindNodeImporterTests {
@@ -7,22 +8,33 @@ enum MindNodeImporterTests {
         let base = fm.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
         let scratch = base.appendingPathComponent("mindmap-import-tests-\(UUID().uuidString)", isDirectory: true)
         let package = scratch.appendingPathComponent("fixture.mindnode", isDirectory: true)
-        try fm.createDirectory(at: scratch, withIntermediateDirectories: false)
+        let baseFD = open(base.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        precondition(baseFD >= 0)
+        precondition(mkdirat(baseFD, scratch.lastPathComponent, 0o700) == 0) // Atomic exclusive create.
+        let scratchFD = openat(baseFD, scratch.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        precondition(scratchFD >= 0 && mkdirat(scratchFD, "fixture.mindnode", 0o700) == 0)
+        let packageFD = openat(scratchFD, "fixture.mindnode", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        precondition(packageFD >= 0)
         let inode = try fm.attributesOfItem(atPath: scratch.path)[.systemFileNumber] as? NSNumber
         let owner = UUID().uuidString
         let marker = scratch.appendingPathComponent(".test-owner")
         try owner.write(to: marker, atomically: true, encoding: .utf8)
-        try fm.createDirectory(at: package, withIntermediateDirectories: false)
         defer {
-            // Verify this exact test-owned directory before the only recursive deletion.
             let resolved = scratch.resolvingSymlinksInPath().standardizedFileURL
             let current = try? fm.attributesOfItem(atPath: scratch.path)[.systemFileNumber] as? NSNumber
             let stored = try? String(contentsOf: marker, encoding: .utf8)
             if resolved == scratch.standardizedFileURL, resolved.deletingLastPathComponent() == base,
                scratch.lastPathComponent.hasPrefix("mindmap-import-tests-"),
                inode != nil, current == inode, stored == owner {
-                try? fm.removeItem(at: scratch)
+                // Nonrecursive, descriptor-relative cleanup: another directory's contents cannot be removed.
+                _ = unlinkat(packageFD, "contents.xml", 0)
+                _ = unlinkat(scratchFD, ".test-owner", 0)
+                _ = unlinkat(scratchFD, "fixture.mindnode", AT_REMOVEDIR)
+                _ = unlinkat(baseFD, scratch.lastPathComponent, AT_REMOVEDIR)
             }
+            _ = close(packageFD)
+            _ = close(scratchFD)
+            _ = close(baseFD)
         }
         let rootID = UUID(), childID = UUID()
         let child: [String: Any] = ["nodeID": childID.uuidString, "title": ["text": "<p>Hello &amp; world</p>"], "subnodes": [], "hasFoldedSubnodes": true]
