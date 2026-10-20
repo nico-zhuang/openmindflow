@@ -1,11 +1,23 @@
 import AppKit
 
+private final class MapNodeAX: NSAccessibilityElement {
+    weak var canvas: MapCanvas?
+    var nodeID: UUID?
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let canvas, let nodeID else { return false }
+        canvas.selectAndEdit(nodeID)
+        return true
+    }
+}
+
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { endEditingWithoutSaving(); needsDisplay = true } }
     var onChange: (() -> Void)?
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
+    private var accessibleNodes: [UUID: MapNodeAX] = [:]
 
     init(model: MapModel) {
         self.model = model
@@ -14,6 +26,34 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityChildren() -> [Any]? {
+        let visible = visibleNodes()
+        let ids = Set(visible.map { $0.node.id })
+        accessibleNodes = accessibleNodes.filter { ids.contains($0.key) }
+        let nodes: [MapNodeAX] = visible.map { item in
+            let element = accessibleNodes[item.node.id] ?? MapNodeAX()
+            accessibleNodes[item.node.id] = element
+            element.canvas = self
+            element.nodeID = item.node.id
+            element.setAccessibilityParent(self)
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel(item.node.title.isEmpty ? "New idea" : item.node.title)
+            element.setAccessibilitySelected(item.node.id == model.selected)
+            element.setAccessibilityFrame(window?.convertToScreen(convert(screen(item.frame), to: nil)) ?? .zero)
+            return element
+        }
+        return nodes + (super.accessibilityChildren() ?? [])
+    }
+
+    func selectAndEdit(_ id: UUID) {
+        commitEditing()
+        guard visibleNodes().contains(where: { $0.node.id == id }) else { return }
+        model.selected = id
+        needsDisplay = true
+        beginEditing()
+    }
 
     private func screen(_ frame: CGRect) -> CGRect {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
@@ -23,7 +63,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedRed: 0.965, green: 0.973, blue: 0.982, alpha: 1).setFill()
+        NSColor.windowBackgroundColor.setFill()
         bounds.fill()
         let nodes = visibleNodes()
         if nodes.isEmpty {
@@ -47,8 +87,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         for item in nodes {
             let box = screen(item.frame)
             let shape = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
-            (item.node.id == model.selected ? NSColor.controlAccentColor : NSColor.white).setStroke()
-            NSColor.white.setFill()
+            (item.node.id == model.selected ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+            NSColor.controlBackgroundColor.setFill()
             shape.fill()
             shape.lineWidth = item.node.id == model.selected ? 3 : 1
             shape.stroke()
@@ -56,19 +96,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: max(9, 14 * zoom), weight: .medium),
-                .foregroundColor: item.node.title.isEmpty ? NSColor.gray : NSColor(calibratedWhite: 0.12, alpha: 1)
+                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
             (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
         }
     }
 
-    private func beginEditing(replacing text: String? = nil) {
+    private func beginEditing() {
         guard editor == nil, let node = selectedNode() else { return }
         let field = NSTextField(frame: screen(node.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom))
-        field.stringValue = text ?? node.node.title
+        field.stringValue = node.node.title
         field.font = .systemFont(ofSize: max(9, 14 * zoom))
-        field.textColor = NSColor(calibratedWhite: 0.12, alpha: 1)
+        field.textColor = .labelColor
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -76,7 +116,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         addSubview(field)
         editor = field
         window?.makeFirstResponder(field)
-        if text == nil { field.currentEditor()?.selectAll(nil) }
+        field.currentEditor()?.selectAll(nil)
         needsDisplay = true
     }
 
@@ -122,12 +162,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 48: addChild()                         // Tab
         case 36, 76: addSibling()                   // Return / keypad Enter
         case 51, 117: commitEditing(); model.remove(); changed()
-        case 49: commitEditing(); model.toggleFold(); changed()
+        case 49: commitEditing(); model.toggleFold(); changed() // Optional Space
+        case 47 where event.modifierFlags.contains(.shift):
+            commitEditing(); model.toggleFold(); changed() // Required Shift+period
         case 123, 124, 125, 126: moveSelection(event.keyCode)
         default:
             if let text = event.characters, !text.isEmpty,
                text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
-                beginEditing(replacing: text)
+                beginEditing()
+                editor?.currentEditor()?.keyDown(with: event)
             } else { super.keyDown(with: event) }
         }
     }
@@ -190,11 +233,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     private var canvas: MapCanvas!
     private var fileURL: URL?
     private var dirty = false
+    private var closeApproved = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = MapNode(id: UUID(), title: "Central idea", children: [], folded: false)
@@ -204,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "Untitled — MindMap"
+        window.delegate = self
         window.contentView = canvas
         window.center()
         installMenu()
@@ -211,8 +256,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(canvas)
         NSApp.activate(ignoringOtherApps: true)
     }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard confirmDiscardOrSave() else { return false }
+        closeApproved = true
+        NSApp.terminate(nil) // Exit the single-window app instead of stranding its map.
+        return false
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        confirmDiscardOrSave() ? .terminateNow : .terminateCancel
+        closeApproved || confirmDiscardOrSave() ? .terminateNow : .terminateCancel
     }
     private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? "Untitled")\(dirty ? " •" : "") — MindMap" }
     private func alert(_ message: String, detail: String) {
@@ -227,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard dirty else { return true }
         let prompt = NSAlert()
         prompt.messageText = "Save changes to this map?"
-        prompt.informativeText = "Opening another file or quitting will discard unsaved changes."
+        prompt.informativeText = "Opening another file, closing the window, or quitting will discard unsaved changes."
         prompt.addButton(withTitle: "Save")
         prompt.addButton(withTitle: "Cancel")
         prompt.addButton(withTitle: "Discard Changes")

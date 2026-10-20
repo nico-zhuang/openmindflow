@@ -21,3 +21,9 @@ Branch: `feature/native-editor`. Scope: independent AppKit application; no origi
 ## Data safety and boundaries
 
 Open and Save accept filenames ending only in `.mindmap.json`; `.mindnode` is neither opened nor written. JSON decoding failures show `NSAlert` without replacing the current model; saving encodes roots and writes atomically, showing `NSAlert` on errors. Opening another file or quitting with unsaved changes prompts Save/Cancel/Discard; canceled/failed saves abort the destructive action. Multiple roots are laid out separately; empty roots render an empty state. Shortcut editing uses native `NSTextField`; geometry is deliberately independent rather than copied.
+
+## Post-review repair, independently verified
+
+The review found unguarded window close, missing Shift+period, first-key IME bypass, dark contrast and inaccessible drawn nodes. Changes add a Save/Cancel/Discard guard to window close, forward first printable key events to native `NSTextField.currentEditor()`, add Shift+period, use dynamic system colors and expose labeled/selected/pressable accessibility nodes. `Tests/AppAccessibilityTests.swift` tests own-app accessibility and the unsaved close → Cancel → retained map → Discard → app exit flow.
+
+Lead ran `bash build.sh`, the model/layout/import suites, `plutil -lint`, `open build/MindMap.app && swift Tests/AppAccessibilityTests.swift`, and bounded `swift Tests/AppAccessibilityTests.swift --close-flow`: all exited 0; the AX checks printed `own-app AX node, selected state and Press action passed` and `own-app close Save/Cancel/Discard prompt, cancel retention and confirmed exit passed`. Actual Chinese IME composition, dark/light screenshots, gestures and original app runtime parity remain unverified.
