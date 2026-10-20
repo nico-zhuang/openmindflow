@@ -7,18 +7,27 @@ enum MindNodeImporterTests {
         let base = fm.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
         let scratch = base.appendingPathComponent("mindmap-import-tests-\(UUID().uuidString)", isDirectory: true)
         let package = scratch.appendingPathComponent("fixture.mindnode", isDirectory: true)
-        try fm.createDirectory(at: package, withIntermediateDirectories: true)
+        try fm.createDirectory(at: scratch, withIntermediateDirectories: false)
+        let inode = try fm.attributesOfItem(atPath: scratch.path)[.systemFileNumber] as? NSNumber
+        let owner = UUID().uuidString
+        let marker = scratch.appendingPathComponent(".test-owner")
+        try owner.write(to: marker, atomically: true, encoding: .utf8)
+        try fm.createDirectory(at: package, withIntermediateDirectories: false)
         defer {
-            // The only recursive delete in tests is the unique directory created above.
+            // Verify this exact test-owned directory before the only recursive deletion.
             let resolved = scratch.resolvingSymlinksInPath().standardizedFileURL
-            if resolved.deletingLastPathComponent() == base && scratch.lastPathComponent.hasPrefix("mindmap-import-tests-") {
+            let current = try? fm.attributesOfItem(atPath: scratch.path)[.systemFileNumber] as? NSNumber
+            let stored = try? String(contentsOf: marker, encoding: .utf8)
+            if resolved == scratch.standardizedFileURL, resolved.deletingLastPathComponent() == base,
+               scratch.lastPathComponent.hasPrefix("mindmap-import-tests-"),
+               inode != nil, current == inode, stored == owner {
                 try? fm.removeItem(at: scratch)
             }
         }
         let rootID = UUID(), childID = UUID()
         let child: [String: Any] = ["nodeID": childID.uuidString, "title": ["text": "<p>Hello &amp; world</p>"], "subnodes": [], "hasFoldedSubnodes": true]
         let root: [String: Any] = ["nodeID": rootID.uuidString, "title": ["text": "<p>Root</p>"], "subnodes": [child], "hasFoldedSubnodes": false]
-        func write(_ maps: [[String: Any]], version: Int = 9, format: PropertyListSerialization.PropertyListFormat = .binary) throws {
+        func write(_ maps: [[String: Any]], version: Any = 9, format: PropertyListSerialization.PropertyListFormat = .binary) throws {
             let plist: [String: Any] = ["version": version, "canvas": ["mindMaps": maps.map { ["mainNode": $0] }]]
             try PropertyListSerialization.data(fromPropertyList: plist, format: format, options: 0)
                 .write(to: package.appendingPathComponent("contents.xml"), options: .atomic)
@@ -37,6 +46,14 @@ enum MindNodeImporterTests {
         assert(rejects())
         try write([root], version: 8)
         assert(rejects())
+        try write([root], version: 9.0) // A binary-plist real must not coerce to integer v9.
+        assert(rejects())
+        try write([root], version: true)
+        assert(rejects())
+        var numericFold = root
+        numericFold["hasFoldedSubnodes"] = 1 // NSNumber(1) is not a plist Boolean.
+        try write([numericFold])
+        assert(rejects())
         try write([root], format: .xml)
         assert(rejects())
         var bad = root
@@ -46,8 +63,33 @@ enum MindNodeImporterTests {
         bad["title"] = ["text": "<!DOCTYPE p [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><p>&xxe;</p>"]
         try write([bad])
         assert(rejects())
+        bad["title"] = ["text": "<p>Hi <b>there</b></p>"]
+        try write([bad])
+        let inline = try MindNodeImporter.load(package)
+        assert(inline[0].title == "Hi there")
+        bad["title"] = ["text": "<p><script>unknown</script></p>"]
+        try write([bad])
+        assert(rejects())
+        bad["title"] = ["text": "<p>" + String(repeating: "<span>", count: 100) + "deep" + String(repeating: "</span>", count: 100) + "</p>"]
+        try write([bad])
+        assert(rejects())
         bad = root
         bad["subnodes"] = [root] // Duplicate UUID anywhere in the package is invalid.
+        try write([bad])
+        assert(rejects())
+        try write([root, root]) // Duplicate IDs across separate maps are also invalid.
+        assert(rejects())
+        var deep: [String: Any] = child
+        for _ in 0...201 {
+            deep = ["nodeID": UUID().uuidString, "title": ["text": "<p>branch</p>"], "subnodes": [deep], "hasFoldedSubnodes": false]
+        }
+        try write([deep])
+        assert(rejects())
+        let wide: [[String: Any]] = (0...10_000).map { _ in
+            ["nodeID": UUID().uuidString, "title": ["text": "<p>x</p>"], "subnodes": [], "hasFoldedSubnodes": false]
+        }
+        bad = root
+        bad["subnodes"] = wide
         try write([bad])
         assert(rejects())
         try Data(repeating: 0, count: 8 * 1024 * 1024 + 1)
