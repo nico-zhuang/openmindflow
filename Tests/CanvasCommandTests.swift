@@ -13,6 +13,19 @@ enum CanvasCommandTests {
         blankField!.stringValue = "First thought"
         blankCanvas.commitEditing()
         assert(blank.roots[0].title == "First thought")
+        var blankChanges = 0
+        blankCanvas.onChange = { blankChanges += 1 }
+        let delete = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{7f}",
+            charactersIgnoringModifiers: "\u{7f}", isARepeat: false, keyCode: 51)!
+        blankCanvas.keyDown(with: delete)
+        assert(blankChanges == 0, "Deleting the only root must not mark the map dirty")
+        blankCanvas.addMainNode()
+        let afterInsert = blankChanges
+        blankCanvas.keyDown(with: delete)
+        assert(blankChanges == afterInsert + 1 && blank.roots.count == 1)
+        blankCanvas.keyDown(with: delete)
+        assert(blankChanges == afterInsert + 1, "Second Delete is a no-op")
         let rootID = UUID(), childID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [
             MapNode(id: childID, title: "Existing", children: [], folded: false)

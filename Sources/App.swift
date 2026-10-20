@@ -207,7 +207,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 36, 76:
             if event.modifierFlags.contains(.shift) { addMainNode() }
             else { addSibling(before: event.modifierFlags.contains(.option)) }
-        case 51, 117: commitEditing(); model.remove(); changed()
+        case 51, 117: commitEditing(); if model.remove() { changed() }
         case 49: commitEditing(); model.toggleFold(); changed() // Optional Space
         case 47 where event.modifierFlags.contains(.option):
             commitEditing(); model.toggleFold(); changed() // Static original menu: Option+period

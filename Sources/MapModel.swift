@@ -116,14 +116,15 @@ final class MapModel {
         }
     }
 
-    func remove() {
-        guard let path = Self.path(to: selected, in: roots) else { return }
+    @discardableResult
+    func remove() -> Bool {
+        guard let path = Self.path(to: selected, in: roots) else { return false }
         if path.count == 1 {
-            guard roots.count > 1 else { return }
+            guard roots.count > 1 else { return false }
             save()
             roots.remove(at: path[0])
             selected = roots[min(path[0], roots.count - 1)].id
-            return
+            return true
         }
         let parentID = Self.node(at: path.dropLast(), in: roots).id
         save()
@@ -131,6 +132,7 @@ final class MapModel {
             nodes.remove(at: index)
         }
         selected = parentID
+        return true
     }
 
     func toggleFold() {
