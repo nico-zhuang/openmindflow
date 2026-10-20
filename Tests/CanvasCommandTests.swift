@@ -30,6 +30,9 @@ enum CanvasCommandTests {
         let appDelegate = AppDelegate()
         appDelegate.installMenu()
         assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "Node"])
+        let fileMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "File" }!
+        assert(fileMenu.item(withTitle: "Open MindNode (Read-only)…")?.keyEquivalent == "o")
+        assert(fileMenu.item(withTitle: "Open Own JSON…") != nil)
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let before = nodeMenu.item(withTitle: "New Sibling Before")!
         assert(before.keyEquivalent == "\r" && before.keyEquivalentModifierMask == [.option])
@@ -77,6 +80,6 @@ enum CanvasCommandTests {
         reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, beforePoint))
         reorderCanvas.mouseUp(with: mouse(.leftMouseUp, beforePoint))
         assert(reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
-        print("canvas command and drag tests passed (no windows)")
+        print("canvas command, drag and explicit Open menu tests passed (no windows)")
     }
 }

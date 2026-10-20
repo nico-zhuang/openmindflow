@@ -42,3 +42,5 @@
 ## Reviewer stop line
 
 If the single Open panel cannot both navigate directories and select JSON on this host's UTType behavior, retain separate entries and make the default Open present explicit format guidance; do not loosen importer file validation to make the picker look successful. A build/headless pass cannot substitute for visible picker/IME validation.
+
+**执行记录**：混合面板的 AX 合成测试看到 JSON 文件但始终未能使 Open 启用；无法证明是产品拒绝还是 AX 脚本未选中列表项。按停线退回双入口：⌘O 的 `Open MindNode (Read-only)…` 与 `Open Own JSON…`；四组无窗口断言及构建通过，当前新版尚未完成有界 GUI 复测。只有 GUI 复测通过才关闭阶段 0。

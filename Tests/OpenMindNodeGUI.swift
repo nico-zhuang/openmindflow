@@ -121,7 +121,7 @@ func navigate(to url: URL) {
     key(36) // Confirm the user-selected path inside the native panel.
 }
 
-menu("Open…")
+menu("Open Own JSON…")
 navigate(to: previous)
 _ = AXUIElementPerformAction(wait("JSON Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
 let previousNode = wait("previous JSON root") { windows().lazy.compactMap { find($0, title: oldTitle) }.first }
@@ -135,8 +135,8 @@ precondition(value(previousNode, kAXSelectedAttribute) as? Bool == true,
              "Invalid import must retain prior map and selection")
 menu("Open MindNode (Read-only)…")
 navigate(to: scratch)
-let unrelated = wait("unrelated JSON in picker") { listingItem(previous.lastPathComponent) }
-precondition(value(unrelated, kAXEnabledAttribute) as? Bool == false, "Unrelated file must be disabled in import picker")
+let unrelated = wait("own JSON in import picker") { listingItem(previous.lastPathComponent) }
+precondition(value(unrelated, kAXEnabledAttribute) as? Bool == false, "JSON must be disabled in MindNode import picker")
 let listedPackage = wait("directory package in picker") { listingItem(package.lastPathComponent) }
 precondition(value(listedPackage, kAXEnabledAttribute) as? Bool == true, "Directory package must be selectable")
 navigate(to: package)

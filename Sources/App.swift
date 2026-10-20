@@ -354,17 +354,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
     }
     @objc private func openFile(_ sender: Any?) {
-        guard confirmDiscardOrSave() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.allowsOtherFileTypes = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard url.lastPathComponent.hasSuffix(".mindmap.json") else {
-            alert("Unsupported format", detail: "Open only .mindmap.json files. Original .mindnode documents are not supported.")
+            alert("Unsupported format", detail: "Select an existing .mindmap.json file; use Open MindNode for a read-only import.")
             return
         }
         do {
             let roots = try JSONDecoder().decode([MapNode].self, from: Data(contentsOf: url))
+            guard confirmDiscardOrSave() else { return }
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
             fileURL = url
             dirty = false
@@ -376,15 +375,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let panel = NSOpenPanel()
         // The installed MindNode UTType conforms to .data, not .package or .directory.
         panel.canChooseDirectories = true
-        panel.canChooseFiles = true // This installation exposes .mindnode directories as data, not packages.
+        panel.canChooseFiles = true
         panel.delegate = self
-        panel.message = "Select a .mindnode directory package. Only text, tree structure and fold state are copied; styles, notes and attachments are not round-tripped."
+        panel.message = "Select a MindNode v9 directory package. Import is read-only; Save creates a new .mindmap.json file."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let roots = try MindNodeImporter.load(url)
             guard confirmDiscardOrSave() else { return }
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
-            fileURL = nil // Import never inherits a previous JSON destination or the source package.
+            fileURL = nil // Never save into the source package.
             dirty = false
             updateTitle()
             window.makeFirstResponder(canvas)
@@ -392,7 +391,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
-        // Finder shows directories as navigable; disallow selecting every ordinary file.
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
     func panel(_ sender: Any, validate url: URL) throws {
@@ -447,8 +445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         main.addItem(app)
         let file = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "Open…", action: #selector(openFile(_:)), keyEquivalent: "o").target = self
-        fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: "Open Own JSON…", action: #selector(openFile(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Save", action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         file.submenu = fileMenu
         main.addItem(file)
