@@ -16,7 +16,7 @@ Run assertion tests:
 swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindmap-model-tests && /tmp/mindmap-model-tests
 swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImporterTests.swift -o /tmp/mindmap-importer-tests && /tmp/mindmap-importer-tests
-swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic copy-only; not a save feature
+swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic new-copy title/fold edit; not wired to Save
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
 # With exactly one instance of our app launched and Accessibility permission:

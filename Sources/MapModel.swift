@@ -1,6 +1,6 @@
 import Foundation
 
-struct MapNode: Codable {
+struct MapNode: Codable, Equatable {
     var id: UUID
     var title: String
     var children: [MapNode]
