@@ -7,3 +7,10 @@
 - Final command: `swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindnode-model-tests && /tmp/mindnode-model-tests`
 - Final result: exit 0; `model tests passed`.
 - Unrelated existing workspace changes in `docs/superpowers/plans/2026-10-20-native-editor.md` and `docs/static-evidence.md` were left untouched and excluded from this commit.
+
+## Important review findings follow-up
+
+- Added assert-based coverage for adding to a folded parent: the new child is selected and visible, and a single undo restores both the folded parent and previous selection; redo reapplies both. Added a three-level subtree sequence checking deep sibling insertion order/titles/selection, insertion undo/redo, deletion of a parent with descendants, and deletion undo/redo restoring exact descendant IDs, order, titles, and selection.
+- RED (tests changed, model unchanged): `swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindnode-model-tests && /tmp/mindnode-model-tests` exited 133 with `main/MapModelTests.swift:65: Assertion failed` (folded parent remained folded).
+- Model fix: `addChild()` unfolds its parent after `save()` in the same edit as child insertion; snapshot undo restores fold and selection together.
+- GREEN (after model fix): `swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindnode-model-tests && /tmp/mindnode-model-tests` exited 0 and printed `model tests passed`.

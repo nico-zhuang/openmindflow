@@ -25,6 +25,7 @@ final class MapModel {
         let child = MapNode(id: UUID(), title: "", children: [], folded: false)
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in
+            nodes[index].folded = false
             nodes[index].children.append(child)
         }
         selected = child.id
