@@ -3,6 +3,17 @@ import Foundation
 @main
 enum MapModelTests {
     static func main() {
+        for before in [false, true] {
+            let blank = MapModel(roots: [], selected: UUID())
+            blank.addSibling(before: before)
+            assert(blank.roots.count == 1 && blank.selected == blank.roots[0].id,
+                   "Return on an empty map must create a selectable main node")
+            let firstID = blank.selected
+            blank.undo()
+            assert(blank.roots.isEmpty)
+            blank.redo()
+            assert(blank.roots.map(\.id) == [firstID] && blank.selected == firstID)
+        }
         let rootID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [], folded: false)], selected: rootID)
 

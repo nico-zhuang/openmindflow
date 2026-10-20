@@ -39,6 +39,7 @@ final class MapModel {
     }
 
     func addSibling(before: Bool = false) {
+        if roots.isEmpty { addChild(); return }
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         let sibling = MapNode(id: UUID(), title: "", children: [], folded: false)
         save()

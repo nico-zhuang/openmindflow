@@ -4,6 +4,15 @@ import AppKit
 enum CanvasCommandTests {
     static func main() {
         _ = NSApplication.shared // Initialize AppKit without creating or running a window.
+        let blank = MapModel(roots: [], selected: UUID())
+        let blankCanvas = MapCanvas(model: blank)
+        blankCanvas.addSibling() // Return command on a newly opened empty document.
+        assert(blank.roots.count == 1 && blank.roots[0].id == blank.selected)
+        let blankField = blankCanvas.subviews.compactMap { $0 as? NSTextField }.first
+        assert(blankField != nil, "New root should enter text editing")
+        blankField!.stringValue = "First thought"
+        blankCanvas.commitEditing()
+        assert(blank.roots[0].title == "First thought")
         let rootID = UUID(), childID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [
             MapNode(id: childID, title: "Existing", children: [], folded: false)
@@ -80,6 +89,6 @@ enum CanvasCommandTests {
         reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, beforePoint))
         reorderCanvas.mouseUp(with: mouse(.leftMouseUp, beforePoint))
         assert(reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
-        print("canvas command, drag and explicit Open menu tests passed (no windows)")
+        print("canvas command, empty-map Return, drag and explicit Open menu tests passed (no windows)")
     }
 }
