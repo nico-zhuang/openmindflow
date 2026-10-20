@@ -13,14 +13,27 @@ private final class MapNodeAX: NSAccessibilityElement {
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { endEditingWithoutSaving(); needsDisplay = true } }
+    override var needsDisplay: Bool {
+        didSet {
+            let visibleIDs = Set(visibleNodes().map { $0.node.id })
+            for (id, element) in accessibleNodes {
+                element.setAccessibilitySelected(id == model.selected && visibleIDs.contains(id))
+            }
+            guard announcedSelection != model.selected else { return }
+            announcedSelection = model.selected
+            NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
+        }
+    }
     var onChange: (() -> Void)?
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
+    private var announcedSelection: UUID
 
     init(model: MapModel) {
         self.model = model
+        announcedSelection = model.selected
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }

@@ -10,11 +10,11 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
 }
 
-func findNode(_ element: AXUIElement) -> AXUIElement? {
+func findNode(_ element: AXUIElement, label: String = "Central idea") -> AXUIElement? {
     if attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
-       attribute(element, kAXDescriptionAttribute) as? String == "Central idea" { return element }
+       attribute(element, kAXDescriptionAttribute) as? String == label { return element }
     for child in (attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []) {
-        if let found = findNode(child) { return found }
+        if let found = findNode(child, label: label) { return found }
     }
     return nil
 }
@@ -27,6 +27,33 @@ assert(AXUIElementCopyActionNames(node!, &actions) == .success &&
        (actions as? [String])?.contains(kAXPressAction) == true,
        "Node must support AXPress to select and edit")
 print("own-app AX node, selected state and Press action passed")
+
+if CommandLine.arguments.contains("--selection-refresh") {
+    precondition(AXIsProcessTrusted(), "Grant Accessibility access to the terminal running this check")
+    assert(AXUIElementPerformAction(node!, kAXPressAction as CFString) == .success)
+    guard let field = attribute(app, kAXFocusedUIElementAttribute),
+          attribute(field as! AXUIElement, kAXRoleAttribute) as? String == kAXTextFieldRole else {
+        fatalError("Native editor must have focus before Tab")
+    }
+    apps[0].activate()
+    for down in [true, false] {
+        CGEvent(keyboardEventSource: nil, virtualKey: 48, keyDown: down)?.post(tap: .cghidEventTap)
+    }
+    var child: AXUIElement?
+    for _ in 0..<30 {
+        child = findNode(app, label: "New idea")
+        if child != nil { break }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    guard let child else { fatalError("Tab must create a child AX node") }
+    assert(attribute(child, kAXSelectedAttribute) as? Bool == true, "New child must be selected")
+    assert(attribute(node!, kAXSelectedAttribute) as? Bool == false,
+           "Retained old AX node must become unselected without re-fetching it")
+    assert(AXUIElementPerformAction(node!, kAXPressAction as CFString) == .success)
+    assert(attribute(node!, kAXSelectedAttribute) as? Bool == true, "Retained root must become selected again")
+    assert(attribute(child, kAXSelectedAttribute) as? Bool == false, "Retained child must become unselected")
+    print("own-app retained AX selection refresh passed")
+}
 
 if CommandLine.arguments.contains("--close-flow") {
     func windows() -> [AXUIElement] { attribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] }
