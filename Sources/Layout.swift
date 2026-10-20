@@ -7,6 +7,19 @@ struct LaidOutNode {
     let parent: UUID?
 }
 
+func dropPlacement(at point: CGPoint, over node: LaidOutNode,
+                   siblings: [LaidOutNode]) -> (parent: UUID, index: Int)? {
+    guard node.frame.contains(point) else { return nil }
+    let fraction = (point.y - node.frame.minY) / node.frame.height
+    if fraction < 0.25 || fraction > 0.75 {
+        guard let parent = node.parent,
+              let index = siblings.firstIndex(where: { $0.node.id == node.node.id }) else { return nil }
+        // ponytail: quarter-height drop zones; measure original hit areas before tuning.
+        return (parent, index + (fraction > 0.75 ? 1 : 0))
+    }
+    return (node.node.id, node.node.children.count)
+}
+
 func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
     var result: [LaidOutNode] = []
     var row = 0

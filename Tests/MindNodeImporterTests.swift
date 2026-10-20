@@ -50,6 +50,14 @@ enum MindNodeImporterTests {
         assert(nodes.count == 1 && nodes[0].id == rootID && nodes[0].title == "Root")
         assert(nodes[0].children.count == 1 && nodes[0].children[0].id == childID)
         assert(nodes[0].children[0].title == "Hello & world" && nodes[0].children[0].folded)
+        var decorated = root
+        decorated["title"] = ["text": "<p>中文 &amp; emoji 🧭<br/>next line</p>"]
+        decorated["notes"] = ["text": "Not copied"]
+        decorated["attachments"] = [["file": "unused"]]
+        try write([decorated])
+        let special = try MindNodeImporter.load(package)
+        assert(special[0].title == "中文 & emoji 🧭\nnext line")
+        assert(special[0].children.count == 1)
 
         try write([])
         let empty = try MindNodeImporter.load(package)

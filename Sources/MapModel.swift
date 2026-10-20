@@ -21,6 +21,13 @@ final class MapModel {
     }
 
     func addChild() {
+        if roots.isEmpty {
+            save()
+            let root = MapNode(id: UUID(), title: "", children: [], folded: false)
+            roots = [root]
+            selected = root.id
+            return
+        }
         guard let path = Self.path(to: selected, in: roots) else { return }
         let child = MapNode(id: UUID(), title: "", children: [], folded: false)
         save()
@@ -31,14 +38,72 @@ final class MapModel {
         selected = child.id
     }
 
-    func addSibling() {
+    func addSibling(before: Bool = false) {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         let sibling = MapNode(id: UUID(), title: "", children: [], folded: false)
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in
-            nodes.insert(sibling, at: index + 1)
+            nodes.insert(sibling, at: index + (before ? 0 : 1))
         }
         selected = sibling.id
+    }
+
+    func addParent() {
+        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
+        let previous = Self.node(at: path[...], in: roots)
+        let parent = MapNode(id: UUID(), title: "", children: [previous], folded: false)
+        save()
+        Self.edit(&roots, at: path[...]) { nodes, index in nodes[index] = parent }
+        selected = parent.id
+    }
+
+    func addMainNode() {
+        let main = MapNode(id: UUID(), title: "", children: [], folded: false)
+        let index = Self.path(to: selected, in: roots)?.first.map { $0 + 1 } ?? roots.count
+        save()
+        roots.insert(main, at: index)
+        selected = main.id
+    }
+
+    @discardableResult
+    func moveSibling(by step: Int) -> Bool {
+        guard step == -1 || step == 1, let path = Self.path(to: selected, in: roots), path.count > 1,
+              let index = path.last,
+              Self.node(at: path.dropLast(), in: roots).children.indices.contains(index + step) else { return false }
+        save()
+        Self.edit(&roots, at: path.dropLast()) { nodes, parent in
+            nodes[parent].children.swapAt(index, index + step)
+        }
+        return true
+    }
+
+    func moveNode(_ id: UUID, to parentID: UUID, at index: Int) -> Bool {
+        guard let sourcePath = Self.path(to: id, in: roots), sourcePath.count > 1,
+              let targetPath = Self.path(to: parentID, in: roots),
+              !targetPath.starts(with: sourcePath),
+              (0...Self.node(at: targetPath[...], in: roots).children.count).contains(index) else { return false }
+        let sameParent = sourcePath.dropLast().elementsEqual(targetPath)
+        let destinationIndex = index - (sameParent && sourcePath.last! < index ? 1 : 0)
+        guard !sameParent || destinationIndex != sourcePath.last! else { return false }
+        let moving = Self.node(at: sourcePath[...], in: roots)
+        save()
+        Self.edit(&roots, at: sourcePath[...]) { nodes, position in nodes.remove(at: position) }
+        let updatedParentPath = Self.path(to: parentID, in: roots)!
+        Self.edit(&roots, at: updatedParentPath[...]) { nodes, position in
+            nodes[position].folded = false
+            nodes[position].children.insert(moving, at: destinationIndex)
+        }
+        return true
+    }
+
+    @discardableResult
+    func detachSelected() -> Bool {
+        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
+        let moving = Self.node(at: path[...], in: roots)
+        save()
+        Self.edit(&roots, at: path[...]) { nodes, index in nodes.remove(at: index) }
+        roots.insert(moving, at: path[0] + 1)
+        return true
     }
 
     func rename(_ title: String) {

@@ -28,6 +28,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
+    private var dragSource: UUID?
+    private var dragPoint: CGPoint?
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
     private var announcedSelection: UUID
 
@@ -80,7 +82,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         bounds.fill()
         let nodes = visibleNodes()
         if nodes.isEmpty {
-            let message = "Empty map — no nodes to display. Open a .mindmap.json or .mindnode file."
+            let message = "Empty map — press Tab to create the first idea."
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]
             (message as NSString).draw(at: CGPoint(x: 48, y: 60), withAttributes: attrs)
             return
@@ -100,7 +102,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         for item in nodes {
             let box = screen(item.frame)
             let shape = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
-            (item.node.id == model.selected ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+            let hovered = dragPoint.map { box.contains($0) && item.node.id != dragSource } ?? false
+            (item.node.id == model.selected || hovered ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
             NSColor.controlBackgroundColor.setFill()
             shape.fill()
             shape.lineWidth = item.node.id == model.selected ? 3 : 1
@@ -149,14 +152,27 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else { needsDisplay = true }
     }
     private func changed() { needsDisplay = true; onChange?() }
-    private func addChild() { commitEditing(); model.addChild(); changed(); beginEditing() }
-    private func addSibling() { commitEditing(); let old = model.selected; model.addSibling(); if old != model.selected { changed(); beginEditing() } }
+    func addChild() { commitEditing(); model.addChild(); changed(); beginEditing() }
+    func addSibling(before: Bool = false) { commitEditing(); let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
+    func addParent() { commitEditing(); let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
+    func addMainNode() { commitEditing(); model.addMainNode(); changed(); beginEditing() }
+    func detachSelected() { commitEditing(); if model.detachSelected() { changed() } }
     func undo() { commitEditing(); model.undo(); needsDisplay = true; onChange?() }
     func redo() { commitEditing(); model.redo(); needsDisplay = true; onChange?() }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.insertTab(_:)) { addChild(); return true }
-        if selector == #selector(NSResponder.insertNewline(_:)) { addSibling(); return true }
+        if selector == #selector(NSResponder.insertTabIgnoringFieldEditor(_:)) { addParent(); return true }
+        if selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) { addSibling(before: true); return true }
+        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        if selector == #selector(NSResponder.insertTab(_:)) {
+            modifiers.contains(.option) ? addParent() : addChild()
+            return true
+        }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            if modifiers.contains(.shift) { addMainNode() }
+            else { addSibling(before: modifiers.contains(.option)) }
+            return true
+        }
         if selector == #selector(NSResponder.cancelOperation(_:)) { endEditingWithoutSaving(); needsDisplay = true; return true }
         return false
     }
@@ -164,6 +180,20 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
+            if !event.modifierFlags.contains(.shift),
+               !event.modifierFlags.contains(.option),
+               !event.modifierFlags.contains(.control),
+               [UInt16(125), 126].contains(event.keyCode) {
+                commitEditing()
+                if model.moveSibling(by: event.keyCode == 126 ? -1 : 1) { changed() }
+                return
+            }
+            if event.charactersIgnoringModifiers?.lowercased() == "d",
+               event.modifierFlags.contains(.shift),
+               !event.modifierFlags.contains(.option), !event.modifierFlags.contains(.control) {
+                detachSelected()
+                return
+            }
             if event.charactersIgnoringModifiers?.lowercased() == "z" {
                 event.modifierFlags.contains(.shift) ? redo() : undo()
                 return
@@ -172,12 +202,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         switch event.keyCode {
+        case 48 where event.modifierFlags.contains(.option): addParent()
         case 48: addChild()                         // Tab
-        case 36, 76: addSibling()                   // Return / keypad Enter
+        case 36, 76:
+            if event.modifierFlags.contains(.shift) { addMainNode() }
+            else { addSibling(before: event.modifierFlags.contains(.option)) }
         case 51, 117: commitEditing(); model.remove(); changed()
         case 49: commitEditing(); model.toggleFold(); changed() // Optional Space
-        case 47 where event.modifierFlags.contains(.shift):
-            commitEditing(); model.toggleFold(); changed() // Required Shift+period
+        case 47 where event.modifierFlags.contains(.option):
+            commitEditing(); model.toggleFold(); changed() // Static original menu: Option+period
         case 123, 124, 125, 126: moveSelection(event.keyCode)
         default:
             if let text = event.characters, !text.isEmpty,
@@ -210,19 +243,38 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     override func mouseDown(with event: NSEvent) {
         commitEditing()
+        dragSource = nil
+        dragPoint = nil
         let point = convert(event.locationInWindow, from: nil)
         if let node = visibleNodes().last(where: { screen($0.frame).contains(point) }) {
             model.selected = node.node.id
+            dragSource = event.clickCount == 1 ? node.node.id : nil
             needsDisplay = true
             if event.clickCount == 2 { beginEditing() }
         }
         window?.makeFirstResponder(editor ?? self)
     }
     override func mouseDragged(with event: NSEvent) {
+        if dragSource != nil {
+            dragPoint = convert(event.locationInWindow, from: nil)
+            needsDisplay = true
+            return
+        }
         offset.x += event.deltaX
         offset.y -= event.deltaY
         editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
         needsDisplay = true
+    }
+    override func mouseUp(with event: NSEvent) {
+        defer { dragSource = nil; dragPoint = nil; needsDisplay = true }
+        guard let source = dragSource, dragPoint != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let nodes = visibleNodes()
+        guard let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) else { return }
+        let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
+        let siblings = nodes.filter { $0.parent == target.parent }
+        if let placement = dropPlacement(at: local, over: target, siblings: siblings),
+           model.moveNode(source, to: placement.parent, at: placement.index) { changed() }
     }
     private func zoom(at point: CGPoint, by factor: CGFloat) {
         let next = min(3, max(0.35, zoom * factor))
@@ -379,8 +431,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func undoEdit(_ sender: Any?) { canvas.undo() }
     @objc private func redoEdit(_ sender: Any?) { canvas.redo() }
+    @objc private func newChild(_ sender: Any?) { canvas.addChild() }
+    @objc private func newSibling(_ sender: Any?) { canvas.addSibling() }
+    @objc private func newSiblingBefore(_ sender: Any?) { canvas.addSibling(before: true) }
+    @objc private func newParent(_ sender: Any?) { canvas.addParent() }
+    @objc private func newMainNode(_ sender: Any?) { canvas.addMainNode() }
+    @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
 
-    private func installMenu() {
+    func installMenu() {
         let main = NSMenu()
         let app = NSMenuItem()
         let appMenu = NSMenu()
@@ -402,10 +460,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         redo.target = self
         edit.submenu = editMenu
         main.addItem(edit)
+        let node = NSMenuItem()
+        let nodeMenu = NSMenu(title: "Node")
+        let entries: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("New Child", #selector(newChild(_:)), "\t", []),
+            ("New Sibling", #selector(newSibling(_:)), "\r", []),
+            ("New Sibling Before", #selector(newSiblingBefore(_:)), "\r", [.option]),
+            ("New Parent", #selector(newParent(_:)), "\t", [.option]),
+            ("New Main Node", #selector(newMainNode(_:)), "\r", [.shift]),
+            ("Detach Node", #selector(detachNode(_:)), "D", [.command, .shift])
+        ]
+        for (title, action, key, modifiers) in entries {
+            let item = nodeMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+        }
+        node.submenu = nodeMenu
+        main.addItem(node)
         NSApp.mainMenu = main
     }
 }
 
+#if !HEADLESS_TEST
 @main
 enum MindMapApp {
     static func main() {
@@ -416,3 +492,4 @@ enum MindMapApp {
         app.run()
     }
 }
+#endif

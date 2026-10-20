@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Correction (2026-10-20):** The original menu modifier was previously misread: Fold/Unfold is **Option+period**, not Shift+period; New Sibling Before is Option+Return and New Main Node is Shift+Return. The historic steps below are superseded for those keys by the verified nib masks in `docs/static-evidence.md`.
+
 **Goal:** Compile a runnable, independent macOS editor with keyboard-first node editing, undo, deterministic layout and viewport navigation.
 
 **Architecture:** A testable Foundation-only tree model owns IDs, titles, children, fold state and undo snapshots. One AppKit canvas handles native text input, keyboard, drawing and gestures. Do not load proprietary assets or touch user documents.

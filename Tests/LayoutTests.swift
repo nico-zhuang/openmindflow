@@ -27,6 +27,16 @@ enum LayoutTests {
         assert(decoded[0].children.map(\.id) == root.children.map(\.id))
         assert(decoded[0].children.map(\.title) == root.children.map(\.title))
         assert(decoded[0].children[1].folded)
+        let siblingFrames = first.filter { $0.parent == root.id }
+        let upper = first[1]
+        let lower = first[2]
+        let above = dropPlacement(at: CGPoint(x: upper.frame.midX, y: upper.frame.minY + 2), over: upper, siblings: siblingFrames)
+        assert(above?.parent == root.id && above?.index == 0)
+        let below = dropPlacement(at: CGPoint(x: lower.frame.midX, y: lower.frame.maxY - 2), over: lower, siblings: siblingFrames)
+        assert(below?.parent == root.id && below?.index == 2)
+        let child = dropPlacement(at: CGPoint(x: upper.frame.midX, y: upper.frame.midY), over: upper, siblings: siblingFrames)
+        assert(child?.parent == upper.node.id && child?.index == 0)
+        assert(dropPlacement(at: first[0].frame.origin, over: first[0], siblings: []) == nil)
         print("layout and JSON roundtrip tests passed")
     }
 }

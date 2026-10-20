@@ -6,13 +6,13 @@
 | --- | --- | --- |
 | New Child | Tab | 静态菜单声明 |
 | New Sibling | Return | 静态菜单声明 |
-| New Sibling Before | Shift+Return | 静态菜单声明 |
-| New Main Node | Option+Return | 静态菜单声明 |
-| Fold/Unfold | Shift+. | 静态菜单声明 |
+| New Sibling Before | Option+Return | 静态菜单声明，mask=524288 |
+| New Main Node | Shift+Return | 静态菜单声明，mask=131072 |
+| Fold/Unfold | Option+. | 静态菜单声明，mask=524288 |
 | Zoom Out | Command+- | 静态菜单声明 |
 | Zoom to Fit | Command+= | 静态菜单声明 |
 
-这些条目的键盘修饰掩码按 AppKit `NSEvent.ModifierFlags` 解读；启用条件、焦点状态、文字编辑模式中的实际效果仍未运行验证。软件可能在运行时覆盖静态菜单。
+更正记录（2026-10-20）：旧稿把 Shift 与 Option 的掩码读反；已用本机 AppKit 检查 `.shift.rawValue == 131072`、`.option.rawValue == 524288`，并重新核对 nib 对象 634、93、1029。此处仅是打包静态证据；启用条件、焦点状态、文字编辑模式中的实际效果仍未运行验证。软件可能在运行时覆盖静态菜单。
 
 在应用包及嵌套 Framework/插件中，没有现成 `.mindnode` 文件；`MindNodeKitObjC.framework/Versions/A/Resources/ThemeMindMap.plist` 是主题用合成导图片段，不是 `.mindnode` 完整文档。`Info.plist` 对 `.mindnode` 声明了 package 与 data 两类 UTI，不能由扩展名断言文件容器。
 
