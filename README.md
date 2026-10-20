@@ -17,10 +17,11 @@ swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindmap-model-te
 swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImporterTests.swift -o /tmp/mindmap-importer-tests && /tmp/mindmap-importer-tests
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic copy-only; not a save feature
+swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
 # With exactly one instance of our app launched and Accessibility permission:
 # swift Tests/OpenMindNodeGUI.swift # synthetic package, prior JSON, invalid import, picker, warning, Save and SHA-256
 # swift Tests/AppAccessibilityTests.swift
 ```
 
-The layout is independent, fixed-size geometry; it does not reproduce original artwork or claim interaction parity with MindNode. This phase did not launch the GUI; the [gap baseline](docs/superpowers/specs/2026-10-20-mindmap-gap-baseline.md) and [read-only compatibility matrix](docs/superpowers/specs/2026-10-20-mindmap-readonly-compatibility.md) separate CLI evidence from unverified interface behavior.
+The layout is independent, fixed-size geometry; it does not reproduce original artwork or claim interaction parity with MindNode. This build has not passed bounded GUI acceptance; earlier synthetic picker automation could list files but not reliably select a JSON row. The [gap baseline](docs/superpowers/specs/2026-10-20-mindmap-gap-baseline.md) and [read-only compatibility matrix](docs/superpowers/specs/2026-10-20-mindmap-readonly-compatibility.md) separate CLI evidence from unverified interface behavior.

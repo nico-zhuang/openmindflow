@@ -56,7 +56,7 @@ enum MindNodeImporter {
                 throw ImportError.invalid
             }
             count += 1
-            let plain = try text(richText)
+            let plain = try plainTitle(richText)
             let children = try subnodes.map { try parse($0, depth: depth + 1) }
             return MapNode(id: id, title: plain, children: children, folded: foldNumber.boolValue)
         }
@@ -66,7 +66,7 @@ enum MindNodeImporter {
         }
     }
 
-    private static func text(_ rich: String) throws -> String {
+    static func plainTitle(_ rich: String) throws -> String {
         // ponytail: text/tree/fold only; add style and attachment decoding after verified format samples.
         guard rich.utf8.count <= 65_536,
               rich.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,
