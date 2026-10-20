@@ -114,6 +114,19 @@ enum MindNodePackageTests {
         let unsupported = scratch.appendingPathComponent("unsupported.mindnode", isDirectory: true)
         assert(rejects { try MindNodePackage.copyUpdatingExistingNodes(from: source, to: unsupported, editedRoots: [structural]) })
         assert(!fm.fileExists(atPath: unsupported.path))
+        let hardlinkSource = scratch.appendingPathComponent("hardlink.mindnode", isDirectory: true)
+        try fm.createDirectory(at: hardlinkSource, withIntermediateDirectories: false)
+        let external = scratch.appendingPathComponent("external-contents.bin")
+        try contents.write(to: external)
+        try fm.linkItem(at: external, to: hardlinkSource.appendingPathComponent("contents.xml"))
+        let hardlinkOutput = scratch.appendingPathComponent("hardlink-edited.mindnode", isDirectory: true)
+        try MindNodePackage.copyUpdatingExistingNodes(from: hardlinkSource, to: hardlinkOutput, editedRoots: [edited])
+        assert((try? MindNodeImporter.load(hardlinkOutput)) == [edited])
+        let originalInode = try fm.attributesOfItem(atPath: external.path)[.systemFileNumber] as? NSNumber
+        let copiedInode = try fm.attributesOfItem(atPath: hardlinkOutput.appendingPathComponent("contents.xml").path)[.systemFileNumber] as? NSNumber
+        assert(originalInode != nil && copiedInode != nil && originalInode != copiedInode)
+        assert((try? Data(contentsOf: external)) == contents, "Hard-linked outside file must never change")
+        assert((try? Data(contentsOf: hardlinkSource.appendingPathComponent("contents.xml"))) == contents)
         let remaining = try fm.contentsOfDirectory(atPath: scratch.path)
         assert(!remaining.contains { $0.hasPrefix(".mindmap-copy-") })
         assert((try? Data(contentsOf: output.appendingPathComponent("contents.xml"))) == contents)
@@ -131,6 +144,6 @@ enum MindNodePackageTests {
         let linkedSource = scratch.appendingPathComponent("alias.mindnode")
         try fm.createSymbolicLink(at: linkedSource, withDestinationURL: source)
         assert(rejects { try MindNodePackage.copyUnmodified(from: linkedSource, to: scratch.appendingPathComponent("alias-copy.mindnode")) })
-        print("synthetic v9 edits, multi/empty maps, metadata, resources, collisions and symlinks passed")
+        print("synthetic v9 edits, multi/empty maps, metadata, resources, collisions and symlinks passed; hardlink cloned without source writes")
     }
 }
