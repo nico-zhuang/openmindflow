@@ -23,18 +23,18 @@
 
 **Interfaces:** `struct MapNode: Codable { var id: UUID; var title: String; var children: [MapNode]; var folded: Bool }`; `final class MapModel { var roots: [MapNode]; var selected: UUID; func addChild(); func addSibling(); func rename(_ title: String); func remove(); func toggleFold(); func undo(); func redo() }`.
 
-- [ ] Write tests first: create a root, add child and sibling, rename, fold, delete, undo and redo; assert exact order and selection; verify deleting root is rejected.
+- [ ] Write tests first in `@main struct ModelTests { static func main() { ... } }` (multi-file `swiftc` disallows top-level expressions): create a root, add child and sibling, rename, fold, delete, undo and redo; assert exact order and selection; verify deleting root is rejected.
 - [ ] Run `swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindnode-model-tests && /tmp/mindnode-model-tests`; expected compilation failure because methods are missing.
 - [ ] Implement only the model needed by those assertions; represent undo/redo with snapshots, not a command framework.
 - [ ] Re-run the same command; expected exit 0 and printed `model tests passed`.
 
 ### Task 2: AppKit editor with local build
 
-**Files:** Create `Sources/App.swift`, `build.sh`, `README.md`.
+**Files:** Create `Sources/App.swift`, `Sources/Layout.swift`, `Tests/LayoutTests.swift`, `build.sh`, `README.md`, `.gitignore` (`build/`).
 
-**Interfaces:** `MapCanvas: NSView` takes `MapModel` and renders visible nodes; `keyDown` maps Tab, Return, Delete, Space and arrows to model calls. Native text input uses `NSTextField`; model mutations trigger redraw. `build.sh` compiles to `build/MindMap.app/Contents/MacOS/MindMap` with `swiftc Sources/*.swift -framework AppKit -o ...` and generates a small Info.plist via `/usr/libexec/PlistBuddy` or here-document.
+**Interfaces:** `MapCanvas: NSView` takes `MapModel` and renders visible nodes; `keyDown` maps Tab, Return, Delete, Space and arrows to model calls. Native text input uses `NSTextField`; model mutations trigger redraw. Own-format saving uses a `.mindmap.json` file with `JSONEncoder` and `NSSavePanel`, and opening uses `JSONDecoder` and `NSOpenPanel`; never overwrite `.mindnode`. `build.sh` compiles to `build/MindMap.app/Contents/MacOS/MindMap` with `swiftc Sources/*.swift -framework AppKit -o ...` and generates a small Info.plist via here-document.
 
-- [ ] Write an assert-based layout check before implementation: one parent with two children has distinct vertically ordered bounds and stable coordinates on two recomputations. Run compilation to see it fail for missing `layout`.
+- [ ] Write an assert-based layout check before implementation: one parent with two children has distinct vertically ordered bounds and stable coordinates on two recomputations. In the same test runner, roundtrip `JSONEncoder`/`JSONDecoder` for roots (titles, UUIDs, fold state). Run compilation to see it fail for missing `layout`.
 - [ ] Implement minimal deterministic tree layout and a zoom/pan transform inside `MapCanvas`, plus `scrollWheel` and `magnify` for platform gestures. Avoid speculative animation.
 - [ ] Run `bash build.sh` and execute model/layout test command; expected exit 0 and executable `.app` exists.
 - [ ] Launch only our new app with `open build/MindMap.app`; visually check Tab, Return, typing, undo, fold, zoom and pan without opening MindNode's saved windows. Report any unverified interaction honestly.
