@@ -95,6 +95,10 @@ enum MindNodePackageTests {
         let styleRejected = scratch.appendingPathComponent("style-rejected.mindnode", isDirectory: true)
         assert(rejects { try MindNodePackage.copyUpdatingExistingNodes(from: mixedSource, to: styleRejected, editedRoots: styleEdited) })
         assert(!fm.fileExists(atPath: styleRejected.path))
+        let removedRootOutput = scratch.appendingPathComponent("removed-root.mindnode", isDirectory: true)
+        assert(rejects { try MindNodePackage.copyUpdatingExistingNodes(
+            from: mixedSource, to: removedRootOutput, editedRoots: [mixedEdited[0]]) })
+        assert(!fm.fileExists(atPath: removedRootOutput.path)) // Structural edits stay JSON-only.
         let emptySource = scratch.appendingPathComponent("empty.mindnode", isDirectory: true)
         try fm.createDirectory(at: emptySource, withIntermediateDirectories: false)
         let emptyData = try PropertyListSerialization.data(fromPropertyList: ["version": 9, "canvas": ["mindMaps": []]], format: .binary, options: 0)

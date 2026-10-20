@@ -117,7 +117,14 @@ final class MapModel {
     }
 
     func remove() {
-        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
+        guard let path = Self.path(to: selected, in: roots) else { return }
+        if path.count == 1 {
+            guard roots.count > 1 else { return }
+            save()
+            roots.remove(at: path[0])
+            selected = roots[min(path[0], roots.count - 1)].id
+            return
+        }
         let parentID = Self.node(at: path.dropLast(), in: roots).id
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in

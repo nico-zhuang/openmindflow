@@ -14,6 +14,22 @@ enum MapModelTests {
             blank.redo()
             assert(blank.roots.map(\.id) == [firstID] && blank.selected == firstID)
         }
+        let first = UUID(), middle = UUID(), last = UUID()
+        let manyRoots = MapModel(roots: [first, middle, last].map {
+            MapNode(id: $0, title: "Root", children: [], folded: false)
+        }, selected: middle)
+        manyRoots.remove()
+        assert(manyRoots.roots.map(\.id) == [first, last] && manyRoots.selected == last,
+               "Removing a main node should select the next remaining root")
+        manyRoots.undo()
+        assert(manyRoots.roots.map(\.id) == [first, middle, last] && manyRoots.selected == middle)
+        manyRoots.redo()
+        manyRoots.remove()
+        assert(manyRoots.roots.map(\.id) == [first] && manyRoots.selected == first)
+        manyRoots.remove() // Never delete the sole remaining root.
+        assert(manyRoots.roots.map(\.id) == [first])
+        manyRoots.undo() // Rejected removal must not create an undo entry.
+        assert(manyRoots.roots.map(\.id) == [first, last] && manyRoots.selected == last)
         let rootID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [], folded: false)], selected: rootID)
 
