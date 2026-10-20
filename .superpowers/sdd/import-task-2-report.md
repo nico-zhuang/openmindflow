@@ -12,7 +12,7 @@ Status: implemented within `Sources/App.swift`, `README.md`, this report and one
 
 GUI limitations (initial implementation): smoke verified menu → panel → cancel only. The authorized sample was parsed through the importer CLI, not selected in the GUI. No original app or REA MCP was used.
 
-**Lead stop notice — user instruction:** Stop all GUI retries immediately; the generated app binary is deliberately non-executable with `uchg` because the user objected to repeated windows. Do not unlock or relaunch it. You reported one successful full synthetic GUI run; record that exact evidence and any limits, then finish with static checks only. The lead will unlock and rebuild once for delivery without launching a window.
+**GUI stop boundary:** The user requested no further window automation. One synthetic end-to-end run was reported before that instruction; no GUI rerun is claimed afterward. The lead restored and rebuilt the deliverable without launching it.
 
 ## Review follow-up — both Important findings
 
