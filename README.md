@@ -19,8 +19,8 @@ swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImpor
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic new-copy title/fold edit; not wired to Save
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
-# With exactly one instance of our app launched and Accessibility permission:
-# swift Tests/OpenMindNodeGUI.swift # synthetic package, prior JSON, invalid import, picker, warning, Save and SHA-256
+# GUI gate requires Accessibility, a foreground disposable app under mindmap-gui-run-* with its .owner marker, and MINDMAP_GUI_PID=<that app PID>:
+# swift Tests/OpenMindNodeGUI.swift # synthetic package, prior JSON, invalid import, picker, warning, Save and SHA-256; keys go only to marked PID
 # swift Tests/AppAccessibilityTests.swift
 ```
 

@@ -2,11 +2,29 @@ import AppKit
 import ApplicationServices
 import CryptoKit
 
-// Run with exactly one built own app and Accessibility permission for this process.
-precondition(AXIsProcessTrusted(), "Grant Accessibility access to the terminal running this check")
-let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "local.mindmap.native-editor")
-precondition(apps.count == 1, "Launch exactly one own MindMap app")
-let running = apps[0]
+// Only a marked disposable own app may receive test actions; never select an old preview implicitly.
+guard AXIsProcessTrusted(),
+      let rawPID = ProcessInfo.processInfo.environment["MINDMAP_GUI_PID"],
+      let selectedPID = Int32(rawPID),
+      let running = NSRunningApplication.runningApplications(withBundleIdentifier: "local.mindmap.native-editor")
+          .first(where: { $0.processIdentifier == selectedPID }),
+      let stage = running.bundleURL?.deletingLastPathComponent(),
+      stage.lastPathComponent.hasPrefix("mindmap-gui-run-"),
+      (try? String(contentsOf: stage.appendingPathComponent(".owner"), encoding: .utf8)) == "mindmap-owned-gui-fixture\n" else {
+    fputs("GUI gate unavailable: require Accessibility and MINDMAP_GUI_PID for a marked disposable MindMap app\n", stderr)
+    exit(2)
+}
+if NSWorkspace.shared.frontmostApplication?.processIdentifier != running.processIdentifier {
+    guard running.activate() else {
+        fputs("GUI gate unavailable: cannot activate selected MindMap process\n", stderr)
+        exit(2)
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+}
+guard NSWorkspace.shared.frontmostApplication?.processIdentifier == running.processIdentifier else {
+    fputs("GUI gate unavailable: selected MindMap process is not frontmost\n", stderr)
+    exit(2)
+}
 let app = AXUIElementCreateApplication(running.processIdentifier)
 let fm = FileManager.default
 let scratch = fm.temporaryDirectory.appendingPathComponent("mindmap-gui-\(UUID().uuidString)", isDirectory: true)
@@ -14,13 +32,22 @@ try fm.createDirectory(at: scratch, withIntermediateDirectories: false)
 let marker = scratch.appendingPathComponent(".test-owner")
 let owner = UUID().uuidString
 try owner.write(to: marker, atomically: true, encoding: .utf8)
-defer {
+func cleanupFixture() {
     // Never remove a different directory if the temporary path is replaced during the check.
     if scratch.resolvingSymlinksInPath().standardizedFileURL == scratch.standardizedFileURL,
        scratch.deletingLastPathComponent() == fm.temporaryDirectory.standardizedFileURL,
        (try? String(contentsOf: marker, encoding: .utf8)) == owner {
         try? fm.removeItem(at: scratch)
     }
+}
+defer { cleanupFixture() }
+func fail(_ reason: String) -> Never {
+    cleanupFixture() // fatalError/precondition would skip defer.
+    fputs("GUI gate failed: \(reason)\n", stderr)
+    exit(1)
+}
+func ensure(_ condition: @autoclosure () -> Bool, _ description: String = "GUI check failed") {
+    if !condition() { fail(description) }
 }
 let package = scratch.appendingPathComponent("fixture.mindnode", isDirectory: true)
 try fm.createDirectory(at: package, withIntermediateDirectories: false)
@@ -40,7 +67,7 @@ func hashes(_ url: URL) throws -> [String: String] {
     })
 }
 let before = try hashes(package)
-precondition(!before.isEmpty)
+ensure(!before.isEmpty)
 let previous = scratch.appendingPathComponent("previous.mindmap.json")
 let oldTitle = "Synthetic previous JSON"
 let oldRoot: [String: Any] = ["id": UUID().uuidString, "title": oldTitle, "children": [], "folded": false]
@@ -52,21 +79,34 @@ func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var result: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
 }
+func axElement(_ raw: CFTypeRef?) -> AXUIElement? {
+    guard let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+    return (raw as! AXUIElement)
+}
 func titleOf(_ element: AXUIElement) -> String { value(element, kAXTitleAttribute) as? String ?? "" }
-func find(_ element: AXUIElement, title: String) -> AXUIElement? {
-    if titleOf(element) == title || value(element, kAXValueAttribute) as? String == title ||
-       value(element, kAXDescriptionAttribute) as? String == title { return element }
-    for child in value(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
-        if let found = find(child, title: title) { return found }
+func search(_ element: AXUIElement, matching: (AXUIElement) -> Bool) -> AXUIElement? {
+    var queue = [element]
+    var seen: Set<AXUIElement> = [element]
+    var index = 0
+    // ponytail: 1,000 unique AX elements per lookup; inspect narrower native panels if this cap is reached.
+    while index < queue.count {
+        let current = queue[index]
+        index += 1
+        if matching(current) { return current }
+        for child in value(current, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+            if queue.count == 1_000 { break }
+            if seen.insert(child).inserted { queue.append(child) }
+        }
     }
+    if queue.count == 1_000 { fputs("AX lookup stopped at 1,000 unique elements\n", stderr) }
     return nil
 }
+func find(_ element: AXUIElement, title: String) -> AXUIElement? {
+    search(element) { titleOf($0) == title || value($0, kAXValueAttribute) as? String == title ||
+        value($0, kAXDescriptionAttribute) as? String == title }
+}
 func findRole(_ element: AXUIElement, _ role: String) -> AXUIElement? {
-    if value(element, kAXRoleAttribute) as? String == role { return element }
-    for child in value(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
-        if let found = findRole(child, role) { return found }
-    }
-    return nil
+    search(element) { value($0, kAXRoleAttribute) as? String == role }
 }
 func listingItem(_ filename: String) -> AXUIElement? {
     guard let list = findRole(panel(), kAXListRole) else { return nil }
@@ -78,21 +118,23 @@ func wait(_ description: String, _ check: () -> AXUIElement?) -> AXUIElement {
         if let item = check() { return item }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
-    fatalError("Timed out: \(description)")
+    fail("Timed out: \(description)")
 }
 func press(_ element: AXUIElement, _ description: String) {
-    precondition(AXUIElementPerformAction(element, kAXPressAction as CFString) == .success, "Cannot press \(description)")
+    ensure(AXUIElementPerformAction(element, kAXPressAction as CFString) == .success, "Cannot press \(description)")
 }
 func key(_ code: CGKeyCode, modifiers: CGEventFlags = []) {
+    ensure(NSWorkspace.shared.frontmostApplication?.processIdentifier == running.processIdentifier,
+                 "Refusing to send keyboard events outside selected MindMap process")
     for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { fatalError("No keyboard event") }
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { fail("No keyboard event") }
         event.flags = modifiers
-        event.post(tap: .cghidEventTap)
+        event.postToPid(running.processIdentifier)
     }
 }
 func menu(_ name: String) {
-    let bar = wait("menu bar") { value(app, kAXMenuBarAttribute).map { $0 as! AXUIElement } }
-    guard let file = find(bar, title: "File") else { fatalError("File menu missing") }
+    let bar = wait("menu bar") { axElement(value(app, kAXMenuBarAttribute)) }
+    guard let file = find(bar, title: "File") else { fail("File menu missing") }
     press(file, "File menu")
     press(wait(name) { find(file, title: name) }, name)
 }
@@ -102,8 +144,7 @@ func navigate(to url: URL) {
     running.activate()
     RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     func focusedField() -> AXUIElement? {
-        guard let rawFocused = value(app, kAXFocusedUIElementAttribute) else { return nil }
-        let focused = rawFocused as! AXUIElement
+        guard let focused = axElement(value(app, kAXFocusedUIElementAttribute)) else { return nil }
         return value(focused, kAXRoleAttribute) as? String == kAXTextFieldRole ? focused : nil
     }
     var field: AXUIElement?
@@ -115,8 +156,8 @@ func navigate(to url: URL) {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
     }
-    guard let field else { fatalError("Timed out: Go to Folder field") }
-    precondition(AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, url.path as CFTypeRef) == .success,
+    guard let field else { fail("Timed out: Go to Folder field") }
+    ensure(AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, url.path as CFTypeRef) == .success,
                  "Cannot enter fixture directory")
     key(36) // Confirm the user-selected path inside the native panel.
 }
@@ -125,36 +166,36 @@ menu("Open Own JSON…")
 navigate(to: previous)
 _ = AXUIElementPerformAction(wait("JSON Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
 let previousNode = wait("previous JSON root") { windows().lazy.compactMap { find($0, title: oldTitle) }.first }
-precondition(value(previousNode, kAXSelectedAttribute) as? Bool == true, "Previous JSON not opened")
+ensure(value(previousNode, kAXSelectedAttribute) as? Bool == true, "Previous JSON not opened")
 menu("Open MindNode (Read-only)…")
 navigate(to: malformed)
 _ = AXUIElementPerformAction(wait("malformed Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
 let failure = wait("invalid package alert") { windows().first { find($0, title: "Could not open MindNode") != nil } }
 press(wait("invalid OK") { find(failure, title: "OK") }, "invalid OK")
-precondition(value(previousNode, kAXSelectedAttribute) as? Bool == true,
+ensure(value(previousNode, kAXSelectedAttribute) as? Bool == true,
              "Invalid import must retain prior map and selection")
 menu("Open MindNode (Read-only)…")
 navigate(to: scratch)
 let unrelated = wait("own JSON in import picker") { listingItem(previous.lastPathComponent) }
-precondition(value(unrelated, kAXEnabledAttribute) as? Bool == false, "JSON must be disabled in MindNode import picker")
+ensure(value(unrelated, kAXEnabledAttribute) as? Bool == false, "JSON must be disabled in MindNode import picker")
 let listedPackage = wait("directory package in picker") { listingItem(package.lastPathComponent) }
-precondition(value(listedPackage, kAXEnabledAttribute) as? Bool == true, "Directory package must be selectable")
+ensure(value(listedPackage, kAXEnabledAttribute) as? Bool == true, "Directory package must be selectable")
 navigate(to: package)
 _ = AXUIElementPerformAction(wait("Open button") { find(panel(), title: "Open") }, kAXPressAction as CFString) // A modal alert can return cannotComplete after accepting the action.
 let warning = wait("import loss warning") { windows().first { find($0, title: "MindNode imported read-only") != nil } }
-precondition(find(warning, title: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.") != nil,
+ensure(find(warning, title: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.") != nil,
              "Import loss warning missing")
 press(wait("warning OK") { find(warning, title: "OK") }, "warning OK")
 let node = wait("imported node") { windows().lazy.compactMap { find($0, title: title) }.first }
-precondition(value(node, kAXSelectedAttribute) as? Bool == true, "Imported root must be selected")
+ensure(value(node, kAXSelectedAttribute) as? Bool == true, "Imported root must be selected")
 let importedHashes = try hashes(package)
-precondition(importedHashes == before, "Import modified source package")
+ensure(importedHashes == before, "Import modified source package")
 menu("Save")
 let savePanel = wait("fresh Save panel") { windows().first { find($0, title: "Save") != nil && find($0, title: "Cancel") != nil } }
-precondition(find(savePanel, title: "Untitled.mindmap.json") != nil ||
-             (value(value(app, kAXFocusedUIElementAttribute) as! AXUIElement, kAXValueAttribute) as? String)?.hasSuffix(".mindmap.json") == true,
+ensure(find(savePanel, title: "Untitled.mindmap.json") != nil ||
+             (axElement(value(app, kAXFocusedUIElementAttribute))).flatMap { value($0, kAXValueAttribute) as? String }?.hasSuffix(".mindmap.json") == true,
              "Save must propose new .mindmap.json destination")
 press(wait("Save Cancel") { find(savePanel, title: "Cancel") }, "Save Cancel")
 let finalHashes = try hashes(package)
-precondition(finalHashes == before, "Source package changed after Save cancellation")
+ensure(finalHashes == before, "Source package changed after Save cancellation")
 print("own-app synthetic package import, prior JSON retention, picker file filtering, selected node, loss warning, fresh Save panel and SHA-256 passed")
