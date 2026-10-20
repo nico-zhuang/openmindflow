@@ -246,7 +246,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate {
     private var window: NSWindow!
     private var canvas: MapCanvas!
     private var fileURL: URL?
@@ -322,9 +322,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc private func openMindNode(_ sender: Any?) {
         let panel = NSOpenPanel()
-        // Do not filter by UTType.package: installed MindNode UTType is not a package subtype.
+        // The installed MindNode UTType conforms to .data, not .package or .directory.
         panel.canChooseDirectories = true
-        panel.canChooseFiles = true
+        panel.canChooseFiles = true // This installation exposes .mindnode directories as data, not packages.
+        panel.delegate = self
         panel.message = "Select a .mindnode directory package. Only text, tree structure and fold state are copied; styles, notes and attachments are not round-tripped."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -337,6 +338,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.makeFirstResponder(canvas)
             alert("MindNode imported read-only", detail: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
+    }
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        // Finder shows directories as navigable; disallow selecting every ordinary file.
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+    func panel(_ sender: Any, validate url: URL) throws {
+        guard url.pathExtension.lowercased() == "mindnode",
+              (try? FileManager.default.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType == .typeDirectory else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnsupportedSchemeError,
+                          userInfo: [NSLocalizedDescriptionKey: "Select a .mindnode directory package, not an ordinary folder."])
+        }
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     private func save() -> Bool {
