@@ -60,6 +60,49 @@ enum MindNodePackageTests {
         func rejects(_ block: () throws -> Void) -> Bool {
             do { try block(); return false } catch { return true }
         }
+        let secondID = UUID()
+        let styled: [String: Any] = ["nodeID": secondID.uuidString,
+                                     "title": ["text": "<p>Styled <b>untouched</b></p>", "opaqueStyle": "keep"],
+                                     "subnodes": [], "hasFoldedSubnodes": false,
+                                     "notes": ["text": "synthetic note", "attachment": "assets/note.bin"]]
+        let maps: [[String: Any]] = [["mainNode": root], ["mainNode": styled, "unknownMapKey": 73]]
+        let mixedPlist: [String: Any] = ["version": 9, "canvas": ["mindMaps": maps], "unknownRootField": [1, 2, 3]]
+        let mixedData = try PropertyListSerialization.data(fromPropertyList: mixedPlist, format: .binary, options: 0)
+        let mixedSource = scratch.appendingPathComponent("multi.mindnode", isDirectory: true)
+        try fm.createDirectory(at: mixedSource.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        try mixedData.write(to: mixedSource.appendingPathComponent("contents.xml"))
+        try resource.write(to: mixedSource.appendingPathComponent("assets/note.bin"))
+        var mixedEdited = try MindNodeImporter.load(mixedSource)
+        assert(mixedEdited.count == 2 && mixedEdited[1].title == "Styled untouched")
+        mixedEdited[0].title = "多图 🔗"
+        mixedEdited[0].folded = true
+        let mixedOutput = scratch.appendingPathComponent("multi-edited.mindnode", isDirectory: true)
+        try MindNodePackage.copyUpdatingExistingNodes(from: mixedSource, to: mixedOutput, editedRoots: mixedEdited)
+        assert((try? MindNodeImporter.load(mixedOutput)) == mixedEdited)
+        assert((try? Data(contentsOf: mixedOutput.appendingPathComponent("assets/note.bin"))) == resource)
+        assert((try? Data(contentsOf: mixedSource.appendingPathComponent("contents.xml"))) == mixedData)
+        assert((try? Data(contentsOf: mixedSource.appendingPathComponent("assets/note.bin"))) == resource)
+        let mixedWritten = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: mixedOutput.appendingPathComponent("contents.xml")),
+            options: [], format: nil) as! [String: Any]
+        let writtenMaps = (mixedWritten["canvas"] as! [String: Any])["mindMaps"] as! [[String: Any]]
+        assert((writtenMaps[1]["mainNode"] as! [String: Any])["notes"] as? [String: String] == ["text": "synthetic note", "attachment": "assets/note.bin"])
+        let preservedTitle = (writtenMaps[1]["mainNode"] as! [String: Any])["title"] as? [String: String]
+        assert(preservedTitle?["text"] == "<p>Styled <b>untouched</b></p>" && preservedTitle?["opaqueStyle"] == "keep")
+        assert((writtenMaps[1]["unknownMapKey"] as? Int) == 73)
+        var styleEdited = mixedEdited
+        styleEdited[1].title = "Flattened"
+        let styleRejected = scratch.appendingPathComponent("style-rejected.mindnode", isDirectory: true)
+        assert(rejects { try MindNodePackage.copyUpdatingExistingNodes(from: mixedSource, to: styleRejected, editedRoots: styleEdited) })
+        assert(!fm.fileExists(atPath: styleRejected.path))
+        let emptySource = scratch.appendingPathComponent("empty.mindnode", isDirectory: true)
+        try fm.createDirectory(at: emptySource, withIntermediateDirectories: false)
+        let emptyData = try PropertyListSerialization.data(fromPropertyList: ["version": 9, "canvas": ["mindMaps": []]], format: .binary, options: 0)
+        try emptyData.write(to: emptySource.appendingPathComponent("contents.xml"))
+        let emptyOutput = scratch.appendingPathComponent("empty-copy.mindnode", isDirectory: true)
+        try MindNodePackage.copyUpdatingExistingNodes(from: emptySource, to: emptyOutput, editedRoots: [])
+        assert((try? Data(contentsOf: emptyOutput.appendingPathComponent("contents.xml"))) == emptyData)
+        assert((try? MindNodeImporter.load(emptyOutput)) == [])
         assert(rejects { try MindNodePackage.copyUnmodified(from: source, to: output) }) // No replacement.
         assert(rejects { try MindNodePackage.copyUpdatingExistingNodes(from: source, to: updatedOutput, editedRoots: [edited]) })
         var structural = edited
@@ -84,6 +127,6 @@ enum MindNodePackageTests {
         let linkedSource = scratch.appendingPathComponent("alias.mindnode")
         try fm.createSymbolicLink(at: linkedSource, withDestinationURL: source)
         assert(rejects { try MindNodePackage.copyUnmodified(from: linkedSource, to: scratch.appendingPathComponent("alias-copy.mindnode")) })
-        print("synthetic v9 copy, resources, collisions and symlinks passed")
+        print("synthetic v9 edits, multi/empty maps, metadata, resources, collisions and symlinks passed")
     }
 }
