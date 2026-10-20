@@ -5,7 +5,7 @@
 | 功能群 | 原版静态证据 | 当前原型 | 尚需验证/实现 |
 | --- | --- | --- | --- |
 | 节点创建编辑 | New Child Tab、New Sibling Return、New Sibling Before ⌥Return、New Parent ⌥Tab、New Main Node ⇧Return、Edit Title ⌘Return | Tab 子节点/空图首根，Return 非根同级，⌥Return 前插同级，⌥Tab 新父节点，⇧Return 新主节点；模型、无窗口 AppKit 文本命令与构建已验证 | ⌘Return 显式编辑标题、编辑焦点及运行时按键语义 |
-| 移动/拖动 | Move above/below/left/right of sibling ⌘方向键、Detach Node ⌘D、Layout/Balance Children；静态符号另显示 CanvasUI 拖动开始/更新/结束、重连及插入区域估计器，仍**不证明鼠标拖拽的落点规则** | 空白区拖动平移画布；节点拖到另一节点中部改挂为子节点，拖到上下边缘重排同级；模型防循环并可撤销，纯落点逻辑有无界面测试；尚未 GUI 验证；⌘↑/⌘↓已接入相邻同级重排，⌘⇧D 分离选中非根节点为主节点，未覆盖左右方向 | 自由定位/独立节点、拖动预览、左右移动快捷键及运行时手感；当前四分之一高度落点为独立近似，须以原版临时空白图证据校准 |
+| 移动/拖动 | Move above/below/left/right of sibling ⌘方向键、Detach Node ⌘D、Layout/Balance Children；静态符号另显示 CanvasUI 拖动开始/更新/结束、重连及插入区域估计器，仍**不证明鼠标拖拽的落点规则** | 空白区拖动平移画布；节点拖到另一节点中部改挂为子节点，拖到上下边缘重排同级；模型防循环并可撤销，落点逻辑和合成 AppKit 鼠标事件（跨父节点、中部改挂及上缘同级重排）均通过无窗口测试；尚未 GUI 验证；⌘↑/⌘↓已接入相邻同级重排，⌘⇧D 分离选中非根节点为主节点，未覆盖左右方向 | 自由定位/独立节点、拖动预览、左右移动快捷键及运行时手感；当前四分之一高度落点为独立近似，须以原版临时空白图证据校准 |
 | 结构与选择 | Indent/Outdent、Select All Subnodes、Select Next/Previous Main Node、Fold/Unfold、Unfold All、Focus Mode | 方向键选单节点、折叠当前节点 | 多选、缩进/反缩进、焦点模式及作用域 |
 | 剪贴板/重复 | Cut/Copy/Paste、Duplicate、Duplicate Single Node、Copy Selected Nodes | 未实现节点剪贴板 | 多节点复制与原版剪贴板格式；不得复制原版私有实现 |
 | 图面/视图 | Zoom In/Out、Actual Size、Zoom to Fit/Selection、Center Node/Main Node、Mind Map/Outline | 自有固定树布局、画布平移、滚轮/捏合缩放 | 双向布局、自动排版、概览/聚焦/大纲与视觉还原 |

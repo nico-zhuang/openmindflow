@@ -36,6 +36,46 @@ enum CanvasCommandTests {
         assert(parent.keyEquivalent == "\t" && parent.keyEquivalentModifierMask == [.option])
         let main = nodeMenu.item(withTitle: "New Main Node")!
         assert(main.keyEquivalent == "\r" && main.keyEquivalentModifierMask == [.shift])
-        print("canvas command tests passed (no windows)")
+        let movingID = UUID(), destinationID = UUID(), dragRootID = UUID()
+        let dragging = MapModel(roots: [MapNode(id: dragRootID, title: "Root", children: [
+            MapNode(id: movingID, title: "Move", children: [], folded: false),
+            MapNode(id: destinationID, title: "Destination", children: [], folded: false)
+        ], folded: false)], selected: dragRootID)
+        let dragCanvas = MapCanvas(model: dragging)
+        dragCanvas.frame = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        var changes = 0
+        dragCanvas.onChange = { changes += 1 }
+        let frames = mapLayout(dragging.roots)
+        // NSEvent uses bottom-left window coordinates; this canvas is flipped.
+        let start = CGPoint(x: frames[1].frame.midX + 80,
+                            y: dragCanvas.bounds.height - frames[1].frame.midY - 90)
+        let finish = CGPoint(x: frames[2].frame.midX + 80,
+                             y: dragCanvas.bounds.height - frames[2].frame.midY - 90)
+        func mouse(_ kind: NSEvent.EventType, _ point: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        dragCanvas.mouseDown(with: mouse(.leftMouseDown, start))
+        dragCanvas.mouseDragged(with: mouse(.leftMouseDragged, finish))
+        dragCanvas.mouseUp(with: mouse(.leftMouseUp, finish))
+        assert(dragging.roots[0].children.map(\.id) == [destinationID])
+        assert(dragging.roots[0].children[0].children.map(\.id) == [movingID])
+        assert(dragging.selected == movingID && changes == 1)
+        let siblingIDs = (0..<3).map { _ in UUID() }
+        let reordered = MapModel(roots: [MapNode(id: UUID(), title: "Root", children:
+            siblingIDs.enumerated().map { MapNode(id: $0.element, title: "\($0.offset)", children: [], folded: false) },
+            folded: false)], selected: siblingIDs[2])
+        let reorderCanvas = MapCanvas(model: reordered)
+        reorderCanvas.frame = dragCanvas.frame
+        let rows = mapLayout(reordered.roots)
+        let from = CGPoint(x: rows[3].frame.midX + 80,
+                           y: reorderCanvas.bounds.height - rows[3].frame.midY - 90)
+        let beforePoint = CGPoint(x: rows[2].frame.midX + 80,
+                                  y: reorderCanvas.bounds.height - rows[2].frame.minY - 92)
+        reorderCanvas.mouseDown(with: mouse(.leftMouseDown, from))
+        reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, beforePoint))
+        reorderCanvas.mouseUp(with: mouse(.leftMouseUp, beforePoint))
+        assert(reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
+        print("canvas command and drag tests passed (no windows)")
     }
 }
