@@ -4,7 +4,7 @@
 
 共识别 220 项有标题的 `NSMenuItem`，其中 104 项带静态按键。主菜单以外还可能存在运行时动态菜单、上下文菜单和键盘事件处理；下表**不证明动作在运行时生效**。同一个组合在不同模式下可能复用。
 
-按 nib 中 `NSMenu`／`NSSubmenu` 引用追踪父菜单（而非按下表对象 ID 猜测归属）：Node 21 项、View 20 项、Edit 19 项、Organize 13 项、File 11 项；还有 Fold、Select、Zoom、Font 等次级菜单。10 项归属未解析，含顶层入口；这些数字是静态条目计数，未去除条件菜单／模式菜单重复项。下表仍按对象 ID 排序，**不是运行时菜单层级或实际可见顺序**；当前保存的 REA 规范化记录把 `NSMenuItems` 指向未展开的集合对象（如 Node 菜单 1521 → 1524），无法从它恢复条目真实排列。
+按 nib 中 `NSMenu`／`NSSubmenu` 引用追踪父菜单（而非按下表对象 ID 猜测归属）：Node 21 项、View 20 项、Edit 19 项、Organize 13 项、File 11 项；还有 Fold、Select、Zoom、Font 等次级菜单。10 项归属未解析，含顶层入口；这些数字是静态条目计数，未去除条件菜单／模式菜单重复项。下表仍按对象 ID 排序，**不是运行时菜单层级或实际可见顺序**；当前保存的 REA 规范化记录把 `NSMenuItems` 指向未展开的集合对象（如 Node 菜单 1521 → 1524），无法从它恢复条目真实排列。抽查 New Child、New Parent、New Main Node、Detach、Indent/Outdent、Fold 和上下移动等条目，其解码 `nibValues` 未给出 `NSAction`/`NSTarget`；这不排除独立连接器或运行时接线，不能从标题推定具体调用。
 
 **需要模式判定的静态复用**：`Tab` 同时列于 Node → New Child（对象 38）与 Organize → Indent（931）；`⌘1` 同时列于 View → Mind Map（1205）及另一个 Styles（1222）。可能由视图模式、焦点或菜单启用状态分流，静态 nib 无法回答。注意**大小写不能折叠**：Edit → Paste as Text 的 `NSKeyEquiv` 为大写 `V`（811），Paste 为小写 `v`（1009），两项掩码虽均为 Command，不能直接断言同键冲突；同理 Organize → Detach Node 的 `D`（850）与 Edit → Duplicate 的 `d`（1305）。表格特意保留原键大小写，Shift 解释尚无运行时对照。
 

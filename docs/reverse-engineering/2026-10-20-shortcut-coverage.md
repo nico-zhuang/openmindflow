@@ -11,7 +11,7 @@
 
 13 项同键入口的对象 ID：`38` Tab 新子节点；`93` ⇧Return 新主节点；`126` ⌥Tab 新父节点；`148` ⌘S 保存；`155` Return 新同级；`241` ⌘Q 退出；`293` Delete 删除节点；`310` ⌘Z 撤销；`343` ⇧⌘Z 重做；`634` ⌥Return 前插同级；`1029` ⌥. 折叠；`1250` ⌘↑ 同级上移；`1343` ⌘↓ 同级下移。另有对象 `183` ⌘O，只按键相同、文件能力不等价。源代码入口：[App.swift](../../Sources/App.swift)、[MapModel.swift](../../Sources/MapModel.swift)；回归：[CanvasCommandTests.swift](../../Tests/CanvasCommandTests.swift)、[MapModelTests.swift](../../Tests/MapModelTests.swift)。
 
-**不得盲目扩展的冲突**：Tab 的 New Child（38）与 Indent（931）分属 Node/Organize；⌘1 的 Mind Map（1205）与 Styles（1222）并存。大写键不能不经验证折叠成小写：Paste as Text（811，`V`）/Paste（1009，`v`）、Detach（850，`D`）/Duplicate（1305，`d`）虽有相同 Command 掩码，键值不同；是否隐含 Shift 仍需原版临时图/文本框受控对照。Find（324，`f`）/Focus Mode（1161，`F`）同样是大小写不同的 Command 组合；菜单项目存在不代表同一模式可用。
+**不得盲目扩展的冲突**：Tab 的 New Child（38）与 Indent（931）分属 Node/Organize；⌘1 的 Mind Map（1205）与 Styles（1222）并存。大写键不能不经验证折叠成小写：Paste as Text（811，`V`）/Paste（1009，`v`）、Detach（850，`D`）/Duplicate（1305，`d`）虽有相同 Command 掩码，键值不同；独立的无窗口 AppKit `NSMenu.performKeyEquivalent` 探针显示匹配取决于合成事件 `charactersIgnoringModifiers` 的大小写，不能只按掩码推论原版物理键路由；是否隐含 Shift 仍需原版临时图/文本框受控对照。Find（324，`f`）/Focus Mode（1161，`F`）同样是大小写不同的 Command 组合；菜单项目存在不代表同一模式可用。
 
 **后续优先验证而非假定的簇**：
 - 结构/大纲/选择：⌘←→ 同级移动（693、1078）、Tab Indent、⇧Backtab Outdent、Outline 模式、多选。
