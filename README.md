@@ -3,7 +3,7 @@
 Build on macOS with Swift command-line tools: `bash build.sh`. Run with `open build/MindMap.app`.
 No Xcode project, third-party dependencies, signing, or original application are required.
 
-- The native Node menu exposes implemented creation and detach commands. Tab: new child (or the first root when an opened map is empty); Return: new sibling; Option-Return: new sibling before; Option-Tab: insert a parent; Shift-Return: new main/root node. Ordinary sibling/parent insertion is disabled on roots.
+- The native Node menu exposes implemented creation and detach commands. Tab: new child (or the first root when an opened map is empty); Return: new sibling; Option-Return: new sibling before; Option-Tab: insert a parent; Shift-Return: new main/root node. Ordinary sibling/parent insertion does nothing on roots (menu items are not yet disabled contextually).
 - Type to edit the selected node through a native text field; double-click to replace its text, Escape to cancel editing. Chinese IME composition has not been verified in the final GUI build.
 - Arrow keys: navigate visible nodes; Command-Up/Down: move the selected node among siblings; Command-Shift-D: detach the selected non-root node into a main/root node; Delete: remove a non-root node; Option+period or Space: fold/unfold while the canvas has focus. While editing text, punctuation remains text input.
 - Command-Z / Shift-Command-Z: model undo/redo. Drag empty canvas space or scroll to pan; drag a node onto another node's middle to make it a child, or its top/bottom edge to reorder among siblings. Pinch or Option-scroll to zoom. Node drop zones are an independent approximation, not verified against MindNode's runtime; free-position dragging is not implemented.
