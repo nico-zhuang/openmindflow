@@ -1,21 +1,52 @@
 import Foundation
+import Darwin
 
 @main
 enum MindNodePackageTests {
     static func main() throws {
+        let keepFixture = CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--keep-fixture"
+        guard CommandLine.arguments.count == 1 || keepFixture else { throw MindNodePackage.CopyError.unsupported }
+        var retained = false
         let fm = FileManager.default
-        let base = fm.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
-        let scratch = base.appendingPathComponent("mindmap-copy-tests-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: scratch, withIntermediateDirectories: false)
+        let base: URL
+        if keepFixture {
+            let dist = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)
+                .appendingPathComponent("dist", isDirectory: true)
+            try fm.createDirectory(at: dist, withIntermediateDirectories: true)
+            var info = stat()
+            guard lstat(dist.path, &info) == 0,
+                  info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+                  info.st_uid == getuid(), info.st_mode & mode_t(0o022) == 0 else {
+                throw MindNodePackage.CopyError.unsupported
+            }
+            base = dist.resolvingSymlinksInPath().standardizedFileURL
+        } else {
+            base = fm.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        }
+        var pattern = (base.path + "/mindmap-copy-tests-XXXXXX").utf8CString
+        let path = try pattern.withUnsafeMutableBufferPointer { bytes -> String in
+            guard let start = bytes.baseAddress, let created = mkdtemp(start) else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return String(cString: created)
+        }
+        let scratch = URL(fileURLWithPath: path, isDirectory: true)
         let marker = scratch.appendingPathComponent(".owner")
         let owner = UUID().uuidString
-        try owner.write(to: marker, atomically: true, encoding: .utf8)
         defer {
-            if scratch.resolvingSymlinksInPath().standardizedFileURL == scratch.standardizedFileURL,
+            if !retained, scratch.resolvingSymlinksInPath().standardizedFileURL == scratch.standardizedFileURL,
                scratch.deletingLastPathComponent() == base,
-               (try? String(contentsOf: marker, encoding: .utf8)) == owner {
+               ((try? String(contentsOf: marker, encoding: .utf8)) == owner ||
+                (try? fm.contentsOfDirectory(atPath: scratch.path))?.isEmpty == true) {
                 try? fm.removeItem(at: scratch)
             }
+        }
+        try owner.write(to: marker, atomically: true, encoding: .utf8)
+        guard (try fm.attributesOfItem(atPath: scratch.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700 else {
+            throw MindNodePackage.CopyError.unsupported
+        }
+        func verify(_ condition: @autoclosure () -> Bool) throws {
+            guard condition() else { throw MindNodePackage.CopyError.unsupported }
         }
         let source = scratch.appendingPathComponent("source.mindnode", isDirectory: true)
         let output = scratch.appendingPathComponent("copy.mindnode", isDirectory: true)
@@ -33,30 +64,44 @@ enum MindNodePackageTests {
         try contents.write(to: source.appendingPathComponent("contents.xml"))
         try resource.write(to: source.appendingPathComponent("assets/icon.bin"))
         try MindNodePackage.copyUnmodified(from: source, to: output)
-        assert((try? Data(contentsOf: output.appendingPathComponent("contents.xml"))) == contents)
-        assert((try? Data(contentsOf: output.appendingPathComponent("assets/icon.bin"))) == resource)
-        assert((try? Data(contentsOf: source.appendingPathComponent("contents.xml"))) == contents)
-        assert((try? Data(contentsOf: source.appendingPathComponent("assets/icon.bin"))) == resource)
-        assert((try? MindNodeImporter.load(output).first?.title) == "合成节点")
+        try verify((try? Data(contentsOf: output.appendingPathComponent("contents.xml"))) == contents)
+        try verify((try? Data(contentsOf: output.appendingPathComponent("assets/icon.bin"))) == resource)
+        try verify((try? Data(contentsOf: source.appendingPathComponent("contents.xml"))) == contents)
+        try verify((try? Data(contentsOf: source.appendingPathComponent("assets/icon.bin"))) == resource)
+        try verify((try? MindNodeImporter.load(output).first?.title) == "合成节点")
         let staged = try fm.contentsOfDirectory(atPath: scratch.path)
-        assert(!staged.contains { $0.hasPrefix(".mindmap-copy-") })
+        try verify(!staged.contains { $0.hasPrefix(".mindmap-copy-") })
         let edited = MapNode(id: rootID, title: "改过 <&> 🧭", children: [], folded: true)
         let updatedOutput = scratch.appendingPathComponent("edited.mindnode", isDirectory: true)
         let proposed = try MindNodeTitlePatch.apply(to: contents, original: MindNodeImporter.load(source), edited: [edited])
-        assert(proposed != contents)
+        try verify(proposed != contents)
         try MindNodePackage.copyUpdatingExistingNodes(from: source, to: updatedOutput, editedRoots: [edited])
         let imported = try MindNodeImporter.load(updatedOutput)
-        assert(imported.count == 1 && imported[0].id == rootID)
-        assert(imported[0].title == edited.title && imported[0].folded)
-        assert((try? Data(contentsOf: updatedOutput.appendingPathComponent("assets/icon.bin"))) == resource)
-        assert((try? Data(contentsOf: source.appendingPathComponent("contents.xml"))) == contents)
+        try verify(imported.count == 1 && imported[0].id == rootID)
+        try verify(imported[0].title == edited.title && imported[0].folded)
+        try verify((try? Data(contentsOf: updatedOutput.appendingPathComponent("assets/icon.bin"))) == resource)
+        try verify((try? Data(contentsOf: source.appendingPathComponent("contents.xml"))) == contents)
         var updatedFormat = PropertyListSerialization.PropertyListFormat.binary
-        let updatedPlist = try PropertyListSerialization.propertyList(
+        let decoded = try PropertyListSerialization.propertyList(
             from: Data(contentsOf: updatedOutput.appendingPathComponent("contents.xml")),
-            options: [], format: &updatedFormat) as! [String: Any]
-        assert((updatedPlist["unknownRootField"] as? [Int]) == [1, 2, 3])
-        let updatedRoot = ((updatedPlist["canvas"] as! [String: Any])["mindMaps"] as! [[String: Any]])[0]["mainNode"] as! [String: Any]
-        assert(((updatedRoot["unknownNodeField"] as! [String: Any])["color"] as? String) == "preserve")
+            options: [], format: &updatedFormat)
+        guard let updatedPlist = decoded as? [String: Any],
+              let canvas = updatedPlist["canvas"] as? [String: Any],
+              let outputMaps = canvas["mindMaps"] as? [[String: Any]],
+              let updatedRoot = outputMaps.first?["mainNode"] as? [String: Any] else {
+            throw MindNodePackage.CopyError.unsupported
+        }
+        try verify(updatedFormat == .binary && updatedPlist["unknownRootField"] as? [Int] == [1, 2, 3])
+        try verify((updatedRoot["unknownNodeField"] as? [String: Any])?["color"] as? String == "preserve")
+        if keepFixture {
+            guard try MindNodeImporter.load(source) == [MapNode(id: rootID, title: "合成节点", children: [], folded: false)],
+                  try MindNodeImporter.load(updatedOutput) == [edited] else {
+                throw MindNodePackage.CopyError.unsupported
+            }
+            retained = true
+            print("Synthetic pair retained: \(source.path) -> \(updatedOutput.path)")
+            return
+        }
         func rejects(_ block: () throws -> Void) -> Bool {
             do { try block(); return false } catch { return true }
         }
