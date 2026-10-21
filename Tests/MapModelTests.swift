@@ -174,6 +174,24 @@ enum MapModelTests {
         moved.redo()
         moved.moveSibling(by: 1)
         assert(moved.roots[0].children.map(\.title) == ["First", "Middle", "Last"])
+        let a = UUID(), b = UUID(), c = UUID()
+        let previewModel = MapModel(roots: [MapNode(id: a, title: "Root", children: [
+            MapNode(id: b, title: "Source", children: [], folded: false),
+            MapNode(id: c, title: "Target", children: [], folded: false)
+        ], folded: false)], selected: b)
+        let unchanged = previewModel.roots
+        assert(previewModel.canMoveNode(b, to: c, at: 0))
+        assert(!previewModel.canMoveNode(a, to: c, at: 0))
+        assert(!previewModel.canMoveNode(b, to: b, at: 0))
+        assert(!previewModel.canMoveNode(b, to: a, at: 1)) // Same location.
+        assert(previewModel.roots == unchanged && previewModel.selected == b)
+        assert(!previewModel.undo(), "A validity query must not add undo history")
+        assert(previewModel.roots == unchanged)
+        previewModel.rename("Edited")
+        assert(previewModel.undo())
+        assert(previewModel.canMoveNode(b, to: c, at: 0))
+        assert(previewModel.redo(), "A validity query must not clear redo history")
+        assert(previewModel.roots[0].children[0].title == "Edited")
         let sourceID = UUID(), nestedID = UUID(), destinationID = UUID()
         let dragged = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: sourceID, title: "Source", children: [MapNode(id: nestedID, title: "Nested", children: [], folded: false)], folded: false),

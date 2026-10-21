@@ -78,14 +78,22 @@ final class MapModel {
         return true
     }
 
+    func canMoveNode(_ id: UUID, to parentID: UUID, at index: Int) -> Bool {
+        guard let source = Self.path(to: id, in: roots), source.count > 1,
+              let target = Self.path(to: parentID, in: roots),
+              !target.starts(with: source),
+              (0...Self.node(at: target[...], in: roots).children.count).contains(index) else { return false }
+        let sameParent = source.dropLast().elementsEqual(target)
+        let destination = index - (sameParent && source.last! < index ? 1 : 0)
+        return !sameParent || destination != source.last!
+    }
+
     func moveNode(_ id: UUID, to parentID: UUID, at index: Int) -> Bool {
-        guard let sourcePath = Self.path(to: id, in: roots), sourcePath.count > 1,
-              let targetPath = Self.path(to: parentID, in: roots),
-              !targetPath.starts(with: sourcePath),
-              (0...Self.node(at: targetPath[...], in: roots).children.count).contains(index) else { return false }
+        guard canMoveNode(id, to: parentID, at: index) else { return false }
+        let sourcePath = Self.path(to: id, in: roots)!
+        let targetPath = Self.path(to: parentID, in: roots)!
         let sameParent = sourcePath.dropLast().elementsEqual(targetPath)
         let destinationIndex = index - (sameParent && sourcePath.last! < index ? 1 : 0)
-        guard !sameParent || destinationIndex != sourcePath.last! else { return false }
         let moving = Self.node(at: sourcePath[...], in: roots)
         save()
         Self.edit(&roots, at: sourcePath[...]) { nodes, position in nodes.remove(at: position) }
