@@ -95,7 +95,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
         let selected = nodes.first(where: { $0.node.id == model.selected })
         if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
-        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
         needsDisplay = true
         return screen(world)
     }
@@ -117,7 +117,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         else if box.maxX > bounds.maxX - margin { offset.x -= box.maxX - bounds.maxX + margin }
         if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
         else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
-        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -196,7 +196,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard editor == nil else { return }
         revealSelection()
         guard let node = selectedNode() else { return }
-        let field = NSTextField(frame: screen(node.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom))
+        let field = NSTextField(frame: screen(node.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom))
         field.stringValue = node.node.title
         field.font = mapFont(isRoot: node.parent == nil, zoom: zoom)
         field.textColor = .labelColor
@@ -347,7 +347,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             offset.x += point.x - origin.x
             offset.y += point.y - origin.y
             dragOrigin = point
-            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
             needsDisplay = true
         }
     }
@@ -365,7 +365,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         zoom = next
         let selected = selectedNode()
         if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
-        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
         needsDisplay = true
     }
     override func scrollWheel(with event: NSEvent) {
@@ -374,7 +374,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else {
             offset.x += event.scrollingDeltaX
             offset.y += event.scrollingDeltaY
-            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
             needsDisplay = true
         }
     }

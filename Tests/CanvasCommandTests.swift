@@ -262,6 +262,17 @@ enum CanvasCommandTests {
         let refit = fitCanvas.fitMapInView() // Active editor must follow an explicit fit.
         let fittedZoom = refit.width / worldWidth
         assert(rootEditor.font == mapFont(isRoot: true, zoom: fittedZoom))
+        assert(rootEditor.cell?.wraps == true && !rootEditor.usesSingleLineMode,
+               "Native editor must preserve multiline text")
+        let fittedWorld = mapLayout(fitModel.roots).reduce(CGRect.null) { $0.union($1.frame) }
+        let rootWorld = mapLayout(fitModel.roots)[0].frame
+        let projectedRoot = CGRect(x: refit.minX + (rootWorld.minX - fittedWorld.minX) * fittedZoom,
+                                   y: refit.minY + (rootWorld.minY - fittedWorld.minY) * fittedZoom,
+                                   width: rootWorld.width * fittedZoom, height: rootWorld.height * fittedZoom)
+        let textArea = projectedRoot.insetBy(dx: 12 * fittedZoom, dy: 11 * fittedZoom)
+        assert(abs(rootEditor.frame.minX - textArea.minX) < 0.1 && abs(rootEditor.frame.minY - textArea.minY) < 0.1 &&
+               abs(rootEditor.frame.width - textArea.width) < 0.1 && abs(rootEditor.frame.height - textArea.height) < 0.1,
+               "Active editor must use the same text area as the painted label")
         fitCanvas.selectAndEdit(fitRoot.children[0].id)
         let branchEditor = fitCanvas.subviews.compactMap { $0 as? NSTextField }.first!
         assert(branchEditor.font == mapFont(isRoot: false, zoom: fittedZoom))
