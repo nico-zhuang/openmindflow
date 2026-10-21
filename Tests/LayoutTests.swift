@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 @main
 enum LayoutTests {
@@ -20,6 +20,35 @@ enum LayoutTests {
         folded.folded = true
         assert(mapLayout([folded]).map(\.node.id) == [root.id])
         assert(mapLayout([]).isEmpty)
+
+        let longTitle = "这是一段需要自动换行的中文主题 🧠🌍 " + String(repeating: "extended label ", count: 9)
+        let children = (0..<20).map { index -> MapNode in
+            let title = index % 3 == 0 ? longTitle : index % 3 == 1 ? "想法 🎨\n第二行 🏗️" : "简短 \(index)"
+            let grandchildren = index == 0
+                ? [MapNode(id: UUID(), title: "Folded child must stay hidden", children: [], folded: false)]
+                : (index % 2 == 1 && index < 17
+                    ? [MapNode(id: UUID(), title: "子节点 🐼 \(index)", children: [], folded: false)] : [])
+            return MapNode(id: UUID(), title: title, children: grandchildren, folded: index == 0)
+        }
+        let largeRoots = [MapNode(id: UUID(), title: "三十个节点 🌳", children: children, folded: false),
+                          MapNode(id: UUID(), title: "第二主节点\n多行标题", children: [], folded: false)]
+        let large = mapLayout(largeRoots)
+        assert(large.count == 30, "Folded descendants must not take space")
+        assert(!large.contains { $0.node.id == children[0].children[0].id })
+        assert(large.map(\.frame) == mapLayout(largeRoots).map(\.frame), "Large map must lay out deterministically")
+        assert(large.contains { $0.frame.width > 170 }, "Long titles must widen their nodes")
+        assert(large.contains { $0.frame.height > 44 }, "Multiline titles must grow vertically")
+        for (index, node) in large.enumerated() {
+            for other in large.dropFirst(index + 1) {
+                assert(!node.frame.intersects(other.frame), "Visible node frames must not overlap")
+            }
+            let text = node.node.folded && !node.node.children.isEmpty ? "▸ " + node.node.title : node.node.title
+            let measured = ((text.isEmpty ? "New idea" : text) as NSString).boundingRect(
+                with: CGSize(width: node.frame.width - 24, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)])
+            assert(ceil(measured.height) <= node.frame.height - 22, "Text must fit the node's vertical inset")
+        }
 
         let decoded = try JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(roots))
         assert(decoded.map(\.id) == roots.map(\.id))
