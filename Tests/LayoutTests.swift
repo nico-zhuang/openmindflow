@@ -3,6 +3,9 @@ import AppKit
 @main
 enum LayoutTests {
     static func main() throws {
+        assert(mapFont(isRoot: true).pointSize == 16)
+        assert(mapFont(isRoot: false).pointSize == 14)
+        assert(mapFont(isRoot: true) != mapFont(isRoot: false))
         let root = MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: UUID(), title: "First", children: [], folded: false),
             MapNode(id: UUID(), title: "Second", children: [], folded: true)
@@ -46,7 +49,7 @@ enum LayoutTests {
             let measured = ((text.isEmpty ? "New idea" : text) as NSString).boundingRect(
                 with: CGSize(width: node.frame.width - 24, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)])
+                attributes: [.font: mapFont(isRoot: node.parent == nil)])
             assert(ceil(measured.height) <= node.frame.height - 22, "Text must fit the node's vertical inset")
         }
 

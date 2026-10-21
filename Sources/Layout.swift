@@ -19,16 +19,19 @@ func dropPlacement(at point: CGPoint, over node: LaidOutNode,
     return (node.node.id, node.node.children.count)
 }
 
+func mapFont(isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
+    NSFont.systemFont(ofSize: (isRoot ? 16 : 14) * zoom, weight: isRoot ? .semibold : .medium)
+}
+
 func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
     let gap: CGFloat = 32
-    let font = NSFont.systemFont(ofSize: 14, weight: .medium)
-    let attributes: [NSAttributedString.Key: Any] = [.font: font]
     var sizes: [UUID: CGSize] = [:]
     var subtreeHeights: [UUID: CGFloat] = [:]
     var columnWidths: [CGFloat] = []
 
     @discardableResult
     func measure(_ node: MapNode, depth: Int) -> CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [.font: mapFont(isRoot: depth == 0)]
         let title = node.title.isEmpty ? "New idea" : node.title
         let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
         let longestLine = text.components(separatedBy: "\n").map {

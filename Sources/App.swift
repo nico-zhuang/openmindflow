@@ -93,9 +93,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         zoom = min(1, max(0.35, min((bounds.width - 128) / world.width,
                                      (bounds.height - 128) / world.height)))
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
-        editor?.font = .systemFont(ofSize: 14 * zoom)
-        editor?.frame = nodes.first(where: { $0.node.id == model.selected })
-            .map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        let selected = nodes.first(where: { $0.node.id == model.selected })
+        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
+        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
         needsDisplay = true
         return screen(world)
     }
@@ -157,7 +157,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if editor != nil && item.node.id == model.selected { continue }
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 14 * zoom, weight: .medium),
+                .font: mapFont(isRoot: item.parent == nil, zoom: zoom),
                 .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
@@ -185,7 +185,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let title = source.node.title.isEmpty ? "New idea" : source.node.title
             let label = source.node.folded && !source.node.children.isEmpty ? "▸ " + title : title
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 14 * zoom, weight: .medium),
+                .font: mapFont(isRoot: source.parent == nil, zoom: zoom),
                 .foregroundColor: NSColor.labelColor
             ]
             (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
@@ -198,7 +198,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard let node = selectedNode() else { return }
         let field = NSTextField(frame: screen(node.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom))
         field.stringValue = node.node.title
-        field.font = .systemFont(ofSize: 14 * zoom)
+        field.font = mapFont(isRoot: node.parent == nil, zoom: zoom)
         field.textColor = .labelColor
         field.isBordered = false
         field.drawsBackground = false
@@ -363,8 +363,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         offset.x = point.x - (point.x - offset.x) * next / zoom
         offset.y = point.y - (point.y - offset.y) * next / zoom
         zoom = next
-        editor?.font = .systemFont(ofSize: 14 * zoom)
-        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        let selected = selectedNode()
+        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
+        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
         needsDisplay = true
     }
     override func scrollWheel(with event: NSEvent) {

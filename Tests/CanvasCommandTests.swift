@@ -164,7 +164,9 @@ enum CanvasCommandTests {
             return NSEvent(cgEvent: cg)!
         }
         let firstSize = distantEditor.font!.pointSize
+        assert(distantEditor.font == mapFont(isRoot: false))
         smallCanvas.scrollWheel(with: localWheel(8, command: true)) // Local NSEvent only, never posted.
+        assert(distantEditor.font == mapFont(isRoot: false, zoom: exp(0.08)))
         assert(distantEditor.font!.pointSize != firstSize,
                "Zooming during editing must scale the text field font with its node")
         let firstPosition = distantEditor.frame.origin
@@ -228,6 +230,10 @@ enum CanvasCommandTests {
                "Grabbing the root must pan the visible map instead of silently failing")
         visualCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
         assert(visualModel.roots == [visualRoot] && visualChanges == 0)
+        visualCanvas.selectAndEdit(visualRoot.id)
+        assert(visualCanvas.subviews.compactMap { $0 as? NSTextField }.first!.font == mapFont(isRoot: true))
+        visualCanvas.selectAndEdit(visualRoot.children[0].id)
+        assert(visualCanvas.subviews.compactMap { $0 as? NSTextField }.first!.font == mapFont(isRoot: false))
 
         let longTitle = String(repeating: "Long title ", count: 12) + "\nSecond line"
         let fitRoot = MapNode(id: UUID(), title: "Root", children: (0..<3).map { group in
@@ -250,6 +256,15 @@ enum CanvasCommandTests {
         let afterPan = image(fitCanvas)
         assert(afterPan != beforePan && image(fitCanvas) == afterPan && fitModel.roots == [fitRoot],
                "Draw and ordinary pan must not automatically refit")
+        fitCanvas.selectAndEdit(fitRoot.id)
+        let rootEditor = fitCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        let worldWidth = mapLayout(fitModel.roots).reduce(CGRect.null) { $0.union($1.frame) }.width
+        let refit = fitCanvas.fitMapInView() // Active editor must follow an explicit fit.
+        let fittedZoom = refit.width / worldWidth
+        assert(rootEditor.font == mapFont(isRoot: true, zoom: fittedZoom))
+        fitCanvas.selectAndEdit(fitRoot.children[0].id)
+        let branchEditor = fitCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        assert(branchEditor.font == mapFont(isRoot: false, zoom: fittedZoom))
         let tall = MapCanvas(model: MapModel(roots: [longRoot], selected: longRoot.id))
         tall.frame = CGRect(x: 0, y: 0, width: 1200, height: 850)
         let tallBounds = tall.fitMapInView()
