@@ -228,6 +228,41 @@ enum CanvasCommandTests {
                "Grabbing the root must pan the visible map instead of silently failing")
         visualCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
         assert(visualModel.roots == [visualRoot] && visualChanges == 0)
-        print("canvas command, visible drag, root pan, visibility, zoom/pan and Open menu tests passed (no windows)")
+
+        let longTitle = String(repeating: "Long title ", count: 12) + "\nSecond line"
+        let fitRoot = MapNode(id: UUID(), title: "Root", children: (0..<3).map { group in
+            MapNode(id: UUID(), title: "Group \(group) " + longTitle, children: (0..<2).map { leaf in
+                MapNode(id: UUID(), title: "Leaf \(group).\(leaf) " + longTitle, children: [], folded: false)
+            }, folded: false)
+        }, folded: false) // One root, three groups, six leaves = ten nodes.
+        let fitModel = MapModel(roots: [fitRoot], selected: fitRoot.id)
+        let fitCanvas = MapCanvas(model: fitModel)
+        fitCanvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 850)
+        let fitted = fitCanvas.fitMapInView()
+        assert(!fitted.isNull && fitted.minX >= 60 && fitted.minY >= 60)
+        assert(fitted.maxX <= 1140 && fitted.maxY <= 790)
+        assert(abs(fitted.midX - 600) < 2 && abs(fitted.midY - 425) < 2)
+        assert(fitModel.roots == [fitRoot], "Viewport fitting must not change the tree")
+        let beforePan = image(fitCanvas)
+        fitCanvas.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 20, y: 20)))
+        fitCanvas.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 45, y: 45)))
+        fitCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 45, y: 45)))
+        let afterPan = image(fitCanvas)
+        assert(afterPan != beforePan && image(fitCanvas) == afterPan && fitModel.roots == [fitRoot],
+               "Draw and ordinary pan must not automatically refit")
+        let tall = MapCanvas(model: MapModel(roots: [longRoot], selected: longRoot.id))
+        tall.frame = CGRect(x: 0, y: 0, width: 1200, height: 850)
+        let tallBounds = tall.fitMapInView()
+        let tallNodes = mapLayout([longRoot])
+        let tallWorld = tallNodes.reduce(CGRect.null) { $0.union($1.frame) }
+        let rootY = tallBounds.minY + (tallNodes[0].frame.midY - tallWorld.minY) * (tallBounds.width / tallWorld.width)
+        assert(rootY >= 0 && rootY <= tall.bounds.height,
+               "A tall map must keep its root visible at minimum zoom")
+        let empty = MapCanvas(model: MapModel(roots: [], selected: UUID()))
+        empty.frame = fitCanvas.frame
+        assert(empty.fitMapInView().isNull)
+        fitCanvas.frame.size.width = 128
+        assert(fitCanvas.fitMapInView().isNull)
+        print("canvas command, drag, pan and viewport-fit tests passed (no windows)")
     }
 }

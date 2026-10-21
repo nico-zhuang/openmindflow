@@ -84,6 +84,21 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
                width: frame.width * zoom, height: frame.height * zoom)
     }
+    @discardableResult
+    func fitMapInView() -> CGRect {
+        guard bounds.width > 128, bounds.height > 128 else { return .null }
+        let nodes = visibleNodes()
+        guard !nodes.isEmpty else { return .null }
+        let world = nodes.reduce(CGRect.null) { $0.union($1.frame) }
+        zoom = min(1, max(0.35, min((bounds.width - 128) / world.width,
+                                     (bounds.height - 128) / world.height)))
+        offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
+        editor?.font = .systemFont(ofSize: 14 * zoom)
+        editor?.frame = nodes.first(where: { $0.node.id == model.selected })
+            .map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+        needsDisplay = true
+        return screen(world)
+    }
     private func visibleNodes() -> [LaidOutNode] { mapLayout(model.roots) }
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
     private func validDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
