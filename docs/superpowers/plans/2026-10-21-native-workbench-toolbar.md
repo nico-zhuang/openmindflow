@@ -24,7 +24,7 @@
 
 **Interfaces:** `MapCanvas.toggleFold()` reuses `model.toggleFold()` and `changed()` after `commitEditing()`; both existing keyboard fold keys call it. `AppDelegate` conforms to `NSToolbarDelegate`, `makeToolbar() -> NSToolbar` returns the native toolbar, and `toolbar(_:itemForItemIdentifier:willBeInsertedIntoToolbar:)` produces only New Child, New Sibling, Fold/Unfold, Undo and Redo. Item targets point to existing selectors `newChild(_:)`, `newSibling(_:)`, `undoEdit(_:)`, `redoEdit(_:)`; fold target calls `canvas.toggleFold()` once. Identifiers/labels are stable: `new-child` / `New Child`, `new-sibling` / `New Sibling`, `fold-node` / `Fold/Unfold`, `undo` / `Undo`, `redo` / `Redo`.
 
-- [ ] **RED:** Before changing production code, add this assertion to the existing `CanvasCommandTests` after its menu assertions (or in `WorkbenchToolbarTests` with `@main`):
+- [x] **RED:** Before changing production code, add this assertion to the existing `CanvasCommandTests` after its menu assertions (or in `WorkbenchToolbarTests` with `@main`):
 
 ```swift
 let toolbarDelegate = AppDelegate()
@@ -44,9 +44,9 @@ for (id, action) in zip(items, actions) {
 
 Run `swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-toolbar-tests && /tmp/mindmap-toolbar-tests`; expect missing `makeToolbar` compile failure (if separate test file, use that filename). Add a focused canvas assertion that `toggleFold()` on a parent changes folded state once and Undo restores it, while a leaf fold is a no-op; old code fails to compile without `MapCanvas.toggleFold()`.
 
-- [ ] **GREEN:** Add `func toggleFold() { commitEditing(); if model.toggleFold() { changed() } }` to `MapCanvas`, route Space/Option-period through it, and add `@objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }` to AppDelegate. Add `NSToolbarDelegate` conformance and `makeToolbar()` with `NSToolbar(identifier: "MindMap")`, `toolbar.delegate = self`, `toolbar.displayMode = .iconAndLabel`, return toolbar. Supply exact default/allowed identifiers from the test (add `.flexibleSpace` only between node actions and undo/redo), create each native `NSToolbarItem` with its test label, a system-symbol image when available (`plus`, `arrow.turn.down.right`, `chevron.right`, `arrow.uturn.backward`, `arrow.uturn.forward`), readable `toolTip`, exact existing selector target/action, no duplicate mutation logic. In `applicationDidFinishLaunching`, attach `window.toolbar = makeToolbar()` after constructing the window and before showing it.
+- [x] **GREEN:** Add `func toggleFold() { commitEditing(); if model.toggleFold() { changed() } }` to `MapCanvas`, route Space/Option-period through it, and add `@objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }` to AppDelegate. Add `NSToolbarDelegate` conformance and `makeToolbar()` with `NSToolbar(identifier: "MindMap")`, `toolbar.delegate = self`, `toolbar.displayMode = .iconAndLabel`, return toolbar. Supply exact default/allowed identifiers from the test (add `.flexibleSpace` only between node actions and undo/redo), create each native `NSToolbarItem` with its test label, a system-symbol image when available (`plus`, `arrow.turn.down.right`, `chevron.right`, `arrow.uturn.backward`, `arrow.uturn.forward`), readable `toolTip`, exact existing selector target/action, no duplicate mutation logic. In `applicationDidFinishLaunching`, attach `window.toolbar = makeToolbar()` after constructing the window and before showing it.
 
-- [ ] **VERIFY:** Run the focused check, full commands listed in `README.md`, `bash build.sh`, `git diff --check`; confirm toolbar button actions do not touch file loading/saving paths and all standard menu shortcuts stay unchanged. Commit only the named source/test files.
+- [x] **VERIFY:** Run the focused check, full commands listed in `README.md`, `bash build.sh`, `git diff --check`; confirm toolbar button actions do not touch file loading/saving paths and all standard menu shortcuts stay unchanged. Commit only the named source/test files.
 
 ### Task 2: Bound acceptance honestly
 
