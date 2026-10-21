@@ -45,6 +45,12 @@ enum OutlineWorkbenchTests {
         outline.outlineView.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         assert(tree.roots[0].title == "Committed before outline selection")
         assert(tree.selected == child && outline.outlineView.selectedRow == 1 && outlineChanges == 1)
+        assert(outline.outlineView.target === outline && outline.outlineView.doubleAction != nil,
+               "A native outline double-click must reopen the selected node editor")
+        _ = outline.perform(outline.outlineView.doubleAction!, with: outline.outlineView)
+        assert(tree.selected == child && mapCanvas.subviews.contains { $0 is NSTextField },
+               "Outline editing must use the same canvas model and native field")
+        mapCanvas.commitEditing()
         let grandchildLabel = outline.outlineView.view(atColumn: 0, row: 2, makeIfNecessary: true) as? NSTextField
         assert(grandchildLabel?.toolTip == "Grandchild 🧭")
         assert(outline.outlineView.accessibilityLabel() == "Map outline")

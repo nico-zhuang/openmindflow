@@ -31,6 +31,8 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         outlineView.rowHeight = 27
         outlineView.dataSource = self
         outlineView.delegate = self
+        outlineView.target = self
+        outlineView.doubleAction = #selector(editSelectedNode(_:))
         outlineView.setAccessibilityLabel("Map outline")
         documentView = outlineView
         hasVerticalScroller = true
@@ -82,6 +84,11 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         label.lineBreakMode = .byTruncatingTail
         label.toolTip = row.title
         return label
+    }
+
+    @objc private func editSelectedNode(_ sender: NSOutlineView) {
+        guard sender.selectedRow >= 0, let row = sender.item(atRow: sender.selectedRow) as? Row else { return }
+        canvas.selectAndEdit(row.id)
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
