@@ -22,9 +22,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard announcedSelection != model.selected else { return }
             announcedSelection = model.selected
             NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
+            onSelectionChange?()
         }
     }
     var onChange: (() -> Void)?
+    var onSelectionChange: (() -> Void)?
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
@@ -64,11 +66,17 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         return nodes + (super.accessibilityChildren() ?? [])
     }
 
-    func selectAndEdit(_ id: UUID) {
+    func selectNode(_ id: UUID) {
         commitEditing()
         guard visibleNodes().contains(where: { $0.node.id == id }) else { return }
         model.selected = id
+        revealSelection()
         needsDisplay = true
+    }
+
+    func selectAndEdit(_ id: UUID) {
+        selectNode(id)
+        guard model.selected == id else { return }
         beginEditing()
     }
 
