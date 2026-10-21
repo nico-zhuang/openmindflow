@@ -62,10 +62,22 @@ enum OutlineWorkbenchTests {
         assert(!tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 4)
         let childItem = outline.outlineView.item(atRow: 1)!
         outline.outlineView.collapseItem(childItem) // Native disclosure action, not a model call.
-        assert(tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 3)
+        if outline.outlineView.item(atRow: 1)! as AnyObject !== childItem as AnyObject {
+            fputs("Native disclosure replaced its own Row before returning; AppKit may use freed item\n", stderr)
+            exit(1) // Exit normally: a failing diagnostic must not trigger another macOS crash dialog.
+        }
+        assert(tree.roots[0].children[0].folded)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        assert(outline.outlineView.numberOfRows == 3)
         let foldedChild = outline.outlineView.item(atRow: 1)!
         outline.outlineView.expandItem(foldedChild)
-        assert(!tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 4)
+        if outline.outlineView.item(atRow: 1)! as AnyObject !== foldedChild as AnyObject {
+            fputs("Native expansion replaced its own Row before returning\n", stderr)
+            exit(1)
+        }
+        assert(!tree.roots[0].children[0].folded)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        assert(outline.outlineView.numberOfRows == 4)
         mapCanvas.undo()
         assert(tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 3)
         mapCanvas.undo()

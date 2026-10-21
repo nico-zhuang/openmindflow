@@ -19,6 +19,8 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     private let canvas: MapCanvas
     private var roots: [Row] = []
     private var reloading = false
+    private var disclosureInProgress = false
+    private var pendingReload = false
 
     init(canvas: MapCanvas) {
         self.canvas = canvas
@@ -42,6 +44,15 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
 
     func reloadMap() {
+        if disclosureInProgress {
+            guard !pendingReload else { return }
+            pendingReload = true
+            DispatchQueue.main.async { [weak self] in
+                self?.pendingReload = false
+                self?.reloadMap() // AppKit has finished using the disclosure's old Row.
+            }
+            return
+        }
         reloading = true
         defer { reloading = false }
         roots = canvas.model.roots.map(Row.init)
@@ -102,6 +113,8 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
         guard !reloading, let row = item as? Row else { return true }
         guard row.folded else { return true }
+        disclosureInProgress = true
+        defer { disclosureInProgress = false }
         canvas.selectNode(row.id)
         canvas.toggleFold()
         reloadMap()
@@ -111,6 +124,8 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
         guard !reloading, let row = item as? Row else { return true }
         guard !row.folded else { return true }
+        disclosureInProgress = true
+        defer { disclosureInProgress = false }
         canvas.selectNode(row.id)
         canvas.toggleFold()
         reloadMap()
