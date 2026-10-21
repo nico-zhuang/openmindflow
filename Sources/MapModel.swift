@@ -135,24 +135,31 @@ final class MapModel {
         return true
     }
 
-    func toggleFold() {
-        guard let path = Self.path(to: selected, in: roots) else { return }
+    @discardableResult
+    func toggleFold() -> Bool {
+        guard let path = Self.path(to: selected, in: roots),
+              !Self.node(at: path[...], in: roots).children.isEmpty else { return false }
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in
             nodes[index].folded.toggle()
         }
+        return true
     }
 
-    func undo() {
-        guard let previous = past.popLast() else { return }
+    @discardableResult
+    func undo() -> Bool {
+        guard let previous = past.popLast() else { return false }
         future.append((roots, selected))
         (roots, selected) = previous
+        return true
     }
 
-    func redo() {
-        guard let next = future.popLast() else { return }
+    @discardableResult
+    func redo() -> Bool {
+        guard let next = future.popLast() else { return false }
         past.append((roots, selected))
         (roots, selected) = next
+        return true
     }
 
     private func save() {

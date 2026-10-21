@@ -47,9 +47,10 @@ enum MapModelTests {
         assert(model.roots[0].children[1].title == "Renamed")
         assert(model.selected == siblingID)
 
-        model.toggleFold()
-        assert(model.roots[0].children[1].folded)
-        assert(model.selected == siblingID)
+        model.selected = rootID
+        assert(model.toggleFold())
+        assert(model.roots[0].folded)
+        model.selected = siblingID
 
         model.remove()
         assert(model.roots[0].children.map(\.id) == [childID])
@@ -57,12 +58,12 @@ enum MapModelTests {
 
         model.undo()
         assert(model.roots[0].children.map(\.id) == [childID, siblingID])
-        assert(model.roots[0].children[1].folded)
+        assert(model.roots[0].folded)
         assert(model.selected == siblingID)
 
         model.undo()
-        assert(!model.roots[0].children[1].folded)
-        assert(model.selected == siblingID)
+        assert(!model.roots[0].folded)
+        assert(model.selected == rootID)
 
         model.undo()
         assert(model.roots[0].children[1].title != "Renamed")
@@ -71,7 +72,7 @@ enum MapModelTests {
         model.redo()
         assert(model.roots[0].children[1].title == "Renamed")
         model.redo()
-        assert(model.roots[0].children[1].folded)
+        assert(model.roots[0].folded)
         model.redo()
         assert(model.roots[0].children.map(\.id) == [childID])
         assert(model.selected == rootID)
@@ -202,6 +203,10 @@ enum MapModelTests {
         assert(!ordered.moveNode(ordered.roots[0].children[2].id, to: parentID, at: 3))
         ordered.undo()
         assert(ordered.roots[0].children.map(\.title) == ["A", "B", "C"])
+        assert(!ordered.moveNode(ordered.roots[0].children[0].id, to: parentID, at: 0))
+        assert(!ordered.moveNode(ordered.roots[0].children[0].id, to: parentID, at: Int.max))
+        assert(ordered.redo(), "Rejected moves must preserve redo history")
+        assert(ordered.roots[0].children.map(\.title) == ["B", "C", "A"])
         let insertRoot = UUID(), wrappedID = UUID(), neighborID = UUID()
         let insertion = MapModel(roots: [MapNode(id: insertRoot, title: "Main", children: [
             MapNode(id: wrappedID, title: "Existing", children: [MapNode(id: UUID(), title: "Leaf", children: [], folded: false)], folded: false),
@@ -240,6 +245,20 @@ enum MapModelTests {
         detachable.undo()
         assert(detachable.roots.map(\.id) == [detachedRoot])
         assert(detachable.roots[0].children.map(\.id) == [detachedChild])
+
+        let loneLeafID = UUID()
+        let leaf = MapModel(roots: [MapNode(id: loneLeafID, title: "Leaf", children: [], folded: false)], selected: loneLeafID)
+        leaf.rename("Edited")
+        assert(leaf.undo())
+        assert(!leaf.toggleFold()) // A leaf cannot fold or discard its redo history.
+        assert(!leaf.roots[0].folded)
+        assert(leaf.redo())
+        assert(leaf.roots[0].title == "Edited")
+        assert(!leaf.redo())
+        assert(leaf.undo())
+        assert(!leaf.undo()) // Rejected fold must not create an undo entry.
+        assert(leaf.roots[0].title == "Leaf")
+        assert(!leaf.toggleFold() && !leaf.roots[0].folded)
         print("model tests passed")
     }
 }
