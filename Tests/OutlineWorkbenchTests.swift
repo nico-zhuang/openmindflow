@@ -26,6 +26,56 @@ enum OutlineWorkbenchTests {
         canvas.selectAndEdit(root)
         assert(model.selected == root && selections == [child, root])
         assert(canvas.subviews.contains { $0 is NSTextField })
-        print("outline canvas selection tests passed (offscreen only)")
+        let grandchild = UUID(), sibling = UUID()
+        let tree = MapModel(roots: [MapNode(id: root, title: "Root", children: [
+            MapNode(id: child, title: "Child", children: [
+                MapNode(id: grandchild, title: "Grandchild 🧭", children: [], folded: false)
+            ], folded: false),
+            MapNode(id: sibling, title: "Sibling", children: [], folded: false)
+        ], folded: false)], selected: root)
+        let mapCanvas = MapCanvas(model: tree)
+        let outline = MapOutlineView(canvas: mapCanvas)
+        mapCanvas.onSelectionChange = { outline.syncSelection() }
+        var outlineChanges = 0
+        mapCanvas.onChange = { outlineChanges += 1; outline.reloadMap() }
+        assert(outline.outlineView.numberOfRows == 4)
+        assert(outline.outlineView.selectedRow == 0)
+        mapCanvas.selectAndEdit(root)
+        mapCanvas.subviews.compactMap { $0 as? NSTextField }.first!.stringValue = "Committed before outline selection"
+        outline.outlineView.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        assert(tree.roots[0].title == "Committed before outline selection")
+        assert(tree.selected == child && outline.outlineView.selectedRow == 1 && outlineChanges == 1)
+        let grandchildLabel = outline.outlineView.view(atColumn: 0, row: 2, makeIfNecessary: true) as? NSTextField
+        assert(grandchildLabel?.toolTip == "Grandchild 🧭")
+        assert(outline.outlineView.accessibilityLabel() == "Map outline")
+        outline.reloadMap()
+        assert(tree.selected == child && outline.outlineView.numberOfRows == 4 && outlineChanges == 1)
+        mapCanvas.toggleFold()
+        assert(tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 3)
+        mapCanvas.undo()
+        assert(!tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 4)
+        let childItem = outline.outlineView.item(atRow: 1)!
+        outline.outlineView.collapseItem(childItem) // Native disclosure action, not a model call.
+        assert(tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 3)
+        let foldedChild = outline.outlineView.item(atRow: 1)!
+        outline.outlineView.expandItem(foldedChild)
+        assert(!tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 4)
+        mapCanvas.undo()
+        assert(tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 3)
+        mapCanvas.undo()
+        assert(!tree.roots[0].children[0].folded && outline.outlineView.numberOfRows == 4)
+        let beforeLeaf = outlineChanges
+        outline.outlineView.collapseItem(outline.outlineView.item(atRow: 2)!)
+        assert(outlineChanges == beforeLeaf && outline.outlineView.numberOfRows == 4)
+
+        let many = MapNode(id: UUID(), title: "Thirty", children: (0..<29).map { index in
+            MapNode(id: UUID(), title: "Node \(index)", children: [], folded: false)
+        }, folded: false)
+        let manyCanvas = MapCanvas(model: MapModel(roots: [many], selected: many.id))
+        let manyOutline = MapOutlineView(canvas: manyCanvas)
+        assert(manyOutline.outlineView.numberOfRows == 30)
+        manyOutline.reloadMap()
+        assert(manyOutline.outlineView.numberOfRows == 30)
+        print("outline selection, fold/undo and 30-node tests passed (offscreen only)")
     }
 }
