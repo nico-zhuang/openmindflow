@@ -71,15 +71,15 @@ enum CanvasCommandTests {
         assert(main.keyEquivalent == "\r" && main.keyEquivalentModifierMask == [.shift])
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
-        assert(identifiers.map(\.rawValue) == ["new-child", "new-sibling", "fold-node", "undo", "redo"])
+        assert(identifiers.map(\.rawValue) == ["new-child", "new-sibling", "fold-node", "fit-map", "undo", "redo"])
         for (index, pair) in zip(identifiers,
-                                 ["newChild:", "newSibling:", "foldNode:", "undoEdit:", "redoEdit:"]).enumerated() {
+                                 ["newChild:", "newSibling:", "foldNode:", "fitMap:", "undoEdit:", "redoEdit:"]).enumerated() {
             let (identifier, action) = pair
             let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
                                            willBeInsertedIntoToolbar: true)!
             assert(item.target as AnyObject? === appDelegate)
             assert(item.action.map(NSStringFromSelector) == action)
-            assert(item.label == ["New Child", "New Sibling", "Fold/Unfold", "Undo", "Redo"][index])
+            assert(item.label == ["New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Undo", "Redo"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
         let foldRootID = UUID()

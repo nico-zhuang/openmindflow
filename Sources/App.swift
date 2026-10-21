@@ -543,6 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func newMainNode(_ sender: Any?) { canvas.addMainNode() }
     @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
     @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
+    @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
 
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
         let split = NSSplitViewController()
@@ -568,7 +569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         return toolbar
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.init("new-child"), .init("new-sibling"), .init("fold-node"),
+        [.init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
          .flexibleSpace, .init("undo"), .init("redo")]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -581,6 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         case "new-child": details = ("New Child", "plus", #selector(newChild(_:)))
         case "new-sibling": details = ("New Sibling", "arrow.turn.down.right", #selector(newSibling(_:)))
         case "fold-node": details = ("Fold/Unfold", "chevron.right", #selector(foldNode(_:)))
+        case "fit-map": details = ("Fit Map", "arrow.up.left.and.arrow.down.right", #selector(fitMap(_:)))
         case "undo": details = ("Undo", "arrow.uturn.backward", #selector(undoEdit(_:)))
         case "redo": details = ("Redo", "arrow.uturn.forward", #selector(redoEdit(_:)))
         default: return nil
