@@ -62,6 +62,37 @@ enum CanvasCommandTests {
         assert(parent.keyEquivalent == "\t" && parent.keyEquivalentModifierMask == [.option])
         let main = nodeMenu.item(withTitle: "New Main Node")!
         assert(main.keyEquivalent == "\r" && main.keyEquivalentModifierMask == [.shift])
+        let toolbar = appDelegate.makeToolbar()
+        let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
+        assert(identifiers.map(\.rawValue) == ["new-child", "new-sibling", "fold-node", "undo", "redo"])
+        for (index, pair) in zip(identifiers,
+                                 ["newChild:", "newSibling:", "foldNode:", "undoEdit:", "redoEdit:"]).enumerated() {
+            let (identifier, action) = pair
+            let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
+                                           willBeInsertedIntoToolbar: true)!
+            assert(item.target as AnyObject? === appDelegate)
+            assert(item.action.map(NSStringFromSelector) == action)
+            assert(item.label == ["New Child", "New Sibling", "Fold/Unfold", "Undo", "Redo"][index])
+            assert(!(item.toolTip ?? "").isEmpty)
+        }
+        let foldRootID = UUID()
+        let folding = MapModel(roots: [MapNode(id: foldRootID, title: "Fold", children: [
+            MapNode(id: UUID(), title: "Leaf", children: [], folded: false)
+        ], folded: false)], selected: foldRootID)
+        let foldingCanvas = MapCanvas(model: folding)
+        foldingCanvas.selectAndEdit(foldRootID)
+        foldingCanvas.subviews.compactMap { $0 as? NSTextField }.first!.stringValue = "Committed fold"
+        var foldChanges = 0
+        foldingCanvas.onChange = { foldChanges += 1 }
+        foldingCanvas.toggleFold()
+        assert(folding.roots[0].title == "Committed fold" && folding.roots[0].folded && foldChanges == 2,
+               "Folding must first commit active title editing")
+        foldingCanvas.undo()
+        assert(!folding.roots[0].folded && foldChanges == 3)
+        folding.selected = folding.roots[0].children[0].id
+        foldingCanvas.toggleFold()
+        assert(!folding.roots[0].children[0].folded && foldChanges == 3,
+               "Folding a leaf must not change the tree or emit a change")
         let movingID = UUID(), destinationID = UUID(), dragRootID = UUID()
         let dragging = MapModel(roots: [MapNode(id: dragRootID, title: "Root", children: [
             MapNode(id: movingID, title: "Move", children: [], folded: false),

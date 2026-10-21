@@ -211,6 +211,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     func detachSelected() { commitEditing(); if model.detachSelected() { changed() } }
     func undo() { commitEditing(); if model.undo() { changed() } }
     func redo() { commitEditing(); if model.redo() { changed() } }
+    func toggleFold() { commitEditing(); if model.toggleFold() { changed() } }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.insertTabIgnoringFieldEditor(_:)) { addParent(); return true }
@@ -262,9 +263,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if event.modifierFlags.contains(.shift) { addMainNode() }
             else { addSibling(before: event.modifierFlags.contains(.option)) }
         case 51, 117: commitEditing(); if model.remove() { changed() }
-        case 49: commitEditing(); if model.toggleFold() { changed() } // Optional Space
-        case 47 where event.modifierFlags.contains(.option):
-            commitEditing(); if model.toggleFold() { changed() } // Static original menu: Option+period
+        case 49: toggleFold() // Optional Space
+        case 47 where event.modifierFlags.contains(.option): toggleFold() // Static original menu: Option+period
         case 123, 124, 125, 126: moveSelection(event.keyCode)
         default:
             if let text = event.characters, !text.isEmpty,
@@ -359,7 +359,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
     private var canvas: MapCanvas!
     private var fileURL: URL?
@@ -378,6 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.title = "Untitled — MindMap"
         window.delegate = self
         window.contentView = canvas
+        window.toolbar = makeToolbar()
         window.center()
         installMenu()
         window.makeKeyAndOrderFront(nil)
@@ -507,6 +508,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func newParent(_ sender: Any?) { canvas.addParent() }
     @objc private func newMainNode(_ sender: Any?) { canvas.addMainNode() }
     @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
+    @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
+
+    func makeToolbar() -> NSToolbar {
+        let toolbar = NSToolbar(identifier: "MindMap")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        return toolbar
+    }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.init("new-child"), .init("new-sibling"), .init("fold-node"),
+         .flexibleSpace, .init("undo"), .init("redo")]
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let details: (String, String, Selector)
+        switch identifier.rawValue {
+        case "new-child": details = ("New Child", "plus", #selector(newChild(_:)))
+        case "new-sibling": details = ("New Sibling", "arrow.turn.down.right", #selector(newSibling(_:)))
+        case "fold-node": details = ("Fold/Unfold", "chevron.right", #selector(foldNode(_:)))
+        case "undo": details = ("Undo", "arrow.uturn.backward", #selector(undoEdit(_:)))
+        case "redo": details = ("Redo", "arrow.uturn.forward", #selector(redoEdit(_:)))
+        default: return nil
+        }
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = details.0
+        item.paletteLabel = details.0
+        item.toolTip = details.0
+        item.image = NSImage(systemSymbolName: details.1, accessibilityDescription: details.0)
+        item.target = self
+        item.action = details.2
+        return item
+    }
 
     func installMenu() {
         let main = NSMenu()
