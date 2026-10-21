@@ -32,6 +32,12 @@
 
 临时合成 `NSWindow` 命中诊断（不投递鼠标）显示，同一子节点的文字中央：未编辑时命中 `MapCanvas`，原生 `NSTextField` 活动时命中 `NSTextView` 字段编辑器，提交后再次命中 `MapCanvas`；卡片左侧边缘即使编辑中仍命中 `MapCanvas`。这证实**活动编辑框可以截住从文字中央开始的拖动与画布双击**，但不能解释所有已提交子节点的失败，也不能代替真实鼠标复现。误把 `NSView.hitTest` 的参数当成画布局部坐标会给出相反假象；诊断已改为传入父视图窗口坐标，随后删除临时探针，未提交测试假阳性。
 
+## 2026-10-21 预览版退出根因与安全回归
+
+只读查看新预览 PID `93025` 自身的系统崩溃报告（22:04:38，EXC_BAD_ACCESS），主线程栈明确包含 `NSOutlineView rowForItem:`→`_doUserExpandOrCollapseOfItem`→`_outlineControlClicked:`。旧版大纲在 `shouldExpandItem`/`shouldCollapseItem` 回调**返回前**通过 `canvas.toggleFold()` 的 `onChange` 与显式 `reloadMap()` 同步替换了 AppKit 正在使用的 `Row` 对象。另一张用户截图中的 `mindmap-live-window-events` 则是我自建的可见测试程序因 `isKeyWindow` 断言触发的 SIGTRAP，**与此正式预览版崩溃是两件事**；该测试源码已删除，今后不再用会弹崩溃框的可见断言探针。
+
+修复只在原生 disclosure 回调期间推迟并合并 `reloadMap()`，待 AppKit 返回后才重建行。新增不弹窗的失败断言先以 `exit(1)` 证实旧行在 `collapseItem` 返回前被替换，修复后展开/收起检查及九项无窗口回归、`bash build.sh` 通过；独立评审无 P0–P2 发现。真实鼠标点击 disclosure 的崩溃修复仍待用户操作新版 App 复验，**未标 G3/G5 GUI 验收**。
+
 ## 清理限制
 
 PID `73855` 当前窗口状态未知；暂不杀进程或删除临时目录。人工验证之后先确认此进程没有打开用户文件，再验证绝对解析路径、当前用户 UID、`0700` 目录、精确 marker、预期合成内容及 PID 所属 bundle，才能退出并清理。`dist/` 中其他未跟踪交付材料不受影响。
