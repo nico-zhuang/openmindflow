@@ -50,8 +50,15 @@ enum CanvasCommandTests {
         assert(!canvas.control(control, textView: text,
             doCommandBy: NSSelectorFromString("unrecognizedCommand:")))
         let appDelegate = AppDelegate()
+        let workbench = appDelegate.makeWorkbench(canvas: canvas)
         appDelegate.installMenu()
-        assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "Node"])
+        assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "View", "Node"])
+        let viewMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "View" }!
+        let outlineToggle = viewMenu.item(withTitle: "Show/Hide Outline")!
+        assert(viewMenu.items.count == 1 && outlineToggle.keyEquivalent == "s")
+        assert(outlineToggle.keyEquivalentModifierMask == [.option, .command])
+        assert(outlineToggle.action.map(NSStringFromSelector) == "toggleSidebar:")
+        assert(outlineToggle.target as AnyObject? === workbench)
         let fileMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "File" }!
         assert(fileMenu.item(withTitle: "Open MindNode (Read-only)…")?.keyEquivalent == "o")
         assert(fileMenu.item(withTitle: "Open Own JSON…") != nil)

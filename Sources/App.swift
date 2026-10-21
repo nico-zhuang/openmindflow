@@ -370,6 +370,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
     private var canvas: MapCanvas!
+    private var outline: MapOutlineView!
+    private var splitController: NSSplitViewController!
     private var fileURL: URL?
     private var savedRoots: [MapNode] = []
     private var dirty = false
@@ -379,13 +381,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let root = MapNode(id: UUID(), title: "Central idea", children: [], folded: false)
         canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         savedRoots = [root]
-        canvas.onChange = { [weak self] in self?.syncDirty() }
+        _ = makeWorkbench(canvas: canvas)
+        canvas.onChange = { [weak self] in self?.syncDirty(); self?.outline.reloadMap() }
+        canvas.onSelectionChange = { [weak self] in self?.outline.syncSelection() }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "Untitled — MindMap"
         window.delegate = self
-        window.contentView = canvas
+        window.minSize = NSSize(width: 640, height: 400)
+        window.contentViewController = splitController
         window.toolbar = makeToolbar()
         window.center()
         installMenu()
@@ -444,6 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             // Saving may have changed this same path; never install the pre-save tree.
             let roots = try readOwnJSON(url)
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            outline.reloadMap()
             fileURL = url
             savedRoots = roots
             dirty = false
@@ -463,6 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             let roots = try MindNodeImporter.load(url)
             guard confirmDiscardOrSave() else { return }
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            outline.reloadMap()
             fileURL = nil // Never save into the source package.
             savedRoots = roots
             dirty = false
@@ -517,6 +524,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func newMainNode(_ sender: Any?) { canvas.addMainNode() }
     @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
     @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
+
+    func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
+        let split = NSSplitViewController()
+        let sidebarController = NSViewController()
+        outline = MapOutlineView(canvas: canvas)
+        sidebarController.view = outline
+        let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarController)
+        sidebar.canCollapse = true
+        sidebar.minimumThickness = 180
+        sidebar.maximumThickness = 320
+        split.addSplitViewItem(sidebar)
+        let canvasController = NSViewController()
+        canvasController.view = canvas
+        split.addSplitViewItem(NSSplitViewItem(viewController: canvasController))
+        splitController = split
+        return split
+    }
 
     func makeToolbar() -> NSToolbar {
         let toolbar = NSToolbar(identifier: "MindMap")
@@ -574,6 +598,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         redo.target = self
         edit.submenu = editMenu
         main.addItem(edit)
+        let view = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        let outlineItem = viewMenu.addItem(withTitle: "Show/Hide Outline",
+            action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
+        outlineItem.keyEquivalentModifierMask = [.option, .command]
+        outlineItem.target = splitController
+        view.submenu = viewMenu
+        main.addItem(view)
         let node = NSMenuItem(title: "Node", action: nil, keyEquivalent: "")
         let nodeMenu = NSMenu(title: "Node")
         let entries: [(String, Selector, String, NSEvent.ModifierFlags)] = [

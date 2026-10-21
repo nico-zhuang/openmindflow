@@ -76,6 +76,18 @@ enum OutlineWorkbenchTests {
         assert(manyOutline.outlineView.numberOfRows == 30)
         manyOutline.reloadMap()
         assert(manyOutline.outlineView.numberOfRows == 30)
-        print("outline selection, fold/undo and 30-node tests passed (offscreen only)")
+
+        let delegate = AppDelegate()
+        let workbench = delegate.makeWorkbench(canvas: manyCanvas)
+        assert(workbench.splitViewItems.count == 2)
+        let sidebar = workbench.splitViewItems[0]
+        assert(sidebar.canCollapse && sidebar.minimumThickness == 180 && sidebar.maximumThickness == 320)
+        assert(sidebar.viewController.view is MapOutlineView)
+        assert(workbench.splitViewItems[1].viewController.view === manyCanvas,
+               "The outline and workspace must share the original canvas")
+        let unchanged = manyCanvas.model.roots
+        workbench.toggleSidebar(nil)
+        assert(manyCanvas.model.roots == unchanged, "Toggling sidebar cannot mutate the map")
+        print("outline selection, fold/undo, 30-node and split workbench tests passed (offscreen only)")
     }
 }
