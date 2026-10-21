@@ -409,6 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.toolbar = makeToolbar()
         window.center()
         installMenu()
+        window.contentView?.layoutSubtreeIfNeeded()
+        canvas.fitMapInView()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(canvas)
         NSApp.activate(ignoringOtherApps: true)
@@ -469,6 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             savedRoots = roots
             dirty = false
             updateTitle()
+            canvas.fitMapInView()
             window.makeFirstResponder(canvas)
         } catch { alert("Could not open map", detail: error.localizedDescription) }
     }
@@ -489,6 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             savedRoots = roots
             dirty = false
             updateTitle()
+            canvas.fitMapInView()
             window.makeFirstResponder(canvas)
             alert("MindNode imported read-only", detail: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
