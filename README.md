@@ -21,6 +21,7 @@ swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTit
 # /tmp/mindmap-package-tests --keep-fixture # explicitly retain one 0700 synthetic source/edited pair under owned dist/ for original-app inspection; manually remove after checking ownership
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
+swiftc -D HEADLESS_TEST Sources/*.swift Tests/EditingJourney.swift -framework AppKit -o /tmp/mindmap-editing-journey && /tmp/mindmap-editing-journey
 # Native open/save panels need manual file selection. Tests/OpenMindNodeGUI.swift cannot navigate them with PID-targeted events here;
 # do not treat a timeout as GUI acceptance, and never replace it with global keyboard events.
 # Tests/AppAccessibilityTests.swift --selection-refresh posts global events and is not part of the safe acceptance run.
