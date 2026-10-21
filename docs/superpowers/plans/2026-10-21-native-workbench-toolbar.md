@@ -53,4 +53,12 @@ Run `swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -fra
 **Files:** Update `README.md` with the exact toolbar controls and evidence status. Add one taskbook progress note without checking G1/G2/G3 complete.
 
 - [ ] With a **new** owned synthetic app only if no unknown other same-bundle process is active, check toolbar items exist and one item changes the expected tree through bound AX; if safe isolation is unavailable, report this as GUI toolbar **unverified**, not as success. Do not interact with old PID `73855` or read its window.
-- [ ] If there is no safe GUI window, deliver the compiled app and headless menu/toolbar wiring evidence with the same explicit manual gate. The G3 sidebar and visual comparison remain future tasks; do not describe this as a complete MindNode-level interface.
+- [ ] If there is no safe GUI window, deliver the compiled app and headless menu/toolbar wiring evidence with the same explicit manual gate. The G3 sidebar exists in code but its real-window interaction and visual comparison remain future acceptance tasks; do not describe this as a complete MindNode-level interface.
+
+### Task 3: Surface the taskbook's zoom control by reusing viewport fit
+
+**Dependency:** Finish [initial map fit](2026-10-21-initial-map-fit.md) Task 1 before editing AppDelegate. No new zoom mode, scrollbar, menu model or persistence.
+
+- [x] **RED:** In `Tests/CanvasCommandTests.swift`, add `fit-map` / `Fit Map` / `fitMap:` to existing toolbar identifier, label and selector assertions; expect current five-item toolbar test to fail. Existing `fitMapInView()` geometry test already checks the operation.
+- [x] **GREEN:** In `Sources/App.swift`, add one native toolbar item between Fold/Unfold and flexible space with an AppKit system arrow/fit symbol, accessible `Fit Map` label/tooltip, and `@objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }`. Reuse the one canvas method, do not mutate model/dirty or change the existing five actions.
+- [x] **VERIFY:** Focused CanvasCommandTests, all README headless commands, `bash build.sh`, `git diff --check`, scoped source/test commit. The item is code-level G3 discoverability only; real button operation remains the Task 2 GUI gate.

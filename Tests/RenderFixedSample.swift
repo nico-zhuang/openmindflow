@@ -17,6 +17,7 @@ enum RenderFixedSample {
         ])
         let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         canvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 850)
+        canvas.fitMapInView()
         let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1200, pixelsHigh: 850,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
