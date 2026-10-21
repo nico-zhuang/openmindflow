@@ -147,9 +147,12 @@ func navigate(to url: URL) {
     _ = panel()
     running.activate()
     RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    var observedRoles = Set<String>()
     func focusedField() -> AXUIElement? {
-        guard let focused = axElement(value(app, kAXFocusedUIElementAttribute)) else { return nil }
-        return value(focused, kAXRoleAttribute) as? String == kAXTextFieldRole ? focused : nil
+        let focused = axElement(value(app, kAXFocusedUIElementAttribute))
+        let role = focused.flatMap { value($0, kAXRoleAttribute) as? String } ?? "<none>"
+        if observedRoles.insert(role).inserted { fputs("Go to Folder focused role: \(role)\n", stderr) }
+        return role == kAXTextFieldRole ? focused : nil
     }
     var field: AXUIElement?
     for _ in 0..<3 where field == nil {
