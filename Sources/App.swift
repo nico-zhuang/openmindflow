@@ -30,6 +30,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var editor: NSTextField?
     private var dragSource: UUID?
     private var dragPoint: CGPoint?
+    private var dragOrigin: CGPoint?
+    private var dragGrab = CGPoint.zero
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
     private var announcedSelection: UUID
 
@@ -76,6 +78,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private func visibleNodes() -> [LaidOutNode] { mapLayout(model.roots) }
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
+    private func validDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
+        -> (target: LaidOutNode, parent: UUID, index: Int)? {
+        guard let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) else { return nil }
+        let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
+        let siblings = nodes.filter { $0.parent == target.parent }
+        guard let place = dropPlacement(at: local, over: target, siblings: siblings),
+              model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
+        return (target, place.parent, place.index)
+    }
     private func revealSelection() {
         guard bounds.width > 64, bounds.height > 64, let frame = selectedNode()?.frame else { return }
         let box = screen(frame), margin: CGFloat = 28
@@ -90,6 +101,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
         let nodes = visibleNodes()
+        let drop = dragSource.flatMap { source in
+            dragPoint.flatMap { validDrop(at: $0, source: source, nodes: nodes) }
+        }
         if nodes.isEmpty {
             let message = "Empty map — press Tab to create the first idea."
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]
@@ -111,11 +125,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         for item in nodes {
             let box = screen(item.frame)
             let shape = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
-            let hovered = dragPoint.map { box.contains($0) && item.node.id != dragSource } ?? false
+            let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
             (item.node.id == model.selected || hovered ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
             NSColor.controlBackgroundColor.setFill()
             shape.fill()
-            shape.lineWidth = item.node.id == model.selected ? 3 : 1
+            shape.lineWidth = item.node.id == model.selected || hovered ? 3 : 1
             shape.stroke()
             if editor != nil && item.node.id == model.selected { continue }
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
@@ -124,6 +138,33 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
+            (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
+        }
+        if let drop, drop.parent != drop.target.node.id, let dragPoint {
+            let target = screen(drop.target.frame)
+            let y = dragPoint.y < target.midY ? target.minY : target.maxY
+            let indicator = NSBezierPath()
+            indicator.move(to: CGPoint(x: target.minX - 8 * zoom, y: y))
+            indicator.line(to: CGPoint(x: target.maxX + 8 * zoom, y: y))
+            indicator.lineWidth = max(2, 3 * zoom)
+            NSColor.controlAccentColor.setStroke()
+            indicator.stroke()
+        }
+        if let dragPoint, let dragSource, let source = nodes.first(where: { $0.node.id == dragSource }) {
+            let box = CGRect(x: dragPoint.x - dragGrab.x, y: dragPoint.y - dragGrab.y,
+                             width: source.frame.width * zoom, height: source.frame.height * zoom)
+            let ghost = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
+            NSColor.controlBackgroundColor.withAlphaComponent(0.88).setFill()
+            ghost.fill()
+            ghost.lineWidth = max(2, 2 * zoom)
+            NSColor.controlAccentColor.setStroke()
+            ghost.stroke()
+            let title = source.node.title.isEmpty ? "New idea" : source.node.title
+            let label = source.node.folded && !source.node.children.isEmpty ? "▸ " + title : title
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 14 * zoom, weight: .medium),
+                .foregroundColor: NSColor.labelColor
+            ]
             (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
         }
     }
@@ -213,6 +254,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         switch event.keyCode {
+        case 53 where dragSource != nil:
+            dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true
         case 48 where event.modifierFlags.contains(.option): addParent()
         case 48: addChild()                         // Tab
         case 36, 76:
@@ -257,34 +300,39 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         dragSource = nil
         dragPoint = nil
         let point = convert(event.locationInWindow, from: nil)
+        dragOrigin = point
         if let node = visibleNodes().last(where: { screen($0.frame).contains(point) }) {
             model.selected = node.node.id
-            dragSource = event.clickCount == 1 ? node.node.id : nil
+            dragSource = event.clickCount == 1 && node.parent != nil ? node.node.id : nil
+            let box = screen(node.frame)
+            dragGrab = CGPoint(x: point.x - box.minX, y: point.y - box.minY)
             needsDisplay = true
             if event.clickCount == 2 { beginEditing() }
         }
         window?.makeFirstResponder(editor ?? self)
     }
     override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
         if dragSource != nil {
-            dragPoint = convert(event.locationInWindow, from: nil)
+            if dragPoint == nil, let origin = dragOrigin,
+               hypot(point.x - origin.x, point.y - origin.y) < 9 { return }
+            dragPoint = point
             needsDisplay = true
             return
         }
-        offset.x += event.deltaX
-        offset.y -= event.deltaY
-        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
-        needsDisplay = true
+        if let origin = dragOrigin {
+            offset.x += point.x - origin.x
+            offset.y += point.y - origin.y
+            dragOrigin = point
+            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+            needsDisplay = true
+        }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { dragSource = nil; dragPoint = nil; needsDisplay = true }
+        defer { dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true }
         guard let source = dragSource, dragPoint != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let nodes = visibleNodes()
-        guard let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) else { return }
-        let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
-        let siblings = nodes.filter { $0.parent == target.parent }
-        if let placement = dropPlacement(at: local, over: target, siblings: siblings),
+        if let placement = validDrop(at: point, source: source, nodes: visibleNodes()),
            model.moveNode(source, to: placement.parent, at: placement.index) { changed() }
     }
     private func zoom(at point: CGPoint, by factor: CGFloat) {

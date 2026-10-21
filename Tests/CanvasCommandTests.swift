@@ -81,12 +81,21 @@ enum CanvasCommandTests {
             NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: 0,
                 windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
         }
+        let originalTree = dragging.roots
         dragCanvas.mouseDown(with: mouse(.leftMouseDown, start))
+        let beforeValidPreview = image(dragCanvas)
         dragCanvas.mouseDragged(with: mouse(.leftMouseDragged, finish))
+        assert(image(dragCanvas) != beforeValidPreview,
+               "A valid target needs visible feedback before release")
+        assert(dragging.roots == originalTree && changes == 0,
+               "Preview must not change tree or dirty state")
         dragCanvas.mouseUp(with: mouse(.leftMouseUp, finish))
         assert(dragging.roots[0].children.map(\.id) == [destinationID])
         assert(dragging.roots[0].children[0].children.map(\.id) == [movingID])
         assert(dragging.selected == movingID && changes == 1)
+        let droppedTree = dragging.roots
+        assert(dragging.undo() && dragging.roots == originalTree)
+        assert(dragging.redo() && dragging.roots == droppedTree)
         let siblingIDs = (0..<3).map { _ in UUID() }
         let reordered = MapModel(roots: [MapNode(id: UUID(), title: "Root", children:
             siblingIDs.enumerated().map { MapNode(id: $0.element, title: "\($0.offset)", children: [], folded: false) },
@@ -124,6 +133,63 @@ enum CanvasCommandTests {
         smallCanvas.scrollWheel(with: localWheel(30))
         assert(distantEditor.frame.origin != firstPosition,
                "Panning during editing must keep the text field attached to its node")
-        print("canvas command, empty-map Return, drag, visibility, zoom/pan and Open menu tests passed (no windows)")
+        let visualRoot = MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Source", children: [], folded: false),
+            MapNode(id: UUID(), title: "Destination", children: [], folded: false)
+        ], folded: false)
+        let visualModel = MapModel(roots: [visualRoot], selected: visualRoot.id)
+        let visualCanvas = MapCanvas(model: visualModel)
+        visualCanvas.frame = dragCanvas.frame
+        var visualChanges = 0
+        visualCanvas.onChange = { visualChanges += 1 }
+        func image(_ view: MapCanvas) -> Data {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1000, pixelsHigh: 700,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let context = NSGraphicsContext(bitmapImageRep: bitmap)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            view.displayIgnoringOpacity(view.bounds, in: context)
+            NSGraphicsContext.restoreGraphicsState()
+            return bitmap.representation(using: .png, properties: [:])!
+        }
+        let sourceFrame = mapLayout(visualModel.roots)[1].frame
+        let startVisual = CGPoint(x: sourceFrame.midX + 80,
+                                  y: visualCanvas.bounds.height - sourceFrame.midY - 90)
+        visualCanvas.mouseDown(with: mouse(.leftMouseDown, startVisual))
+        let pressed = image(visualCanvas)
+        visualCanvas.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: startVisual.x + 3, y: startVisual.y)))
+        assert(image(visualCanvas) == pressed, "Under 9pt must still be a click, not a drag")
+        let whitespacePoint = CGPoint(x: 800, y: 380)
+        visualCanvas.mouseDragged(with: mouse(.leftMouseDragged, whitespacePoint))
+        assert(image(visualCanvas) != pressed, "Dragging into whitespace must visibly move a source ghost")
+        assert(visualModel.roots == [visualRoot] && visualChanges == 0,
+               "A drag must not edit the tree before release")
+        visualCanvas.mouseUp(with: mouse(.leftMouseUp, whitespacePoint))
+        assert(visualModel.roots == [visualRoot] && visualChanges == 0,
+               "Invalid whitespace drop must preserve tree and dirty state")
+        visualCanvas.mouseDown(with: mouse(.leftMouseDown, startVisual))
+        let beforeCancel = image(visualCanvas)
+        visualCanvas.mouseDragged(with: mouse(.leftMouseDragged, whitespacePoint))
+        let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+        visualCanvas.keyDown(with: escape)
+        assert(image(visualCanvas) == beforeCancel, "Escape must clear a pending source ghost")
+        visualCanvas.mouseUp(with: mouse(.leftMouseUp, whitespacePoint))
+        assert(visualModel.roots == [visualRoot] && visualChanges == 0,
+               "Cancelled drag must not create undo or dirty state")
+        let rootFrame = mapLayout(visualModel.roots)[0].frame
+        let rootStart = CGPoint(x: rootFrame.midX + 80,
+                                y: visualCanvas.bounds.height - rootFrame.midY - 90)
+        visualCanvas.mouseDown(with: mouse(.leftMouseDown, rootStart))
+        let beforeRootPan = image(visualCanvas)
+        visualCanvas.mouseDragged(with: mouse(.leftMouseDragged,
+            CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
+        assert(image(visualCanvas) != beforeRootPan,
+               "Grabbing the root must pan the visible map instead of silently failing")
+        visualCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
+        assert(visualModel.roots == [visualRoot] && visualChanges == 0)
+        print("canvas command, visible drag, root pan, visibility, zoom/pan and Open menu tests passed (no windows)")
     }
 }
