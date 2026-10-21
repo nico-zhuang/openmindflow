@@ -1,0 +1,66 @@
+[
+  {
+    "id": "7f92cfd2-5254-5918-bbac-e1e8a1a215f8",
+    "title": "2026 项目规划",
+    "children": [
+      {
+        "id": "d2a59ec3-3e78-59f8-a406-219b81f5a7bc",
+        "title": "目标与洞察",
+        "children": [
+          {
+            "id": "8ae85e2b-8c7d-5703-8b6b-4cfcc6d02852",
+            "title": "真实用户任务",
+            "children": [],
+            "folded": false
+          },
+          {
+            "id": "982b765a-b8d5-5a9a-9270-64c4118962a1",
+            "title": "中文 English 🧭 长标题要完整显示，而不是被节点边框裁掉",
+            "children": [],
+            "folded": false
+          }
+        ],
+        "folded": false
+      },
+      {
+        "id": "a402b8a9-ec1f-51c2-8b35-e02884aa910a",
+        "title": "编辑体验",
+        "children": [
+          {
+            "id": "f71f4eee-bec1-5d71-ad73-53b2e4470c37",
+            "title": "连续输入\n换行标题",
+            "children": [],
+            "folded": false
+          },
+          {
+            "id": "10ba2aee-39c4-5af8-aec0-746e6f82b5ee",
+            "title": "拖动 · 折叠 · 撤销",
+            "children": [],
+            "folded": false
+          }
+        ],
+        "folded": false
+      },
+      {
+        "id": "4f3b7ea5-b9ae-59c1-969d-504c07f412b6",
+        "title": "交付验证",
+        "children": [
+          {
+            "id": "7e905438-3b3f-5b3b-99d5-65df08db77d6",
+            "title": "打开 → 修改 → 保存 → 重开",
+            "children": [],
+            "folded": false
+          },
+          {
+            "id": "ed7c50eb-573f-5782-8640-2dffc38eed66",
+            "title": "失败操作保留当前导图",
+            "children": [],
+            "folded": false
+          }
+        ],
+        "folded": false
+      }
+    ],
+    "folded": false
+  }
+]
