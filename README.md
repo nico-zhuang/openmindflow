@@ -14,15 +14,16 @@ Run assertion tests:
 
 ```sh
 swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindmap-model-tests && /tmp/mindmap-model-tests
-swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests
+swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -framework AppKit -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests
+swiftc Sources/MapModel.swift Sources/OwnJSON.swift Tests/OwnJSONTests.swift -o /tmp/mindmap-ownjson-tests && /tmp/mindmap-ownjson-tests
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImporterTests.swift -o /tmp/mindmap-importer-tests && /tmp/mindmap-importer-tests
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic new-copy title/fold edit; not wired to Save
 # /tmp/mindmap-package-tests --keep-fixture # explicitly retain one 0700 synthetic source/edited pair under owned dist/ for original-app inspection; manually remove after checking ownership
 swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
-# GUI gate requires an unlocked desktop, Accessibility, a foreground disposable app under mindmap-gui-run-* with its .owner marker, and MINDMAP_GUI_PID=<that app PID>:
-# swift Tests/OpenMindNodeGUI.swift # synthetic package, prior JSON, invalid import, picker, warning, Save and SHA-256; keys go only to marked PID
-# swift Tests/AppAccessibilityTests.swift
+# Native open/save panels need manual file selection. Tests/OpenMindNodeGUI.swift cannot navigate them with PID-targeted events here;
+# do not treat a timeout as GUI acceptance, and never replace it with global keyboard events.
+# Tests/AppAccessibilityTests.swift --selection-refresh posts global events and is not part of the safe acceptance run.
 ```
 
-The layout is independent, fixed-size geometry; it does not reproduce original artwork or claim interaction parity with MindNode. This build has not passed bounded GUI acceptance; earlier synthetic picker automation could list files but not reliably select a JSON row. The [gap baseline](docs/superpowers/specs/2026-10-20-mindmap-gap-baseline.md) and [read-only compatibility matrix](docs/superpowers/specs/2026-10-20-mindmap-readonly-compatibility.md) separate CLI evidence from unverified interface behavior.
+The layout is independent, text-aware geometry (up to 320 pt wide per node), not the original artwork. Opening and saving own JSON is size/ID/path checked; document titles compare current content against the last saved tree, so undoing back to it clears the unsaved marker. `Tests/RenderFixedSample.swift` renders the same synthetic ten-node map without opening windows; `dist/mindmap-closure-before.png` and `dist/mindmap-closure-after.png` show the earlier and current canvas, not MindNode. `.mindnode` import remains **read-only**, with no original-format save or round-trip claim. The [gap baseline](docs/superpowers/specs/2026-10-20-mindmap-gap-baseline.md) and [read-only compatibility matrix](docs/superpowers/specs/2026-10-20-mindmap-readonly-compatibility.md) distinguish headless checks from GUI acceptance.

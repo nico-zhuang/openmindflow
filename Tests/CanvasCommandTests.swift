@@ -102,6 +102,28 @@ enum CanvasCommandTests {
         reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, beforePoint))
         reorderCanvas.mouseUp(with: mouse(.leftMouseUp, beforePoint))
         assert(reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
-        print("canvas command, empty-map Return, drag and explicit Open menu tests passed (no windows)")
+        let longChildren = (0..<30).map { MapNode(id: UUID(), title: "Idea \($0)", children: [], folded: false) }
+        let longRoot = MapNode(id: UUID(), title: "Root", children: longChildren, folded: false)
+        let smallCanvas = MapCanvas(model: MapModel(roots: [longRoot], selected: longRoot.id))
+        smallCanvas.frame = CGRect(x: 0, y: 0, width: 420, height: 260)
+        smallCanvas.selectAndEdit(longChildren[29].id)
+        let distantEditor = smallCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        assert(distantEditor.frame.maxY <= smallCanvas.bounds.maxY - 24,
+               "Editing a distant node must reveal its field inside the canvas")
+        func localWheel(_ amount: Int32, command: Bool = false) -> NSEvent {
+            let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                             wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)!
+            if command { cg.flags = .maskCommand }
+            return NSEvent(cgEvent: cg)!
+        }
+        let firstSize = distantEditor.font!.pointSize
+        smallCanvas.scrollWheel(with: localWheel(8, command: true)) // Local NSEvent only, never posted.
+        assert(distantEditor.font!.pointSize != firstSize,
+               "Zooming during editing must scale the text field font with its node")
+        let firstPosition = distantEditor.frame.origin
+        smallCanvas.scrollWheel(with: localWheel(30))
+        assert(distantEditor.frame.origin != firstPosition,
+               "Panning during editing must keep the text field attached to its node")
+        print("canvas command, empty-map Return, drag, visibility, zoom/pan and Open menu tests passed (no windows)")
     }
 }

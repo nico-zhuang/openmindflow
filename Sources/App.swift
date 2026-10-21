@@ -12,7 +12,7 @@ private final class MapNodeAX: NSAccessibilityElement {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { endEditingWithoutSaving(); needsDisplay = true } }
+    var model: MapModel { didSet { endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
             let visibleIDs = Set(visibleNodes().map { $0.node.id })
@@ -76,6 +76,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private func visibleNodes() -> [LaidOutNode] { mapLayout(model.roots) }
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
+    private func revealSelection() {
+        guard bounds.width > 64, bounds.height > 64, let frame = selectedNode()?.frame else { return }
+        let box = screen(frame), margin: CGFloat = 28
+        if box.minX < bounds.minX + margin { offset.x += bounds.minX + margin - box.minX }
+        else if box.maxX > bounds.maxX - margin { offset.x -= box.maxX - bounds.maxX + margin }
+        if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
+        else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
+        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
@@ -111,7 +120,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if editor != nil && item.node.id == model.selected { continue }
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: max(9, 14 * zoom), weight: .medium),
+                .font: NSFont.systemFont(ofSize: 14 * zoom, weight: .medium),
                 .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
@@ -120,10 +129,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     private func beginEditing() {
-        guard editor == nil, let node = selectedNode() else { return }
+        guard editor == nil else { return }
+        revealSelection()
+        guard let node = selectedNode() else { return }
         let field = NSTextField(frame: screen(node.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom))
         field.stringValue = node.node.title
-        field.font = .systemFont(ofSize: max(9, 14 * zoom))
+        field.font = .systemFont(ofSize: 14 * zoom)
         field.textColor = .labelColor
         field.isBordered = false
         field.drawsBackground = false
@@ -151,14 +162,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             changed()
         } else { needsDisplay = true }
     }
-    private func changed() { needsDisplay = true; onChange?() }
+    private func changed() { revealSelection(); needsDisplay = true; onChange?() }
     func addChild() { commitEditing(); model.addChild(); changed(); beginEditing() }
     func addSibling(before: Bool = false) { commitEditing(); let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
     func addParent() { commitEditing(); let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
     func addMainNode() { commitEditing(); model.addMainNode(); changed(); beginEditing() }
     func detachSelected() { commitEditing(); if model.detachSelected() { changed() } }
-    func undo() { commitEditing(); model.undo(); needsDisplay = true; onChange?() }
-    func redo() { commitEditing(); model.redo(); needsDisplay = true; onChange?() }
+    func undo() { commitEditing(); if model.undo() { changed() } }
+    func redo() { commitEditing(); if model.redo() { changed() } }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.insertTabIgnoringFieldEditor(_:)) { addParent(); return true }
@@ -208,9 +219,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if event.modifierFlags.contains(.shift) { addMainNode() }
             else { addSibling(before: event.modifierFlags.contains(.option)) }
         case 51, 117: commitEditing(); if model.remove() { changed() }
-        case 49: commitEditing(); model.toggleFold(); changed() // Optional Space
+        case 49: commitEditing(); if model.toggleFold() { changed() } // Optional Space
         case 47 where event.modifierFlags.contains(.option):
-            commitEditing(); model.toggleFold(); changed() // Static original menu: Option+period
+            commitEditing(); if model.toggleFold() { changed() } // Static original menu: Option+period
         case 123, 124, 125, 126: moveSelection(event.keyCode)
         default:
             if let text = event.characters, !text.isEmpty,
@@ -238,7 +249,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                     return aScore < bScore
                 }
         }
-        if let target { model.selected = target.node.id; needsDisplay = true }
+        if let target { model.selected = target.node.id; revealSelection(); needsDisplay = true }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -281,6 +292,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         offset.x = point.x - (point.x - offset.x) * next / zoom
         offset.y = point.y - (point.y - offset.y) * next / zoom
         zoom = next
+        editor?.font = .systemFont(ofSize: 14 * zoom)
         editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
         needsDisplay = true
     }
@@ -290,6 +302,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else {
             offset.x += event.scrollingDeltaX
             offset.y += event.scrollingDeltaY
+            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 10 * zoom, dy: 6 * zoom) } ?? .zero
             needsDisplay = true
         }
     }
@@ -302,13 +315,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var window: NSWindow!
     private var canvas: MapCanvas!
     private var fileURL: URL?
+    private var savedRoots: [MapNode] = []
     private var dirty = false
     private var closeApproved = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = MapNode(id: UUID(), title: "Central idea", children: [], folded: false)
         canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
-        canvas.onChange = { [weak self] in self?.dirty = true; self?.updateTitle() }
+        savedRoots = [root]
+        canvas.onChange = { [weak self] in self?.syncDirty() }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -329,6 +344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         closeApproved || confirmDiscardOrSave() ? .terminateNow : .terminateCancel
+    }
+    private func syncDirty() {
+        // ponytail: O(nodes) comparison per edit; use revision IDs if large-map editing becomes slow.
+        dirty = canvas.model.roots != savedRoots
+        updateTitle()
     }
     private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? "Untitled")\(dirty ? " •" : "") — MindMap" }
     private func alert(_ message: String, detail: String) {
@@ -362,10 +382,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             return
         }
         do {
-            let roots = try JSONDecoder().decode([MapNode].self, from: Data(contentsOf: url))
+            _ = try readOwnJSON(url) // Reject invalid files without prompting to discard edits.
             guard confirmDiscardOrSave() else { return }
+            // Saving may have changed this same path; never install the pre-save tree.
+            let roots = try readOwnJSON(url)
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
             fileURL = url
+            savedRoots = roots
             dirty = false
             updateTitle()
             window.makeFirstResponder(canvas)
@@ -384,6 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard confirmDiscardOrSave() else { return }
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
             fileURL = nil // Never save into the source package.
+            savedRoots = roots
             dirty = false
             updateTitle()
             window.makeFirstResponder(canvas)
@@ -416,9 +440,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             return false
         }
         do {
-            let data = try JSONEncoder().encode(canvas.model.roots)
-            try data.write(to: url, options: .atomic)
+            try writeOwnJSON(canvas.model.roots, to: url)
             fileURL = url
+            savedRoots = canvas.model.roots
             dirty = false
             updateTitle()
             return true
