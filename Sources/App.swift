@@ -360,7 +360,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             needsDisplay = true
             if event.clickCount == 2 { beginEditing() }
         }
-        window?.makeFirstResponder(editor ?? self)
+        if editor == nil { window?.makeFirstResponder(self) }
     }
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
