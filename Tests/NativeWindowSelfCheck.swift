@@ -294,7 +294,33 @@ enum NativeWindowSelfCheck {
             guard canvas.model.roots[0].title == longNode.title + "x" else {
                 finish("FAIL native long-title keyboard insertion or commit truncated text", passed: false); return
             }
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true longTitle=true",
+            let thirtyChildren = (0..<29).map { index in
+                MapNode(id: UUID(), title: index == 28 ? String(repeating: "Distant idea ", count: 30) : "Idea \(index)",
+                        children: [], folded: false)
+            }
+            let distant = thirtyChildren[28]
+            let thirtyRoot = MapNode(id: UUID(), title: "Root", children: thirtyChildren, folded: false)
+            canvas.model = MapModel(roots: [thirtyRoot], selected: thirtyRoot.id)
+            window.setContentSize(NSSize(width: 640, height: 400))
+            window.contentView?.layoutSubtreeIfNeeded()
+            canvas.selectAndEdit(distant.id)
+            guard let distantField = canvas.subviews.compactMap({ $0 as? NSTextField }).first,
+                  canvas.model.selected == distant.id,
+                  canvas.bounds.insetBy(dx: 28, dy: 28).contains(distantField.frame),
+                  distantField.currentEditor() != nil, window.isKeyWindow else {
+                finish("FAIL native 30-node distant editor outside narrow canvas or lost focus", passed: false); return
+            }
+            window.sendEvent(endKey)
+            window.sendEvent(typeEnd)
+            guard distantField.currentEditor() != nil, window.isKeyWindow else {
+                finish("FAIL native 30-node editor lost key focus while typing", passed: false); return
+            }
+            canvas.commitEditing()
+            guard canvas.model.roots[0].children[28].title == distant.title + "x",
+                  mapLayout(canvas.model.roots).count == 30 else {
+                finish("FAIL native 30-node distant title typing, commit, or count", passed: false); return
+            }
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
