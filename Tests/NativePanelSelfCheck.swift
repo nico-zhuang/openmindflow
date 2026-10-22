@@ -19,6 +19,7 @@ enum NativePanelSelfCheck {
         guard !FileManager.default.fileExists(atPath: expected.path),
               !FileManager.default.fileExists(atPath: ready.path) else { exit(1) }
         let opening = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "open-cancel"
+        let failing = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure"
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let document = AppDelegate()
@@ -112,6 +113,16 @@ enum NativePanelSelfCheck {
                     return
                 }
                 finish("nativeOpenCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true", ok: true)
+                return
+            }
+            if failing {
+                guard actionDispatched, result == "nativeSavePanel=true", !savedExists,
+                      canvas.model.roots[0].title == "Synthetic saved root",
+                      window.title == "Untitled • — MindMap" else {
+                    finish("FAIL Save failure unexpectedlySaved=\(savedExists) dirtyRetained=\(window.title == "Untitled • — MindMap")", ok: false)
+                    return
+                }
+                finish("nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true", ok: true)
                 return
             }
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "cancel" {

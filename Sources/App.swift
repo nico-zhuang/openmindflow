@@ -588,6 +588,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
               url.standardizedFileURL == directory.appendingPathComponent("Untitled.mindmap.json").standardizedFileURL else { return false }
         #endif
         do {
+            #if HEADLESS_TEST
+            if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
+            #endif
             try writeOwnJSON(canvas.model.roots, to: url)
             fileURL = url
             savedRoots = canvas.model.roots

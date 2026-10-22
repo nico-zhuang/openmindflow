@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --check-open-guard ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--check-open-guard]\n' "$0" >&2; exit 2; fi
+if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --save-failure && $1 != --check-open-guard ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--save-failure|--check-open-guard]\n' "$0" >&2; exit 2; fi
 cd "$(dirname "$0")/.."
 if [[ ${1:-} == --check-open-guard ]]; then
   swift -e 'import Foundation
@@ -29,6 +29,7 @@ import AppKit
 import ApplicationServices
 let env = ProcessInfo.processInfo.environment
 let opening = env["SELFTEST_CANCEL"] == "--open-cancel"
+let failing = env["SELFTEST_CANCEL"] == "--save-failure"
 let cancelling = env["SELFTEST_CANCEL"] == "--cancel" || opening
 let directory = URL(fileURLWithPath: env["SELFTEST_DIR"]!).resolvingSymlinksInPath()
 let ownApp = URL(fileURLWithPath: env["SELFTEST_APP"]!).resolvingSymlinksInPath()
@@ -67,12 +68,30 @@ func panelButton(for pid: pid_t, wanted: String) -> AXUIElement? {
     }
     return nil
 }
+func failureAlertButton(for pid: pid_t) -> AXUIElement? {
+    var matches: [AXUIElement] = []
+    for window in attribute(AXUIElementCreateApplication(pid), kAXWindowsAttribute) as? [AXUIElement] ?? [] {
+        var queue = [window], index = 0, message = false
+        var buttons: [AXUIElement] = []
+        while index < queue.count && index < 400 {
+            let item = queue[index]; index += 1
+            let role = attribute(item, kAXRoleAttribute) as? String
+            if role == kAXStaticTextRole,
+               attribute(item, kAXValueAttribute) as? String == "Could not save map" { message = true }
+            if role == kAXButtonRole,
+               attribute(item, kAXTitleAttribute) as? String == "OK" { buttons.append(item) }
+            queue += attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        }
+        if message, buttons.count == 1 { matches.append(buttons[0]) }
+    }
+    return matches.count == 1 ? matches[0] : nil
+}
 let configuration = NSWorkspace.OpenConfiguration()
 configuration.createsNewApplicationInstance = true
 configuration.activates = true
 configuration.environment = ["MINDMAP_SELFTEST_REPORT": report.path,
                              "MINDMAP_SELFTEST_PANEL_DIR": directory.path,
-                             "MINDMAP_PANEL_ACTION": opening ? "open-cancel" : cancelling ? "cancel" : "save"]
+                             "MINDMAP_PANEL_ACTION": failing ? "save-failure" : opening ? "open-cancel" : cancelling ? "cancel" : "save"]
 NSWorkspace.shared.openApplication(at: ownApp, configuration: configuration) { app, error in
     if let app { print("PANEL_LAUNCH_REQUEST=\(app.bundleIdentifier ?? "unknown")") }
     else { fputs("PANEL_LAUNCH_FAILED=\(error?.localizedDescription ?? "unknown")\n", stderr) }
@@ -84,14 +103,16 @@ func ownedRunning() -> NSRunningApplication? {
     return matches.count == 1 ? matches[0] : nil
 }
 var pressed = false
+var alertDismissed = false
 let deadline = Date().addingTimeInterval(18)
 while Date() < deadline {
     if let text = try? String(contentsOf: report, encoding: .utf8) {
         print(text, terminator: "")
-        let expected = opening ? "nativeOpenCancel=true ownModelRetained=true dirtyRetained=true"
+        let expected = failing ? "nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true"
+                       : opening ? "nativeOpenCancel=true ownModelRetained=true dirtyRetained=true"
                        : cancelling ? "nativeSaveCancel=true ownModelRetained=true dirtyRetained=true"
                                     : "nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified"
-        exit(text.contains(expected) && pressed ? 0 : 1)
+        exit(text.contains(expected) && pressed && (!failing || alertDismissed) ? 0 : 1)
     }
     if !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
        let owned = ownedRunning(), let button = panelButton(for: owned.processIdentifier,
@@ -100,6 +121,13 @@ while Date() < deadline {
         print("OWNED_\(cancelling ? "CANCEL" : "SAVE")_AX_PRESS=\(status.rawValue) pid=\(owned.processIdentifier)")
         guard status == .success else { _ = owned.terminate(); exit(1) }
         pressed = true
+    }
+    if failing, pressed, !alertDismissed, let owned = ownedRunning(),
+       let button = failureAlertButton(for: owned.processIdentifier) {
+        let status = AXUIElementPerformAction(button, kAXPressAction as CFString)
+        print("OWNED_SAVE_FAILURE_ALERT_AX_PRESS=\(status.rawValue) pid=\(owned.processIdentifier)")
+        guard status == .success else { _ = owned.terminate(); exit(1) }
+        alertDismissed = true
     }
     RunLoop.main.run(until: Date().addingTimeInterval(0.1))
 }
