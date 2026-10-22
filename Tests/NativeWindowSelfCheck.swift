@@ -195,7 +195,70 @@ enum NativeWindowSelfCheck {
                 finish("FAIL synthetic invalid drop events", passed: false); return
             }
             let invalidPreserved = model.roots == beforeInvalid
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved)",
+            let source = MapNode(id: UUID(), title: "Move into gap", children: [], folded: false)
+            let before = MapNode(id: UUID(), title: "Before", children: [], folded: false)
+            let after = MapNode(id: UUID(), title: "After", children: [], folded: false)
+            let destination = MapNode(id: UUID(), title: "Destination", children: [before, after], folded: false)
+            let crossModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [source, destination], folded: false)],
+                                      selected: source.id)
+            canvas.model = crossModel
+            let crossNodes = mapLayout(crossModel.roots)
+            let crossWorld = crossNodes.reduce(CGRect.null) { $0.union($1.frame) }
+            let crossFit = canvas.fitMapInView()
+            let crossScale = crossFit.width / crossWorld.width
+            func crossPoint(_ location: CGPoint) -> CGPoint {
+                canvas.convert(CGPoint(x: crossFit.minX + (location.x - crossWorld.minX) * crossScale,
+                                       y: crossFit.minY + (location.y - crossWorld.minY) * crossScale), to: nil)
+            }
+            let sourceBox = crossNodes.first { $0.node.id == source.id }!.frame
+            let beforeBox = crossNodes.first { $0.node.id == before.id }!.frame
+            let afterBox = crossNodes.first { $0.node.id == after.id }!.frame
+            let crossStart = crossPoint(CGPoint(x: sourceBox.midX, y: sourceBox.midY))
+            let crossGap = crossPoint(CGPoint(x: beforeBox.midX, y: (beforeBox.maxY + afterBox.minY) / 2))
+            guard send(.leftMouseDown, crossStart), send(.leftMouseDragged, crossGap),
+                  send(.leftMouseUp, crossGap),
+                  crossModel.roots[0].children.last?.children.map(\.id) == [before.id, source.id, after.id],
+                  crossModel.undo(), crossModel.roots[0].children.map(\.id) == [source.id, destination.id] else {
+                finish("FAIL native cross-branch child-gap drop or undo", passed: false); return
+            }
+            let deep = MapNode(id: UUID(), title: "Deep", children: [], folded: false)
+            let nested = MapNode(id: UUID(), title: "Nested", children: [
+                MapNode(id: UUID(), title: "Inner", children: [deep], folded: false)
+            ], folded: false)
+            let folded = MapNode(id: UUID(), title: "Folded", children: [
+                MapNode(id: UUID(), title: "Hidden", children: [], folded: false)
+            ], folded: true)
+            let leaf = MapNode(id: UUID(), title: "Leaf", children: [], folded: false)
+            canvas.model = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [nested, folded, leaf], folded: false)], selected: deep.id)
+            window.setContentSize(NSSize(width: 1000, height: 700))
+            window.contentView?.layoutSubtreeIfNeeded()
+            canvas.selectAndEdit(deep.id)
+            guard let deepField = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
+                finish("FAIL deep inline editor missing", passed: false); return
+            }
+            let wideWidth = canvas.bounds.width
+            deepField.stringValue = "Edited while narrowing"
+            window.setContentSize(NSSize(width: 640, height: 400))
+            window.contentView?.layoutSubtreeIfNeeded()
+            guard canvas.bounds.width < wideWidth, window.isKeyWindow,
+                  canvas.bounds.insetBy(dx: 28, dy: 28).contains(deepField.frame),
+                  deepField.currentEditor() != nil else {
+                finish("FAIL native narrow editor frame=\(deepField.frame) canvas=\(canvas.bounds) key=\(window.isKeyWindow)", passed: false); return
+            }
+            func axHelp(_ title: String) -> String? {
+                (canvas.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+                    .first { $0.accessibilityLabel() == title }?.accessibilityHelp()
+            }
+            guard axHelp("Folded") == "Collapsed, 1 child", axHelp("Leaf") == nil else {
+                finish("FAIL native canvas folded AX help=\(axHelp("Folded") ?? "nil") leaf=\(axHelp("Leaf") ?? "nil")", passed: false); return
+            }
+            canvas.selectNode(folded.id) // Commits the active editor before folding another node.
+            canvas.toggleFold()
+            guard canvas.model.roots[0].children[0].children[0].children[0].title == "Edited while narrowing",
+                  axHelp("Folded") == "Expanded, 1 child", window.isKeyWindow else {
+                finish("FAIL native canvas expanded AX help=\(axHelp("Folded") ?? "nil") or lost inline edit/key window", passed: false); return
+            }
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)

@@ -129,17 +129,18 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                   model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
             return (target, place.parent, place.index)
         }
-        // ponytail: sibling gaps only; arbitrary XY needs persisted coordinates and collision layout.
-        guard let parent = nodes.first(where: { $0.node.id == source })?.parent else { return nil }
-        let siblings = nodes.filter { $0.parent == parent }
-        guard let index = siblings.firstIndex(where: { $0.frame.minY > local.y }), index > 0 else { return nil }
-        let before = siblings[index - 1], after = siblings[index]
-        let beforeDistance = local.y - before.frame.maxY, afterDistance = after.frame.minY - local.y
-        guard beforeDistance > 0, afterDistance > 0, min(beforeDistance, afterDistance) <= 24,
-              local.x >= min(before.frame.minX, after.frame.minX) - 20,
-              local.x <= max(before.frame.maxX, after.frame.maxX) + 20,
-              model.canMoveNode(source, to: parent, at: index) else { return nil }
-        return (beforeDistance < afterDistance ? before : after, parent, index)
+        // ponytail: visible sibling gaps only; arbitrary XY needs persisted coordinates and collision layout.
+        for siblings in Dictionary(grouping: nodes.filter { $0.parent != nil }, by: { $0.parent! }).values {
+            guard let index = siblings.firstIndex(where: { $0.frame.minY > local.y }), index > 0 else { continue }
+            let before = siblings[index - 1], after = siblings[index]
+            let beforeDistance = local.y - before.frame.maxY, afterDistance = after.frame.minY - local.y
+            guard beforeDistance > 0, afterDistance > 0, min(beforeDistance, afterDistance) <= 24,
+                  local.x >= min(before.frame.minX, after.frame.minX) - 20,
+                  local.x <= max(before.frame.maxX, after.frame.maxX) + 20,
+                  model.canMoveNode(source, to: after.parent!, at: index) else { continue }
+            return (beforeDistance < afterDistance ? before : after, after.parent!, index)
+        }
+        return nil
     }
     private func revealSelection() {
         guard bounds.width > 64, bounds.height > 64, let node = selectedNode() else { return }

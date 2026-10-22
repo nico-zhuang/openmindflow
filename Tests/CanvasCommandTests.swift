@@ -166,6 +166,34 @@ enum CanvasCommandTests {
             exit(1)
         }
         assert(reordered.undo() && reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
+        let crossSource = MapNode(id: UUID(), title: "Move into gap", children: [], folded: false)
+        let leftChild = MapNode(id: UUID(), title: "Before", children: [], folded: false)
+        let rightChild = MapNode(id: UUID(), title: "After", children: [], folded: false)
+        let crossParent = MapNode(id: UUID(), title: "Destination", children: [leftChild, rightChild], folded: false)
+        let crossModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [crossSource, crossParent], folded: false)],
+                                  selected: crossSource.id)
+        let crossCanvas = MapCanvas(model: crossModel)
+        crossCanvas.frame = dragCanvas.frame
+        let crossRows = mapLayout(crossModel.roots)
+        let crossSourceFrame = crossRows.first { $0.node.id == crossSource.id }!.frame
+        let beforeFrame = crossRows.first { $0.node.id == leftChild.id }!.frame
+        let afterFrame = crossRows.first { $0.node.id == rightChild.id }!.frame
+        let crossStart = CGPoint(x: crossSourceFrame.midX + 80,
+                                 y: crossCanvas.bounds.height - crossSourceFrame.midY - 90)
+        let crossGap = CGPoint(x: beforeFrame.midX + 80,
+                               y: crossCanvas.bounds.height - (beforeFrame.maxY + afterFrame.minY) / 2 - 90)
+        assert(crossModel.canMoveNode(crossSource.id, to: crossParent.id, at: 1))
+        let beforeCrossMove = crossModel.roots
+        var crossChanges = 0
+        crossCanvas.onChange = { crossChanges += 1 }
+        crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, crossGap))
+        crossCanvas.mouseUp(with: mouse(.leftMouseUp, crossGap))
+        if crossModel.roots[0].children.last?.children.map(\.id) != [leftChild.id, crossSource.id, rightChild.id] || crossChanges != 1 {
+            fputs("Dragging into a different branch's child gap must insert there exactly once\n", stderr)
+            exit(1)
+        }
+        assert(crossModel.undo() && crossModel.roots == beforeCrossMove)
         let tallBranch = MapNode(id: UUID(), title: "Tall", children: (0..<9).map {
             MapNode(id: UUID(), title: "Leaf \($0)", children: [], folded: false)
         }, folded: false)
