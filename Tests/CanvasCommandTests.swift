@@ -375,6 +375,28 @@ enum CanvasCommandTests {
         assert(empty.fitMapInView().isNull)
         fitCanvas.frame.size.width = 128
         assert(fitCanvas.fitMapInView().isNull)
+
+        let foldedBranch = MapNode(id: UUID(), title: "Branch", children: [
+            MapNode(id: UUID(), title: "Hidden child", children: [], folded: false)
+        ], folded: true)
+        let plainLeaf = MapNode(id: UUID(), title: "Leaf", children: [], folded: false)
+        let axRoot = MapNode(id: UUID(), title: "Root", children: [foldedBranch, plainLeaf], folded: false)
+        let axCanvas = MapCanvas(model: MapModel(roots: [axRoot], selected: foldedBranch.id))
+        func axState(_ title: String) -> String {
+            let node = (axCanvas.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+                .first { $0.accessibilityLabel() == title }!
+            return "\(node.accessibilityHelp() ?? "") \(node.accessibilityValue() ?? "")".lowercased()
+        }
+        if !axState("Branch").contains("collapsed") || !axState("Branch").contains("1 child") ||
+            axState("Leaf").contains("collapsed") {
+            fputs("Folded canvas branch must expose collapsed state and child count, unlike a leaf\n", stderr)
+            exit(1) // Expected RED must not produce a macOS assertion/crash dialog.
+        }
+        axCanvas.toggleFold()
+        if !axState("Branch").contains("expanded") {
+            fputs("Unfolding a canvas branch must refresh its accessibility state\n", stderr)
+            exit(1)
+        }
         print("canvas command, drag, pan and viewport-fit tests passed (no windows)")
     }
 }

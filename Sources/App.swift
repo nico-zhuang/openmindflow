@@ -43,6 +43,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if editor != nil { revealSelection(); needsDisplay = true }
+    }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func isAccessibilityElement() -> Bool { true }
@@ -59,6 +63,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
             element.setAccessibilityLabel(item.node.title.isEmpty ? "New idea" : item.node.title)
+            element.setAccessibilityHelp(item.node.children.isEmpty ? nil :
+                "\(item.node.folded ? "Collapsed" : "Expanded"), \(item.node.children.count) child\(item.node.children.count == 1 ? "" : "ren")")
             element.setAccessibilitySelected(item.node.id == model.selected)
             element.setAccessibilityFrame(window?.convertToScreen(convert(screen(item.frame), to: nil)) ?? .zero)
             return element
@@ -411,6 +417,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 }
 
+#if HEADLESS_TEST
+private func ownedPanelFixtureDirectory() -> URL? {
+    guard let path = ProcessInfo.processInfo.environment["MINDMAP_SELFTEST_PANEL_DIR"] else { return nil }
+    let directory = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path)
+    guard directory.lastPathComponent.hasPrefix("mindmap-native-panel-"),
+          (try? String(contentsOf: directory.appendingPathComponent(".owner"), encoding: .utf8)) == "mindmap-owned-native-panel\n",
+          attributes?[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()),
+          (attributes?[.posixPermissions] as? NSNumber)?.intValue == 0o700 else { return nil }
+    return directory
+}
+#endif
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
     private var canvas: MapCanvas!
@@ -542,6 +561,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         var destination = fileURL
         if destination == nil {
             let panel = NSSavePanel()
+            #if HEADLESS_TEST
+            guard let directory = ownedPanelFixtureDirectory() else { return false }
+            panel.directoryURL = directory
+            #endif
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "Untitled.mindmap.json"
             guard panel.runModal() == .OK else { return false }
@@ -551,6 +574,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             alert("Unsupported format", detail: "Save only as .mindmap.json; original .mindnode documents cannot be overwritten.")
             return false
         }
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory(),
+              url.standardizedFileURL == directory.appendingPathComponent("Untitled.mindmap.json").standardizedFileURL else { return false }
+        #endif
         do {
             try writeOwnJSON(canvas.model.roots, to: url)
             fileURL = url

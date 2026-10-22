@@ -106,6 +106,24 @@ enum OutlineWorkbenchTests {
         let unchanged = manyCanvas.model.roots
         workbench.toggleSidebar(nil)
         assert(manyCanvas.model.roots == unchanged, "Toggling sidebar cannot mutate the map")
+
+        let deepest = UUID()
+        let narrowRoot = MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Child", children: [
+                MapNode(id: UUID(), title: "Grandchild", children: [
+                    MapNode(id: deepest, title: "Deepest", children: [], folded: false)
+                ], folded: false)
+            ], folded: false)
+        ], folded: false)
+        let narrowCanvas = MapCanvas(model: MapModel(roots: [narrowRoot], selected: deepest))
+        narrowCanvas.frame = CGRect(x: 0, y: 0, width: 1100, height: 700)
+        narrowCanvas.selectAndEdit(deepest)
+        let narrowEditor = narrowCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        narrowCanvas.frame.size.width = 400 // Sidebar or window resizing narrows the canvas while editing.
+        if !narrowCanvas.bounds.insetBy(dx: 28, dy: 28).contains(narrowEditor.frame) {
+            fputs("Inline editor remains outside the narrowed canvas after resize\n", stderr)
+            exit(1) // Expected RED must not generate a macOS assertion/crash dialog.
+        }
         print("outline selection, fold/undo, 30-node and split workbench tests passed (offscreen only)")
     }
 }
