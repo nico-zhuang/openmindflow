@@ -157,8 +157,8 @@ enum CanvasCommandTests {
               selectedAppearance(restoredMenu) == ["Dark"] else {
             failAppearance("Appearance choice must persist across delegate launch")
         }
-        let system = restoredMenu.item(withTitle: "System")!
-        guard NSApp.sendAction(system.action!, to: system.target, from: system),
+        guard let system = restoredMenu.item(withTitle: "System"), let action = system.action,
+              NSApp.sendAction(action, to: system.target, from: system),
               NSApp.appearance == nil, selectedAppearance(restoredMenu) == ["System"] else {
             failAppearance("System appearance must return control to macOS")
         }
