@@ -158,9 +158,30 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
-        let nodes = visibleNodes()
+        var nodes = visibleNodes()
         let drop = dragSource.flatMap { source in
             dragPoint.flatMap { validDrop(at: $0, source: source, nodes: nodes) }
+        }
+        if let source = dragSource, let point = dragPoint,
+           let sourceNode = nodes.first(where: { $0.node.id == source }) {
+            var moving = Set<UUID>()
+            func collect(_ node: MapNode) {
+                moving.insert(node.id)
+                if !node.folded { node.children.forEach(collect) }
+            }
+            collect(sourceNode.node)
+            let sourceBox = screen(sourceNode.frame)
+            let dx = (point.x - dragGrab.x - sourceBox.minX) / zoom
+            let dy = (point.y - dragGrab.y - sourceBox.minY) / zoom
+            let dragged = nodes.filter { moving.contains($0.node.id) }.map {
+                LaidOutNode(node: $0.node, frame: $0.frame.offsetBy(dx: dx, dy: dy), parent: $0.parent)
+            }
+            if let drop {
+                // ponytail: O(n) tree copy/layout per drag frame; cache candidate placement or affected branches if large maps stutter.
+                let preview = MapModel(roots: model.roots, selected: model.selected)
+                if preview.moveNode(source, to: drop.parent, at: drop.index) { nodes = mapLayout(preview.roots) }
+            }
+            nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
         if nodes.isEmpty {
             let message = "Empty map — press Tab to create the first idea."
@@ -169,6 +190,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         for item in nodes {
+            if dragPoint != nil && item.node.id == dragSource { continue } // No cross-parent line until release.
             guard let parent = nodes.first(where: { $0.node.id == item.parent }) else { continue }
             let start = screen(parent.frame), end = screen(item.frame)
             let line = NSBezierPath()
@@ -202,32 +224,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
             (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
         }
-        if let drop, drop.parent != drop.target.node.id, let dragPoint {
-            let target = screen(drop.target.frame)
-            let y = dragPoint.y < target.midY ? target.minY : target.maxY
-            let indicator = NSBezierPath()
-            indicator.move(to: CGPoint(x: target.minX - 8 * zoom, y: y))
-            indicator.line(to: CGPoint(x: target.maxX + 8 * zoom, y: y))
-            indicator.lineWidth = max(2, 3 * zoom)
+        if let drop, drop.parent == drop.target.node.id,
+           let parent = nodes.first(where: { $0.node.id == drop.parent }) {
+            let ring = NSBezierPath(roundedRect: screen(parent.frame).insetBy(dx: -5, dy: -5),
+                                    xRadius: 14 * zoom, yRadius: 14 * zoom)
+            ring.lineWidth = max(2, 3 * zoom)
             NSColor.controlAccentColor.setStroke()
-            indicator.stroke()
-        }
-        if let dragPoint, let dragSource, let source = nodes.first(where: { $0.node.id == dragSource }) {
-            let box = CGRect(x: dragPoint.x - dragGrab.x, y: dragPoint.y - dragGrab.y,
-                             width: source.frame.width * zoom, height: source.frame.height * zoom)
-            let ghost = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
-            NSColor.controlBackgroundColor.withAlphaComponent(0.88).setFill()
-            ghost.fill()
-            ghost.lineWidth = max(2, 2 * zoom)
-            NSColor.controlAccentColor.setStroke()
-            ghost.stroke()
-            let title = source.node.title.isEmpty ? "New idea" : source.node.title
-            let label = source.node.folded && !source.node.children.isEmpty ? "▸ " + title : title
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: mapFont(isRoot: source.parent == nil, zoom: zoom),
-                .foregroundColor: source.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
-            ]
-            (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
+            ring.stroke()
         }
     }
 

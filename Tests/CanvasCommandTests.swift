@@ -253,7 +253,8 @@ enum CanvasCommandTests {
             exit(1)
         }
         assert(reordered.undo() && reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
-        let crossSource = MapNode(id: UUID(), title: "Move into gap", children: [], folded: false)
+        let nestedLeaf = MapNode(id: UUID(), title: "Nested leaf", children: [], folded: false)
+        let crossSource = MapNode(id: UUID(), title: "Move into gap", children: [nestedLeaf], folded: false)
         let leftChild = MapNode(id: UUID(), title: "Before", children: [], folded: false)
         let rightChild = MapNode(id: UUID(), title: "After", children: [], folded: false)
         let crossParent = MapNode(id: UUID(), title: "Destination", children: [leftChild, rightChild], folded: false)
@@ -274,13 +275,150 @@ enum CanvasCommandTests {
         var crossChanges = 0
         crossCanvas.onChange = { crossChanges += 1 }
         crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        let beforeReflow = image(crossCanvas)
         crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, crossGap))
+        let duringReflow = image(crossCanvas)
+        let shiftedGap = CGPoint(x: crossGap.x + 8, y: crossGap.y)
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, shiftedGap))
+        let shiftedReflow = image(crossCanvas)
+        if crossModel.roots != beforeCrossMove || crossChanges != 0 || crossModel.undo() {
+            fputs("A live layout preview must leave real tree, dirty callback and undo untouched\n", stderr); exit(1)
+        }
         crossCanvas.mouseUp(with: mouse(.leftMouseUp, crossGap))
+        let afterReflow = image(crossCanvas)
+        func paintedInterior(_ data: Data, _ frame: CGRect) -> [NSColor] {
+            guard let bitmap = NSBitmapImageRep(data: data) else { return [] }
+            let x = Int(frame.minX + 80), y = Int(frame.minY + 90)
+            guard x >= 0, y >= 0, x + Int(frame.width) < bitmap.pixelsWide,
+                  y + Int(frame.height) < bitmap.pixelsHigh else { return [] }
+            return stride(from: x + 12, through: x + Int(frame.width) - 12, by: 3).flatMap { column in
+                stride(from: y + 9, through: y + Int(frame.height) - 9, by: 3).compactMap {
+                    bitmap.colorAt(x: column, y: $0)
+                }
+            }
+        }
+        let committedRows = mapLayout(crossModel.roots)
+        let shiftedSibling = committedRows.first { $0.node.id == leftChild.id }!.frame
+        let nestedPosition = committedRows.first { $0.node.id == nestedLeaf.id }!.frame
+        let beforeSibling = paintedInterior(beforeReflow, shiftedSibling)
+        let afterSibling = paintedInterior(afterReflow, shiftedSibling)
+        if afterSibling.isEmpty || beforeSibling == afterSibling {
+            fputs("Destination sibling pixels must change at the new drawn position\n", stderr); exit(1)
+        }
+        if paintedInterior(duringReflow, shiftedSibling) != afterSibling ||
+           paintedInterior(shiftedReflow, shiftedSibling) != afterSibling {
+            fputs("Destination sibling must keep its live gap at both pointer positions\n", stderr); exit(1)
+        }
+        let sourceAtPointer = CGRect(x: crossGap.x - crossSourceFrame.width / 2 - 80,
+            y: crossCanvas.bounds.height - crossGap.y - crossSourceFrame.height / 2 - 90,
+            width: crossSourceFrame.width, height: crossSourceFrame.height)
+        let originalNested = crossRows.first { $0.node.id == nestedLeaf.id }!.frame
+        let nestedAtPointer = originalNested.offsetBy(dx: sourceAtPointer.minX - crossSourceFrame.minX,
+                                                       dy: sourceAtPointer.minY - crossSourceFrame.minY)
+        if paintedInterior(beforeReflow, crossSourceFrame) != paintedInterior(duringReflow, sourceAtPointer) ||
+           paintedInterior(beforeReflow, originalNested) != paintedInterior(duringReflow, nestedAtPointer) {
+            fputs("Dragged child and nested leaf must retain their original typography and text\n", stderr); exit(1)
+        }
+        for frame in [sourceAtPointer, nestedAtPointer] {
+            let first = paintedInterior(duringReflow, frame)
+            if first.isEmpty || first == paintedInterior(shiftedReflow, frame) ||
+               first != paintedInterior(shiftedReflow, frame.offsetBy(dx: 8, dy: 0)) {
+                fputs("Source and visible child must track the pointer exactly within one valid gap\n", stderr); exit(1)
+            }
+        }
+        if paintedInterior(beforeReflow, nestedPosition) == paintedInterior(afterReflow, nestedPosition) ||
+           paintedInterior(beforeReflow, crossSourceFrame) == paintedInterior(afterReflow, crossSourceFrame) {
+            fputs("Committing the drag must move the entire source subtree to its new branch\n", stderr); exit(1)
+        }
         if crossModel.roots[0].children.last?.children.map(\.id) != [leftChild.id, crossSource.id, rightChild.id] || crossChanges != 1 {
             fputs("Dragging into a different branch's child gap must insert there exactly once\n", stderr)
             exit(1)
         }
-        assert(crossModel.undo() && crossModel.roots == beforeCrossMove)
+        if !crossModel.undo() || crossModel.roots != beforeCrossMove || crossModel.undo() {
+            fputs("A single drag must add exactly one undo transaction\n", stderr); exit(1)
+        }
+        if !crossModel.redo() || crossModel.roots[0].children[0].children != [leftChild, crossSource, rightChild] ||
+           !crossModel.undo() || crossModel.roots != beforeCrossMove {
+            fputs("The nested subtree must survive the one-step redo and undo roundtrip\n", stderr); exit(1)
+        }
+        crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        let beforeEscape = image(crossCanvas)
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, crossGap))
+        crossCanvas.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
+        if image(crossCanvas) != beforeEscape || crossModel.roots != beforeCrossMove {
+            fputs("Escape must restore the original canvas without changing its model\n", stderr); exit(1)
+        }
+        crossCanvas.mouseUp(with: mouse(.leftMouseUp, crossGap))
+        crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        let beforeInvalidReflow = image(crossCanvas)
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, crossGap))
+        let blankPoint = CGPoint(x: 600, y: 300)
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, blankPoint))
+        let blankReflow = image(crossCanvas)
+        if paintedInterior(blankReflow, beforeFrame) != paintedInterior(beforeInvalidReflow, beforeFrame) ||
+           paintedInterior(blankReflow, afterFrame) != paintedInterior(beforeInvalidReflow, afterFrame) {
+            fputs("Leaving a valid target must restore original sibling positions immediately\n", stderr); exit(1)
+        }
+        let sourceInBlank = CGRect(x: blankPoint.x - crossSourceFrame.width / 2 - 80,
+            y: crossCanvas.bounds.height - blankPoint.y - crossSourceFrame.height / 2 - 90,
+            width: crossSourceFrame.width, height: crossSourceFrame.height)
+        let nestedInBlank = originalNested.offsetBy(dx: sourceInBlank.minX - crossSourceFrame.minX,
+                                                    dy: sourceInBlank.minY - crossSourceFrame.minY)
+        for (original, moved) in [(crossSourceFrame, sourceInBlank), (originalNested, nestedInBlank)] {
+            if paintedInterior(beforeInvalidReflow, original) != paintedInterior(blankReflow, moved) ||
+               paintedInterior(beforeInvalidReflow, original) == paintedInterior(blankReflow, original) {
+                fputs("Source and visible descendants must follow into blank space without old copies\n", stderr); exit(1)
+            }
+        }
+        crossCanvas.mouseUp(with: mouse(.leftMouseUp, blankPoint))
+        if image(crossCanvas) != beforeInvalidReflow || crossModel.roots != beforeCrossMove || crossChanges != 1 {
+            fputs("Invalid drop must clear reflow without dirtying or committing\n", stderr); exit(1)
+        }
+        crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, blankPoint))
+        let directBlank = image(crossCanvas)
+        if paintedInterior(directBlank, beforeFrame) != paintedInterior(beforeInvalidReflow, beforeFrame) ||
+           paintedInterior(directBlank, afterFrame) != paintedInterior(beforeInvalidReflow, afterFrame) ||
+           paintedInterior(directBlank, sourceInBlank) != paintedInterior(beforeInvalidReflow, crossSourceFrame) ||
+           paintedInterior(directBlank, nestedInBlank) != paintedInterior(beforeInvalidReflow, originalNested) {
+            fputs("Direct whitespace drag must carry whole subtree without moving siblings\n", stderr); exit(1)
+        }
+        crossCanvas.mouseUp(with: mouse(.leftMouseUp, blankPoint))
+        if crossModel.roots != beforeCrossMove || crossChanges != 1 || image(crossCanvas) != beforeInvalidReflow {
+            fputs("Releasing directly in whitespace must restore the complete original tree\n", stderr); exit(1)
+        }
+        let centerParent = MapNode(id: UUID(), title: "Target", children: [], folded: false)
+        let centerSource = MapNode(id: UUID(), title: "Dragged", children: [], folded: false)
+        let centerModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [centerParent, centerSource], folded: false)],
+                                   selected: centerSource.id)
+        let centerCanvas = MapCanvas(model: centerModel)
+        centerCanvas.frame = dragCanvas.frame
+        let centerRows = mapLayout(centerModel.roots)
+        let parentFrame = centerRows.first { $0.node.id == centerParent.id }!.frame
+        let centerSourceFrame = centerRows.first { $0.node.id == centerSource.id }!.frame
+        let centerStart = CGPoint(x: centerSourceFrame.midX + 80,
+                                  y: centerCanvas.bounds.height - centerSourceFrame.midY - 90)
+        let centerTarget = CGPoint(x: parentFrame.midX + 80, y: centerCanvas.bounds.height - parentFrame.midY - 90)
+        func outerBorderPixel(_ data: Data) -> NSColor? {
+            NSBitmapImageRep(data: data)?.colorAt(x: Int(parentFrame.minX + 80 + 20),
+                y: Int(parentFrame.minY + 90 - 5))
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            centerCanvas.appearance = NSAppearance(named: appearance)
+            centerCanvas.mouseDown(with: mouse(.leftMouseDown, centerStart))
+            let noParentHover = image(centerCanvas)
+            centerCanvas.mouseDragged(with: mouse(.leftMouseDragged, centerTarget))
+            guard let before = outerBorderPixel(noParentHover), let active = outerBorderPixel(image(centerCanvas)),
+                  before != active, centerModel.roots[0].children == [centerParent, centerSource] else {
+                fputs("Center-parent drop needs an unobscured accent rim in light and dark\n", stderr); exit(1)
+            }
+            centerCanvas.mouseUp(with: mouse(.leftMouseUp, centerStart))
+            if outerBorderPixel(image(centerCanvas)) != before || centerModel.roots[0].children != [centerParent, centerSource] {
+                fputs("Invalid release must clear parent accent without committing\n", stderr); exit(1)
+            }
+        }
         let tallBranch = MapNode(id: UUID(), title: "Tall", children: (0..<9).map {
             MapNode(id: UUID(), title: "Leaf \($0)", children: [], folded: false)
         }, folded: false)
