@@ -52,6 +52,49 @@ enum NativePanelSelfCheck {
                 views += view.subviews
             }
             guard let canvas else { finish("FAIL native canvas missing", ok: false); return }
+            if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "outline-return" {
+                var queue = [content]
+                var outline: NSOutlineView?
+                while let view = queue.popLast() {
+                    if let found = view as? NSOutlineView { outline = found; break }
+                    queue += view.subviews
+                }
+                guard let outline, app.mainMenu?.item(withTitle: "Node")?.submenu?
+                    .item(withTitle: "New Sibling")?.keyEquivalent == "\r" else {
+                    finish("FAIL real outline or Return menu missing", ok: false); return
+                }
+                canvas.addChild()
+                guard let child = canvas.model.roots.first?.children.first?.id,
+                      let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
+                    finish("FAIL synthetic child setup", ok: false); return
+                }
+                field.stringValue = "Synthetic child"
+                canvas.commitEditing()
+                outline.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+                guard outline.selectedRow == 1, canvas.model.selected == child,
+                      window.makeFirstResponder(outline), window.isKeyWindow else {
+                    finish("FAIL outline child keyboard focus setup", ok: false); return
+                }
+                let title = window.title
+                guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                    isARepeat: false, keyCode: 36) else {
+                    finish("FAIL local Return event creation", ok: false); return
+                }
+                app.postEvent(event, atStart: false) // Own application queue; menu sees the key equivalent.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    let editor = canvas.subviews.compactMap { $0 as? NSTextField }.first
+                    guard window.isKeyWindow, canvas.model.selected == child,
+                          canvas.model.roots[0].children.count == 1, window.title == title,
+                          editor?.stringValue == "Synthetic child", editor?.currentEditor() != nil else {
+                        finish("FAIL outline Return selectedSame=\(canvas.model.selected == child) siblings=\(canvas.model.roots[0].children.count) field=\(editor != nil)", ok: false)
+                        return
+                    }
+                    finish("nativeOutlineReturn=true sameNode=true noSibling=true key=true", ok: true)
+                }
+                return
+            }
             canvas.selectAndEdit(canvas.model.selected)
             guard let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
                 finish("FAIL native inline editor missing", ok: false); return

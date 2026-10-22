@@ -341,7 +341,26 @@ enum NativeWindowSelfCheck {
                   mapLayout(canvas.model.roots).count == 30 else {
                 finish("FAIL native 30-node distant title typing, commit, or count", passed: false); return
             }
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true threeRoundDrag=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true",
+            guard let outline = (window.contentViewController as? NSSplitViewController)?
+                .splitViewItems.first?.viewController.view as? MapOutlineView else {
+                finish("FAIL native outline missing", passed: false); return
+            }
+            outline.reloadMap()
+            outline.outlineView.selectRowIndexes(IndexSet(integer: 29), byExtendingSelection: false)
+            guard window.makeFirstResponder(outline.outlineView),
+                  let returnKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                    isARepeat: false, keyCode: 36) else {
+                finish("FAIL native outline Return event or focus", passed: false); return
+            }
+            window.sendEvent(returnKey) // Scoped to this visible/key synthetic window.
+            guard canvas.model.selected == distant.id,
+                  canvas.subviews.compactMap({ $0 as? NSTextField }).first?.currentEditor() != nil,
+                  window.firstResponder is NSTextView else {
+                finish("FAIL native outline Return did not focus canvas field editor", passed: false); return
+            }
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true threeRoundDrag=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true outlineReturn=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)

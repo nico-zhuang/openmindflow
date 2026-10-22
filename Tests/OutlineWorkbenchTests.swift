@@ -51,6 +51,20 @@ enum OutlineWorkbenchTests {
         assert(tree.selected == child && mapCanvas.subviews.contains { $0 is NSTextField },
                "Outline editing must use the same canvas model and native field")
         mapCanvas.commitEditing()
+        for (key, code) in [("\r", UInt16(36)), ("\u{3}", UInt16(76))] {
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil, characters: key,
+                charactersIgnoringModifiers: key, isARepeat: false, keyCode: code) else {
+                fputs("Could not create local outline Return/Enter event\n", stderr); exit(1)
+            }
+            outline.outlineView.keyDown(with: event) // Direct local event; never posted to the desktop.
+            guard tree.selected == child,
+                  mapCanvas.subviews.compactMap({ $0 as? NSTextField }).first?.stringValue == "Child" else {
+                fputs("Outline Return/Enter must edit the selected node on the shared canvas\n", stderr)
+                exit(1) // Expected RED must not create a macOS assertion/crash dialog.
+            }
+            mapCanvas.commitEditing()
+        }
         let grandchildLabel = outline.outlineView.view(atColumn: 0, row: 2, makeIfNecessary: true) as? NSTextField
         assert(grandchildLabel?.toolTip == "Grandchild 🧭")
         assert(outline.outlineView.accessibilityLabel() == "Map outline")

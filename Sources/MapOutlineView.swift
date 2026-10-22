@@ -1,5 +1,14 @@
 import AppKit
 
+private final class KeyboardOutlineView: NSOutlineView {
+    override func keyDown(with event: NSEvent) {
+        if [UInt16(36), 76].contains(event.keyCode), selectedRow >= 0,
+           event.modifierFlags.intersection([.shift, .option, .command, .control]).isEmpty,
+           let doubleAction, NSApp.sendAction(doubleAction, to: target, from: self) { return }
+        super.keyDown(with: event)
+    }
+}
+
 final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     private final class Row: NSObject {
         let id: UUID
@@ -15,7 +24,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         }
     }
 
-    let outlineView = NSOutlineView()
+    let outlineView: NSOutlineView = KeyboardOutlineView()
     private let canvas: MapCanvas
     private var roots: [Row] = []
     private var reloading = false

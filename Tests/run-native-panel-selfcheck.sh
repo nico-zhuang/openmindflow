@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --save-failure && $1 != --check-open-guard ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--save-failure|--check-open-guard]\n' "$0" >&2; exit 2; fi
+if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --save-failure && $1 != --check-open-guard && $1 != --outline-return ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--save-failure|--check-open-guard|--outline-return]\n' "$0" >&2; exit 2; fi
 cd "$(dirname "$0")/.."
 if [[ ${1:-} == --check-open-guard ]]; then
   swift -e 'import Foundation
@@ -30,13 +30,14 @@ import ApplicationServices
 let env = ProcessInfo.processInfo.environment
 let opening = env["SELFTEST_CANCEL"] == "--open-cancel"
 let failing = env["SELFTEST_CANCEL"] == "--save-failure"
+let outlineReturn = env["SELFTEST_CANCEL"] == "--outline-return"
 let cancelling = env["SELFTEST_CANCEL"] == "--cancel" || opening
 let directory = URL(fileURLWithPath: env["SELFTEST_DIR"]!).resolvingSymlinksInPath()
 let ownApp = URL(fileURLWithPath: env["SELFTEST_APP"]!).resolvingSymlinksInPath()
 let report = directory.appendingPathComponent("report.txt")
 let ready = directory.appendingPathComponent("panel-ready")
 let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path)
-guard AXIsProcessTrusted(),
+guard (outlineReturn || AXIsProcessTrusted()),
       (try? String(contentsOf: directory.appendingPathComponent(".owner"), encoding: .utf8)) == "mindmap-owned-native-panel\n",
       attributes?[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()),
       (attributes?[.posixPermissions] as? NSNumber)?.intValue == 0o700,
@@ -91,7 +92,7 @@ configuration.createsNewApplicationInstance = true
 configuration.activates = true
 configuration.environment = ["MINDMAP_SELFTEST_REPORT": report.path,
                              "MINDMAP_SELFTEST_PANEL_DIR": directory.path,
-                             "MINDMAP_PANEL_ACTION": failing ? "save-failure" : opening ? "open-cancel" : cancelling ? "cancel" : "save"]
+                             "MINDMAP_PANEL_ACTION": outlineReturn ? "outline-return" : failing ? "save-failure" : opening ? "open-cancel" : cancelling ? "cancel" : "save"]
 NSWorkspace.shared.openApplication(at: ownApp, configuration: configuration) { app, error in
     if let app { print("PANEL_LAUNCH_REQUEST=\(app.bundleIdentifier ?? "unknown")") }
     else { fputs("PANEL_LAUNCH_FAILED=\(error?.localizedDescription ?? "unknown")\n", stderr) }
@@ -108,13 +109,14 @@ let deadline = Date().addingTimeInterval(18)
 while Date() < deadline {
     if let text = try? String(contentsOf: report, encoding: .utf8) {
         print(text, terminator: "")
-        let expected = failing ? "nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true"
+        let expected = outlineReturn ? "nativeOutlineReturn=true sameNode=true noSibling=true key=true"
+                       : failing ? "nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true"
                        : opening ? "nativeOpenCancel=true ownModelRetained=true dirtyRetained=true"
                        : cancelling ? "nativeSaveCancel=true ownModelRetained=true dirtyRetained=true"
                                     : "nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified"
-        exit(text.contains(expected) && pressed && (!failing || alertDismissed) ? 0 : 1)
+        exit(text.contains(expected) && (outlineReturn || pressed) && (!failing || alertDismissed) ? 0 : 1)
     }
-    if !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
+    if !outlineReturn, !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
        let owned = ownedRunning(), let button = panelButton(for: owned.processIdentifier,
                                                         wanted: cancelling ? "Cancel" : "Save") {
         let status = AXUIElementPerformAction(button, kAXPressAction as CFString)
