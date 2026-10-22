@@ -553,12 +553,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func openMindNode(_ sender: Any?) {
         let panel = NSOpenPanel()
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
         // The installed MindNode UTType conforms to .data, not .package or .directory.
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.delegate = self
-        panel.message = "Select a MindNode v9 directory package. Import is read-only; Save creates a new .mindmap.json file."
+        panel.message = "Select a MindNode v9 binary-plist file or directory package. Import is read-only; Save creates a new .mindmap.json file."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard ["fixture.mindnode", "single.mindnode"].contains(url.lastPathComponent),
+              url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
+        #endif
         do {
             let roots = try MindNodeImporter.load(url)
             guard confirmDiscardOrSave() else { return }
@@ -574,13 +582,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        let kind = (try? FileManager.default.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType
+        return kind == .typeDirectory || (kind == .typeRegular && url.pathExtension.lowercased() == "mindnode")
     }
     func panel(_ sender: Any, validate url: URL) throws {
+        let kind = (try? FileManager.default.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType
         guard url.pathExtension.lowercased() == "mindnode",
-              (try? FileManager.default.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType == .typeDirectory else {
+              kind == .typeDirectory || kind == .typeRegular else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnsupportedSchemeError,
-                          userInfo: [NSLocalizedDescriptionKey: "Select a .mindnode directory package, not an ordinary folder."])
+                          userInfo: [NSLocalizedDescriptionKey: "Select a .mindnode v9 binary-plist file or directory package."])
         }
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }

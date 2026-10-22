@@ -2,11 +2,12 @@ import Foundation
 import CoreFoundation
 
 enum ImportError: LocalizedError {
-    case unsupported, invalid, tooLarge
+    case unsupported, zipArchive, invalid, tooLarge
 
     var errorDescription: String? {
         switch self {
-        case .unsupported: "Only MindNode v9 directory packages can be imported read-only."
+        case .unsupported: "Only MindNode v9 binary-plist files or directory packages can be imported read-only; newer or unknown formats are unsupported."
+        case .zipArchive: "ZIP-archived MindNode files are unsupported; no archive is extracted."
         case .invalid: "The MindNode document is missing or malformed."
         case .tooLarge: "The MindNode document exceeds the 8 MiB import limit."
         }
@@ -17,20 +18,28 @@ enum MindNodeImporter {
     static func load(_ url: URL) throws -> [MapNode] {
         let fm = FileManager.default
         guard url.isFileURL, url.pathExtension.lowercased() == "mindnode",
-              (try? fm.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType == .typeDirectory else {
+              let kind = (try? fm.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType else {
             throw ImportError.unsupported
         }
-        let contents = url.appendingPathComponent("contents.xml")
+        let contents: URL
+        switch kind {
+        case .typeDirectory: contents = url.appendingPathComponent("contents.xml")
+        case .typeRegular: contents = url
+        default: throw ImportError.unsupported
+        }
         guard let attrs = try? fm.attributesOfItem(atPath: contents.path),
               attrs[.type] as? FileAttributeType == .typeRegular else {
             throw ImportError.invalid
         }
         let limit = 8 * 1024 * 1024
-        guard let size = attrs[.size] as? NSNumber, size.intValue <= limit else {
+        guard let size = attrs[.size] as? NSNumber, size.uint64Value <= UInt64(limit) else {
             throw ImportError.tooLarge
         }
         let data = try Data(contentsOf: contents, options: .mappedIfSafe)
         guard data.count <= limit else { throw ImportError.tooLarge }
+        if data.starts(with: [0x50, 0x4b, 0x03, 0x04]) ||
+           data.starts(with: [0x50, 0x4b, 0x05, 0x06]) ||
+           data.starts(with: [0x50, 0x4b, 0x07, 0x08]) { throw ImportError.zipArchive }
         var format = PropertyListSerialization.PropertyListFormat.binary
         guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: &format),
               format == .binary, let root = plist as? [String: Any],
