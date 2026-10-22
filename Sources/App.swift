@@ -4,6 +4,11 @@ private final class MapNodeAX: NSAccessibilityElement {
     weak var canvas: MapCanvas?
     var nodeID: UUID?
 
+    override func accessibilityFrame() -> NSRect {
+        guard let canvas, let nodeID else { return super.accessibilityFrame() }
+        return canvas.frameForAccessibility(nodeID) ?? super.accessibilityFrame()
+    }
+
     override func accessibilityPerformPress() -> Bool {
         guard let canvas, let nodeID else { return false }
         canvas.selectAndEdit(nodeID)
@@ -15,7 +20,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
+            previewCache = nil
             let visibleIDs = Set(visibleNodes().map { $0.node.id })
+            if needsDisplay, window != nil { NSAccessibility.post(element: self, notification: .layoutChanged) }
             for (id, element) in accessibleNodes {
                 element.setAccessibilitySelected(id == model.selected && visibleIDs.contains(id))
             }
@@ -35,6 +42,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var dragOrigin: CGPoint?
     private var dragGrab = CGPoint.zero
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
+    private var previewCache: (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?)?
     private var announcedSelection: UUID
 
     init(model: MapModel) {
@@ -52,7 +60,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityChildren() -> [Any]? {
-        let visible = visibleNodes()
+        let visible = previewGeometry().nodes
         let ids = Set(visible.map { $0.node.id })
         accessibleNodes = accessibleNodes.filter { ids.contains($0.key) }
         let nodes: [MapNodeAX] = visible.map { item in
@@ -70,6 +78,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return element
         }
         return nodes + (super.accessibilityChildren() ?? [])
+    }
+
+    func frameForAccessibility(_ id: UUID) -> CGRect? {
+        // ponytail: linear UUID lookup per AX element; index the snapshot if large-map VoiceOver navigation stutters.
+        guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }) else { return nil }
+        let local = screen(item.frame)
+        return window?.convertToScreen(convert(local, to: nil)) ?? local
     }
 
     func selectNode(_ id: UUID) {
@@ -144,20 +159,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         return nil
     }
-    private func revealSelection() {
-        guard bounds.width > 64, bounds.height > 64, let node = selectedNode() else { return }
-        let box = editor == nil ? screen(node.frame) : editorFrame(node), margin: CGFloat = 28
-        if box.minX < bounds.minX + margin { offset.x += bounds.minX + margin - box.minX }
-        else if box.maxX > bounds.maxX - margin { offset.x -= box.maxX - bounds.maxX + margin }
-        if box.height > bounds.height - 2 * margin { offset.y += bounds.minY + margin - box.minY }
-        else if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
-        else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
-        editor?.frame = selectedNode().map(editorFrame) ?? .zero
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
-        bounds.fill()
+    private func previewGeometry() -> (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?) {
+        if let previewCache { return previewCache }
         var nodes = visibleNodes()
         let drop = dragSource.flatMap { source in
             dragPoint.flatMap { validDrop(at: $0, source: source, nodes: nodes) }
@@ -183,6 +186,24 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
+        previewCache = (nodes, drop)
+        return (nodes, drop)
+    }
+    private func revealSelection() {
+        guard bounds.width > 64, bounds.height > 64, let node = selectedNode() else { return }
+        let box = editor == nil ? screen(node.frame) : editorFrame(node), margin: CGFloat = 28
+        if box.minX < bounds.minX + margin { offset.x += bounds.minX + margin - box.minX }
+        else if box.maxX > bounds.maxX - margin { offset.x -= box.maxX - bounds.maxX + margin }
+        if box.height > bounds.height - 2 * margin { offset.y += bounds.minY + margin - box.minY }
+        else if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
+        else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
+        editor?.frame = selectedNode().map(editorFrame) ?? .zero
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        bounds.fill()
+        let (nodes, drop) = previewGeometry()
         if nodes.isEmpty {
             let message = "Empty map — press Tab to create the first idea."
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]

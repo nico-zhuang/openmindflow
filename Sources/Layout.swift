@@ -6,6 +6,10 @@ struct LaidOutNode {
     let parent: UUID?
 }
 
+#if HEADLESS_TEST
+var mapLayoutInvocations = 0
+#endif
+
 func dropPlacement(at point: CGPoint, over node: LaidOutNode,
                    siblings: [LaidOutNode]) -> (parent: UUID, index: Int)? {
     guard node.frame.contains(point) else { return nil }
@@ -24,6 +28,9 @@ func mapFont(isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
 }
 
 func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
+    #if HEADLESS_TEST
+    mapLayoutInvocations += 1
+    #endif
     let gap: CGFloat = 32
     var sizes: [UUID: CGSize] = [:]
     var subtreeHeights: [UUID: CGFloat] = [:]

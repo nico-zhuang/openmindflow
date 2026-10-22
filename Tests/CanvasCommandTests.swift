@@ -389,6 +389,41 @@ enum CanvasCommandTests {
         if crossModel.roots != beforeCrossMove || crossChanges != 1 || image(crossCanvas) != beforeInvalidReflow {
             fputs("Releasing directly in whitespace must restore the complete original tree\n", stderr); exit(1)
         }
+        func axNode(_ title: String) -> NSAccessibilityElement {
+            (crossCanvas.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+                .first { $0.accessibilityLabel() == title }!
+        }
+        let sourceAX = axNode(crossSource.title), nestedAX = axNode(nestedLeaf.title), siblingAX = axNode(leftChild.title)
+        let originalSourceAX = sourceAX.accessibilityFrame(), originalNestedAX = nestedAX.accessibilityFrame()
+        let originalSiblingAX = siblingAX.accessibilityFrame()
+        let siblingShift = shiftedSibling.minY - beforeFrame.minY
+        assert(siblingShift != 0)
+        crossCanvas.mouseDown(with: mouse(.leftMouseDown, crossStart))
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, crossGap))
+        let layoutsBeforeAX = mapLayoutInvocations
+        let movingFrame = sourceAX.accessibilityFrame(), childFrame = nestedAX.accessibilityFrame()
+        let shiftedFrame = siblingAX.accessibilityFrame()
+        if mapLayoutInvocations - layoutsBeforeAX > 2 {
+            fputs("Reading cached AX bounds must not repeat full map layout per node\n", stderr); exit(1)
+        }
+        if abs(movingFrame.minX - originalSourceAX.minX - (crossGap.x - crossStart.x)) > 0.01 ||
+           abs(childFrame.minX - originalNestedAX.minX - (crossGap.x - crossStart.x)) > 0.01 ||
+           abs(shiftedFrame.minY - originalSiblingAX.minY - siblingShift) > 0.01 {
+            fputs("Cached AX node bounds must follow dragged subtree and live sibling reflow\n", stderr); exit(1)
+        }
+        crossCanvas.mouseDragged(with: mouse(.leftMouseDragged, blankPoint))
+        if abs(sourceAX.accessibilityFrame().minX - originalSourceAX.minX - (blankPoint.x - crossStart.x)) > 0.01 ||
+           siblingAX.accessibilityFrame() != originalSiblingAX {
+            fputs("AX bounds must follow invalid whitespace drag while siblings return\n", stderr); exit(1)
+        }
+        crossCanvas.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
+        if sourceAX.accessibilityFrame() != originalSourceAX || nestedAX.accessibilityFrame() != originalNestedAX ||
+           siblingAX.accessibilityFrame() != originalSiblingAX || crossModel.roots != beforeCrossMove {
+            fputs("Cached AX bounds must restore on Escape without committing\n", stderr); exit(1)
+        }
+        crossCanvas.mouseUp(with: mouse(.leftMouseUp, blankPoint))
         let centerParent = MapNode(id: UUID(), title: "Target", children: [], folded: false)
         let centerSource = MapNode(id: UUID(), title: "Dragged", children: [], folded: false)
         let centerModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [centerParent, centerSource], folded: false)],
