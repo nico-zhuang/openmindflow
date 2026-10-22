@@ -504,8 +504,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func openFile(_ sender: Any?) {
         let panel = NSOpenPanel()
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard url.resolvingSymlinksInPath() == directory.appendingPathComponent("Untitled.mindmap.json") else { return }
+        #endif
         guard url.lastPathComponent.hasSuffix(".mindmap.json") else {
             alert("Unsupported format", detail: "Select an existing .mindmap.json file; use Open MindNode for a read-only import.")
             return

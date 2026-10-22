@@ -18,6 +18,7 @@ enum NativePanelSelfCheck {
         let ready = directory.appendingPathComponent("panel-ready")
         guard !FileManager.default.fileExists(atPath: expected.path),
               !FileManager.default.fileExists(atPath: ready.path) else { exit(1) }
+        let opening = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "open-cancel"
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let document = AppDelegate()
@@ -69,34 +70,50 @@ enum NativePanelSelfCheck {
                 finish("FAIL editable root did not become dirty", ok: false); return
             }
             var attempts = 0
-            var result = "FAIL native Save panel missing"
+            var result = "FAIL native \(opening ? "Open" : "Save") panel missing"
             var validated = false
             let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
                 attempts += 1
                 if let panel = app.modalWindow as? NSSavePanel {
                     let directoryOwned = panel.directoryURL?.resolvingSymlinksInPath() == directory
-                    let selectedOwned = panel.url?.resolvingSymlinksInPath() == expected
+                    let selectedOwned = opening || panel.url?.resolvingSymlinksInPath() == expected
                     if !validated {
-                        result = "FAIL Save panel dirOwned=\(directoryOwned) urlOwned=\(selectedOwned)"
-                        if directoryOwned && selectedOwned {
+                        result = "FAIL \(opening ? "Open" : "Save") panel dirOwned=\(directoryOwned) urlOwned=\(selectedOwned)"
+                        if directoryOwned && selectedOwned && (!opening || panel is NSOpenPanel) {
                             do { try "ready\n".write(to: ready, atomically: true, encoding: .utf8) }
                             catch { timer.invalidate(); panel.cancel(nil); return }
                             validated = true
-                            result = "nativeSavePanel=true"
+                            result = opening ? "nativeOpenPanel=true" : "nativeSavePanel=true"
                         }
                     }
                 }
                 if attempts >= 100 {
-                    result = "FAIL native Save panel timeout"
+                    result = "FAIL native \(opening ? "Open" : "Save") panel timeout"
                     timer.invalidate()
                     if let panel = app.modalWindow as? NSSavePanel { panel.cancel(nil) }
                     else { app.abortModal() }
                 }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
-            let actionDispatched = app.sendAction(NSSelectorFromString("saveFile:"), to: document, from: nil)
+            let openItem = app.mainMenu?.item(withTitle: "File")?.submenu?.item(withTitle: "Open Own JSON…")
+            let actionDispatched: Bool
+            if opening, let openItem, let action = openItem.action {
+                actionDispatched = app.sendAction(action, to: openItem.target, from: openItem)
+            } else {
+                actionDispatched = !opening && app.sendAction(NSSelectorFromString("saveFile:"), to: document, from: nil)
+            }
             timer.invalidate()
             let savedExists = FileManager.default.fileExists(atPath: expected.path)
+            if opening {
+                guard actionDispatched, result == "nativeOpenPanel=true", !savedExists,
+                      canvas.model.roots[0].title == "Synthetic saved root",
+                      window.title == "Untitled • — MindMap" else {
+                    finish("FAIL cancelled Open \(result) retained=\(!savedExists) dirty=\(window.title == "Untitled • — MindMap")", ok: false)
+                    return
+                }
+                finish("nativeOpenCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true", ok: true)
+                return
+            }
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "cancel" {
                 guard actionDispatched, result == "nativeSavePanel=true", !savedExists,
                       canvas.model.roots[0].title == "Synthetic saved root",
