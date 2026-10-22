@@ -451,6 +451,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var savedRoots: [MapNode] = []
     private var dirty = false
     private var closeApproved = false
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = MapNode(id: UUID(), title: "Central idea", children: [], folded: false)
@@ -675,6 +681,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         return item
     }
 
+    private func applyAppearance(_ mode: String, in menu: NSMenu) {
+        let selected = ["light", "dark"].contains(mode) ? mode : "system"
+        NSApp.appearance = selected == "system" ? nil : NSAppearance(named: selected == "light" ? .aqua : .darkAqua)
+        for item in menu.items { item.state = item.title.lowercased() == selected ? .on : .off }
+    }
+    @objc private func chooseAppearance(_ sender: NSMenuItem) {
+        guard let menu = sender.menu else { return }
+        let mode = sender.title.lowercased()
+        guard ["system", "light", "dark"].contains(mode) else { return }
+        defaults.set(mode, forKey: "appearance")
+        applyAppearance(mode, in: menu)
+    }
+
     func installMenu() {
         let main = NSMenu()
         let app = NSMenuItem(title: "MindMap", action: nil, keyEquivalent: "")
@@ -709,6 +728,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
         outlineItem.keyEquivalentModifierMask = [.option, .command]
         outlineItem.target = splitController
+        let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let appearanceMenu = NSMenu(title: "Appearance")
+        for title in ["System", "Light", "Dark"] {
+            appearanceMenu.addItem(withTitle: title, action: #selector(chooseAppearance(_:)), keyEquivalent: "").target = self
+        }
+        appearanceItem.submenu = appearanceMenu
+        viewMenu.addItem(appearanceItem)
         view.submenu = viewMenu
         main.addItem(view)
         let node = NSMenuItem(title: "Node", action: nil, keyEquivalent: "")
@@ -729,6 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         node.submenu = nodeMenu
         main.addItem(node)
         NSApp.mainMenu = main
+        applyAppearance(defaults.string(forKey: "appearance") ?? "system", in: appearanceMenu)
     }
 }
 

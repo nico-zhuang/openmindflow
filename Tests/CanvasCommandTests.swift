@@ -53,7 +53,20 @@ enum CanvasCommandTests {
         assert(model.roots[0].children[1].title == "Committed parent")
         assert(!canvas.control(control, textView: text,
             doCommandBy: NSSelectorFromString("unrecognizedCommand:")))
-        let appDelegate = AppDelegate()
+        let suiteName = "local.mindmap.appearance-test.\(UUID().uuidString)"
+        let appearanceDefaults = UserDefaults(suiteName: suiteName)!
+        let priorAppearance = NSApp.appearance
+        func failAppearance(_ message: String) -> Never {
+            appearanceDefaults.removePersistentDomain(forName: suiteName)
+            NSApp.appearance = priorAppearance
+            fputs("\(message)\n", stderr)
+            exit(1)
+        }
+        defer {
+            NSApp.appearance = priorAppearance
+            appearanceDefaults.removePersistentDomain(forName: suiteName)
+        }
+        let appDelegate = AppDelegate(defaults: appearanceDefaults)
         let workbench = appDelegate.makeWorkbench(canvas: canvas)
         appDelegate.installMenu()
         assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "View", "Node"])
@@ -78,7 +91,11 @@ enum CanvasCommandTests {
         }
         let viewMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "View" }!
         let outlineToggle = viewMenu.item(withTitle: "Show/Hide Outline")!
-        assert(viewMenu.items.count == 1 && outlineToggle.keyEquivalent == "s")
+        guard let appearance = viewMenu.item(withTitle: "Appearance")?.submenu,
+              appearance.items.map(\.title) == ["System", "Light", "Dark"] else {
+            failAppearance("View → Appearance must offer System, Light, and Dark")
+        }
+        assert(outlineToggle.keyEquivalent == "s")
         assert(outlineToggle.keyEquivalentModifierMask == [.option, .command])
         assert(outlineToggle.action.map(NSStringFromSelector) == "toggleSidebar:")
         assert(outlineToggle.target as AnyObject? === workbench)
@@ -114,6 +131,48 @@ enum CanvasCommandTests {
             assert(item.label == ["New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Undo", "Redo"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
+        func selectedAppearance(_ menu: NSMenu) -> [String] {
+            menu.items.filter { $0.state == .on }.map(\.title)
+        }
+        guard selectedAppearance(appearance) == ["System"], NSApp.appearance == nil else {
+            failAppearance("System appearance must be the default with no app override")
+        }
+        for (title, name) in [("Dark", NSAppearance.Name.darkAqua), ("Light", .aqua)] {
+            let item = appearance.item(withTitle: title)!
+            guard let action = item.action, NSApp.sendAction(action, to: item.target, from: item),
+                  NSApp.appearance?.name == name,
+                  NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == name,
+                  selectedAppearance(appearance) == [title] else {
+                failAppearance("Appearance choice \(title) must apply and be exclusively checked")
+            }
+        }
+        let dark = appearance.item(withTitle: "Dark")!
+        _ = NSApp.sendAction(dark.action!, to: dark.target, from: dark)
+        let restored = AppDelegate(defaults: appearanceDefaults)
+        _ = restored.makeWorkbench(canvas: MapCanvas(model: MapModel(roots: [], selected: UUID())))
+        restored.installMenu()
+        guard NSApp.appearance?.name == .darkAqua,
+              let restoredMenu = NSApp.mainMenu?.item(withTitle: "View")?.submenu?
+                .item(withTitle: "Appearance")?.submenu,
+              selectedAppearance(restoredMenu) == ["Dark"] else {
+            failAppearance("Appearance choice must persist across delegate launch")
+        }
+        let system = restoredMenu.item(withTitle: "System")!
+        guard NSApp.sendAction(system.action!, to: system.target, from: system),
+              NSApp.appearance == nil, selectedAppearance(restoredMenu) == ["System"] else {
+            failAppearance("System appearance must return control to macOS")
+        }
+        appearanceDefaults.set("invalid", forKey: "appearance")
+        let invalid = AppDelegate(defaults: appearanceDefaults)
+        _ = invalid.makeWorkbench(canvas: MapCanvas(model: MapModel(roots: [], selected: UUID())))
+        invalid.installMenu()
+        guard NSApp.appearance == nil,
+              let invalidMenu = NSApp.mainMenu?.item(withTitle: "View")?.submenu?
+                .item(withTitle: "Appearance")?.submenu,
+              selectedAppearance(invalidMenu) == ["System"] else {
+            failAppearance("Invalid persisted appearance must fall back to System")
+        }
+        appearanceDefaults.removePersistentDomain(forName: suiteName)
         let foldRootID = UUID()
         let folding = MapModel(roots: [MapNode(id: foldRootID, title: "Fold", children: [
             MapNode(id: UUID(), title: "Leaf", children: [], folded: false)
