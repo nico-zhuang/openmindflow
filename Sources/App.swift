@@ -220,7 +220,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let label = source.node.folded && !source.node.children.isEmpty ? "▸ " + title : title
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: mapFont(isRoot: source.parent == nil, zoom: zoom),
-                .foregroundColor: NSColor.labelColor
+                .foregroundColor: source.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
         }
