@@ -83,8 +83,17 @@ enum CanvasCommandTests {
         assert(outlineToggle.action.map(NSStringFromSelector) == "toggleSidebar:")
         assert(outlineToggle.target as AnyObject? === workbench)
         let fileMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "File" }!
-        assert(fileMenu.item(withTitle: "Open MindNode (Read-only)…")?.keyEquivalent == "o")
-        assert(fileMenu.item(withTitle: "Open Own JSON…") != nil)
+        guard let mindNodeOpen = fileMenu.item(withTitle: "Open MindNode (Read-only)…"),
+              let ownJSONOpen = fileMenu.item(withTitle: "Open Own JSON…"),
+              mindNodeOpen.keyEquivalent == "o", mindNodeOpen.keyEquivalentModifierMask == [.command, .shift],
+              mindNodeOpen.action.map(NSStringFromSelector) == "openMindNode:",
+              mindNodeOpen.target as AnyObject? === appDelegate,
+              ownJSONOpen.keyEquivalent == "o", ownJSONOpen.keyEquivalentModifierMask == [.command],
+              ownJSONOpen.action.map(NSStringFromSelector) == "openFile:",
+              ownJSONOpen.target as AnyObject? === appDelegate else {
+            fputs("File shortcuts must be Cmd+O Own JSON and Cmd+Shift+O read-only MindNode, preserving actions and targets\n", stderr)
+            exit(1)
+        }
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let before = nodeMenu.item(withTitle: "New Sibling Before")!
         assert(before.keyEquivalent == "\r" && before.keyEquivalentModifierMask == [.option])

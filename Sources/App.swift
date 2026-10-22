@@ -674,8 +674,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         main.addItem(app)
         let file = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "o").target = self
-        fileMenu.addItem(withTitle: "Open Own JSON…", action: #selector(openFile(_:)), keyEquivalent: "").target = self
+        let readOnlyOpen = fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "o")
+        readOnlyOpen.keyEquivalentModifierMask = [.command, .shift]
+        readOnlyOpen.target = self
+        fileMenu.addItem(withTitle: "Open Own JSON…", action: #selector(openFile(_:)), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Save", action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         file.submenu = fileMenu
         main.addItem(file)
