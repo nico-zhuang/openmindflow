@@ -221,6 +221,27 @@ enum NativeWindowSelfCheck {
                   crossModel.undo(), crossModel.roots[0].children.map(\.id) == [source.id, destination.id] else {
                 finish("FAIL native cross-branch child-gap drop or undo", passed: false); return
             }
+            for round in 2...3 {
+                window.contentView?.layoutSubtreeIfNeeded()
+                let nodes = (canvas.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+                guard let sourceAX = nodes.first(where: { $0.accessibilityLabel() == source.title }),
+                      let beforeAX = nodes.first(where: { $0.accessibilityLabel() == before.title }),
+                      let afterAX = nodes.first(where: { $0.accessibilityLabel() == after.title }) else {
+                    finish("FAIL native cross-branch round \(round) coordinates unavailable", passed: false); return
+                }
+                let start = window.convertFromScreen(sourceAX.accessibilityFrame())
+                let upper = window.convertFromScreen(beforeAX.accessibilityFrame())
+                let lower = window.convertFromScreen(afterAX.accessibilityFrame())
+                let from = CGPoint(x: start.midX, y: start.midY)
+                let gap = CGPoint(x: upper.midX, y: (upper.minY + lower.maxY) / 2)
+                guard window.contentView?.hitTest(from) === canvas, window.contentView?.hitTest(gap) === canvas,
+                      send(.leftMouseDown, from), send(.leftMouseDragged, gap), send(.leftMouseUp, gap),
+                      crossModel.roots[0].children.map(\.id) == [destination.id],
+                      crossModel.roots[0].children[0].children.map(\.id) == [before.id, source.id, after.id],
+                      crossModel.undo(), crossModel.roots[0].children == [source, destination] else {
+                    finish("FAIL native cross-branch round \(round) drag or undo", passed: false); return
+                }
+            }
             let deep = MapNode(id: UUID(), title: "Deep", children: [], folded: false)
             let nested = MapNode(id: UUID(), title: "Nested", children: [
                 MapNode(id: UUID(), title: "Inner", children: [deep], folded: false)
@@ -320,7 +341,7 @@ enum NativeWindowSelfCheck {
                   mapLayout(canvas.model.roots).count == 30 else {
                 finish("FAIL native 30-node distant title typing, commit, or count", passed: false); return
             }
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true",
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true threeRoundDrag=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
