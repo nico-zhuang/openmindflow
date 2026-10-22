@@ -35,6 +35,10 @@ enum CanvasCommandTests {
         let text = NSTextView()
         canvas.selectAndEdit(childID)
         let field = canvas.subviews.compactMap { $0 as? NSTextField }.first!
+        if !field.isBordered || !field.drawsBackground {
+            fputs("Inline re-edit must show a visible native text field, not an invisible overlay\n", stderr)
+            exit(1)
+        }
         field.stringValue = "Committed child"
         assert(canvas.control(control, textView: text,
             doCommandBy: NSSelectorFromString("insertTabIgnoringFieldEditor:")))
@@ -149,6 +153,41 @@ enum CanvasCommandTests {
         reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, beforePoint))
         reorderCanvas.mouseUp(with: mouse(.leftMouseUp, beforePoint))
         assert(reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
+        let gapRows = mapLayout(reordered.roots)
+        let gapFrom = CGPoint(x: gapRows[1].frame.midX + 80,
+                              y: reorderCanvas.bounds.height - gapRows[1].frame.midY - 90)
+        let gap = CGPoint(x: gapRows[2].frame.midX + 80,
+                          y: reorderCanvas.bounds.height - (gapRows[2].frame.maxY + gapRows[3].frame.minY) / 2 - 90)
+        reorderCanvas.mouseDown(with: mouse(.leftMouseDown, gapFrom))
+        reorderCanvas.mouseDragged(with: mouse(.leftMouseDragged, gap))
+        reorderCanvas.mouseUp(with: mouse(.leftMouseUp, gap))
+        if reordered.roots[0].children.map(\.id) != [siblingIDs[2], siblingIDs[0], siblingIDs[1]] {
+            fputs("Dropping between siblings must reorder rather than be ignored\n", stderr)
+            exit(1)
+        }
+        assert(reordered.undo() && reordered.roots[0].children.map(\.id) == [siblingIDs[0], siblingIDs[2], siblingIDs[1]])
+        let tallBranch = MapNode(id: UUID(), title: "Tall", children: (0..<9).map {
+            MapNode(id: UUID(), title: "Leaf \($0)", children: [], folded: false)
+        }, folded: false)
+        let next = MapNode(id: UUID(), title: "Next", children: [], folded: false)
+        let last = MapNode(id: UUID(), title: "Last", children: [], folded: false)
+        let farModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [tallBranch, next, last], folded: false)], selected: last.id)
+        let farCanvas = MapCanvas(model: farModel)
+        farCanvas.frame = dragCanvas.frame
+        let farRows = mapLayout(farModel.roots)
+        let firstBox = farRows.first { $0.node.id == tallBranch.id }!.frame
+        let nextBox = farRows.first { $0.node.id == next.id }!.frame
+        let lastBox = farRows.first { $0.node.id == last.id }!.frame
+        let farStart = CGPoint(x: lastBox.midX + 80, y: farCanvas.bounds.height - lastBox.midY - 90)
+        let distantGap = CGPoint(x: nextBox.midX + 80,
+                                 y: farCanvas.bounds.height - (firstBox.maxY + nextBox.minY) / 2 - 90)
+        farCanvas.mouseDown(with: mouse(.leftMouseDown, farStart))
+        farCanvas.mouseDragged(with: mouse(.leftMouseDragged, distantGap))
+        farCanvas.mouseUp(with: mouse(.leftMouseUp, distantGap))
+        if farModel.roots[0].children.map(\.id) != [tallBranch.id, next.id, last.id] {
+            fputs("Distant whitespace under a tall subtree must not reorder siblings\n", stderr)
+            exit(1)
+        }
         let longChildren = (0..<30).map { MapNode(id: UUID(), title: "Idea \($0)", children: [], folded: false) }
         let longRoot = MapNode(id: UUID(), title: "Root", children: longChildren, folded: false)
         let smallCanvas = MapCanvas(model: MapModel(roots: [longRoot], selected: longRoot.id))
@@ -173,6 +212,50 @@ enum CanvasCommandTests {
         smallCanvas.scrollWheel(with: localWheel(30))
         assert(distantEditor.frame.origin != firstPosition,
                "Panning during editing must keep the text field attached to its node")
+        smallCanvas.scrollWheel(with: localWheel(-120, command: true))
+        if distantEditor.frame.height < 22 || distantEditor.font!.pointSize < 11 {
+            fputs("Bordered editor must remain readable at minimum canvas zoom\n", stderr)
+            exit(1)
+        }
+        let multiline = MapNode(id: UUID(), title: "One\nTwo\nThree\nFour", children: [], folded: false)
+        let multilineCanvas = MapCanvas(model: MapModel(roots: [multiline], selected: multiline.id))
+        multilineCanvas.frame = dragCanvas.frame
+        multilineCanvas.selectAndEdit(multiline.id)
+        multilineCanvas.scrollWheel(with: localWheel(-120, command: true))
+        let multilineField = multilineCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        let textHeight = (multiline.title as NSString).boundingRect(
+            with: CGSize(width: multilineField.frame.width - 8, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: multilineField.font!]).height
+        if multilineField.frame.height < ceil(textHeight) + 6 {
+            fputs("Bordered multiline editor must contain its text at minimum zoom\n", stderr)
+            exit(1)
+        }
+        let deepLeaf = MapNode(id: UUID(), title: "Deep", children: [], folded: false)
+        let deepBranch = MapNode(id: UUID(), title: "Branch", children: [deepLeaf], folded: false)
+        let deepRoot = MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Middle", children: [deepBranch], folded: false)
+        ], folded: false)
+        let edgeCanvas = MapCanvas(model: MapModel(roots: [deepRoot], selected: deepRoot.id))
+        edgeCanvas.frame = CGRect(x: 0, y: 0, width: 420, height: 260)
+        edgeCanvas.scrollWheel(with: localWheel(-120, command: true))
+        edgeCanvas.selectAndEdit(deepLeaf.id)
+        let edgeField = edgeCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        if edgeField.frame.maxX > edgeCanvas.bounds.maxX - 28 + 0.1 {
+            fputs("Expanded low-zoom editor must remain inside narrow canvas viewport: \(edgeField.frame) / \(edgeCanvas.bounds)\n", stderr)
+            exit(1)
+        }
+        let wideNode = MapNode(id: UUID(), title: String(repeating: "Long idea ", count: 20), children: [], folded: false)
+        let narrowCanvas = MapCanvas(model: MapModel(roots: [wideNode], selected: wideNode.id))
+        narrowCanvas.frame = CGRect(x: 0, y: 0, width: 220, height: 300)
+        narrowCanvas.scrollWheel(with: localWheel(-120, command: true))
+        narrowCanvas.selectAndEdit(wideNode.id)
+        let narrowField = narrowCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        if narrowField.frame.width > narrowCanvas.bounds.width - 56 + 0.1 ||
+            narrowField.frame.minX < 28 - 0.1 || narrowField.frame.maxX > narrowCanvas.bounds.maxX - 28 + 0.1 {
+            fputs("Long-title editor cannot be wider than the visible narrow canvas\n", stderr)
+            exit(1)
+        }
         let visualRoot = MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: UUID(), title: "Source", children: [], folded: false),
             MapNode(id: UUID(), title: "Destination", children: [], folded: false)
@@ -270,9 +353,12 @@ enum CanvasCommandTests {
                                    y: refit.minY + (rootWorld.minY - fittedWorld.minY) * fittedZoom,
                                    width: rootWorld.width * fittedZoom, height: rootWorld.height * fittedZoom)
         let textArea = projectedRoot.insetBy(dx: 12 * fittedZoom, dy: 11 * fittedZoom)
-        assert(abs(rootEditor.frame.minX - textArea.minX) < 0.1 && abs(rootEditor.frame.minY - textArea.minY) < 0.1 &&
-               abs(rootEditor.frame.width - textArea.width) < 0.1 && abs(rootEditor.frame.height - textArea.height) < 0.1,
-               "Active editor must use the same text area as the painted label")
+        if abs(rootEditor.frame.minX - textArea.minX) >= 0.1 ||
+            abs(rootEditor.frame.midY - projectedRoot.midY) >= 0.1 ||
+            rootEditor.frame.width < textArea.width || rootEditor.frame.height < textArea.height {
+            fputs("Active bordered editor must contain the painted label area and remain centered\n", stderr)
+            exit(1)
+        }
         fitCanvas.selectAndEdit(fitRoot.children[0].id)
         let branchEditor = fitCanvas.subviews.compactMap { $0 as? NSTextField }.first!
         assert(branchEditor.font == mapFont(isRoot: false, zoom: fittedZoom))

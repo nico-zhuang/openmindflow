@@ -84,6 +84,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
                width: frame.width * zoom, height: frame.height * zoom)
     }
+    private func editorFrame(_ node: LaidOutNode) -> CGRect {
+        let box = screen(node.frame)
+        let width = min(max(120, (node.frame.width - 24) * max(zoom, 0.8)),
+                        bounds.width > 128 ? bounds.width - 56 : .greatestFiniteMagnitude)
+        let font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
+        let textHeight = (node.node.title as NSString).boundingRect(
+            with: CGSize(width: width - 8, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
+        let height = max(22, box.height - 22 * zoom, ceil(textHeight) + 6)
+        // ponytail: a multiline editor taller than the viewport needs a scrollable text view.
+        return CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
+                      width: width, height: height)
+    }
     @discardableResult
     func fitMapInView() -> CGRect {
         guard bounds.width > 128, bounds.height > 128 else { return .null }
@@ -94,8 +107,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                                      (bounds.height - 128) / world.height)))
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
         let selected = nodes.first(where: { $0.node.id == model.selected })
-        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
-        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
+        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
+        editor?.frame = selected.map(editorFrame) ?? .zero
         needsDisplay = true
         return screen(world)
     }
@@ -103,21 +116,34 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
     private func validDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
         -> (target: LaidOutNode, parent: UUID, index: Int)? {
-        guard let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) else { return nil }
         let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
-        let siblings = nodes.filter { $0.parent == target.parent }
-        guard let place = dropPlacement(at: local, over: target, siblings: siblings),
-              model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
-        return (target, place.parent, place.index)
+        if let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) {
+            let siblings = nodes.filter { $0.parent == target.parent }
+            guard let place = dropPlacement(at: local, over: target, siblings: siblings),
+                  model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
+            return (target, place.parent, place.index)
+        }
+        // ponytail: sibling gaps only; arbitrary XY needs persisted coordinates and collision layout.
+        guard let parent = nodes.first(where: { $0.node.id == source })?.parent else { return nil }
+        let siblings = nodes.filter { $0.parent == parent }
+        guard let index = siblings.firstIndex(where: { $0.frame.minY > local.y }), index > 0 else { return nil }
+        let before = siblings[index - 1], after = siblings[index]
+        let beforeDistance = local.y - before.frame.maxY, afterDistance = after.frame.minY - local.y
+        guard beforeDistance > 0, afterDistance > 0, min(beforeDistance, afterDistance) <= 24,
+              local.x >= min(before.frame.minX, after.frame.minX) - 20,
+              local.x <= max(before.frame.maxX, after.frame.maxX) + 20,
+              model.canMoveNode(source, to: parent, at: index) else { return nil }
+        return (beforeDistance < afterDistance ? before : after, parent, index)
     }
     private func revealSelection() {
-        guard bounds.width > 64, bounds.height > 64, let frame = selectedNode()?.frame else { return }
-        let box = screen(frame), margin: CGFloat = 28
+        guard bounds.width > 64, bounds.height > 64, let node = selectedNode() else { return }
+        let box = editor == nil ? screen(node.frame) : editorFrame(node), margin: CGFloat = 28
         if box.minX < bounds.minX + margin { offset.x += bounds.minX + margin - box.minX }
         else if box.maxX > bounds.maxX - margin { offset.x -= box.maxX - bounds.maxX + margin }
-        if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
+        if box.height > bounds.height - 2 * margin { offset.y += bounds.minY + margin - box.minY }
+        else if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
         else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
-        editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
+        editor?.frame = selectedNode().map(editorFrame) ?? .zero
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -196,16 +222,18 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard editor == nil else { return }
         revealSelection()
         guard let node = selectedNode() else { return }
-        let field = NSTextField(frame: screen(node.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom))
+        let field = NSTextField(frame: editorFrame(node))
         field.stringValue = node.node.title
-        field.font = mapFont(isRoot: node.parent == nil, zoom: zoom)
+        field.font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
         field.textColor = .labelColor
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
+        field.isBordered = true
+        field.drawsBackground = true
+        field.backgroundColor = .textBackgroundColor
+        field.focusRingType = .default
         field.delegate = self
         addSubview(field)
         editor = field
+        revealSelection()
         window?.makeFirstResponder(field)
         field.currentEditor()?.selectAll(nil)
         needsDisplay = true
@@ -347,7 +375,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             offset.x += point.x - origin.x
             offset.y += point.y - origin.y
             dragOrigin = point
-            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
+            editor?.frame = selectedNode().map(editorFrame) ?? .zero
             needsDisplay = true
         }
     }
@@ -364,8 +392,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         offset.y = point.y - (point.y - offset.y) * next / zoom
         zoom = next
         let selected = selectedNode()
-        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: zoom) }
-        editor?.frame = selected.map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
+        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
+        editor?.frame = selected.map(editorFrame) ?? .zero
         needsDisplay = true
     }
     override func scrollWheel(with event: NSEvent) {
@@ -374,7 +402,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else {
             offset.x += event.scrollingDeltaX
             offset.y += event.scrollingDeltaY
-            editor?.frame = selectedNode().map { screen($0.frame).insetBy(dx: 12 * zoom, dy: 11 * zoom) } ?? .zero
+            editor?.frame = selectedNode().map(editorFrame) ?? .zero
             needsDisplay = true
         }
     }
