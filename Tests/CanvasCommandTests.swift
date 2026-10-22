@@ -252,6 +252,78 @@ enum CanvasCommandTests {
         let distantEditor = smallCanvas.subviews.compactMap { $0 as? NSTextField }.first!
         assert(distantEditor.frame.maxY <= smallCanvas.bounds.maxY - 24,
                "Editing a distant node must reveal its field inside the canvas")
+        let shortChildren = (0..<30).map { MapNode(id: UUID(), title: "N\($0)", children: [], folded: false) }
+        let shortRoot = MapNode(id: UUID(), title: "Root", children: shortChildren, folded: false)
+        let editCanvas = MapCanvas(model: MapModel(roots: [shortRoot], selected: shortChildren[0].id))
+        var editChanges = 0
+        editCanvas.onChange = { editChanges += 1 }
+        editCanvas.frame = CGRect(x: 0, y: 0, width: 420, height: 260)
+        let fit = editCanvas.fitMapInView(), world = mapLayout([shortRoot]).reduce(CGRect.null) { $0.union($1.frame) }
+        guard abs(fit.width / world.width - 0.35) < 0.001 else {
+            fputs("Thirty short child nodes must exercise minimum 0.35 zoom\n", stderr); exit(1)
+        }
+        let rootCanvas = MapCanvas(model: MapModel(roots: [shortRoot], selected: shortRoot.id))
+        rootCanvas.frame = editCanvas.frame
+        _ = rootCanvas.fitMapInView()
+        rootCanvas.selectAndEdit(shortRoot.id)
+        let layout = mapLayout([shortRoot])
+        func rootPaintAvoidsChild() -> Bool {
+            guard let field = rootCanvas.subviews.compactMap({ $0 as? NSTextField }).first,
+                  let zoom = Mirror(reflecting: rootCanvas).children.first(where: { $0.label == "zoom" })?.value as? CGFloat,
+                  zoom >= 0.8 - 0.001, field.frame.width >= 120, field.frame.height >= 22,
+                  rootCanvas.bounds.insetBy(dx: 28, dy: 28).contains(field.frame) else { return false }
+            let rootLeft = field.frame.minX - 12 * zoom
+            let paintedRight = max(rootLeft + layout[0].frame.width * zoom, field.frame.maxX + 5)
+            let childLeft = rootLeft + (layout[1].frame.minX - layout[0].frame.minX) * zoom
+            return paintedRight + 2 <= childLeft
+        }
+        let initiallySeparated = rootPaintAvoidsChild()
+        _ = rootCanvas.fitMapInView() // Toolbar Fit Map must not shrink an active editor back to 0.35.
+        let refitSeparated = rootPaintAvoidsChild()
+        let zoomOut = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                              wheelCount: 1, wheel1: -120, wheel2: 0, wheel3: 0)!
+        zoomOut.flags = .maskCommand
+        rootCanvas.scrollWheel(with: NSEvent(cgEvent: zoomOut)!) // Local event only; never posted.
+        let wheelSeparated = rootPaintAvoidsChild()
+        if !initiallySeparated || !refitSeparated || !wheelSeparated {
+            fputs("Root editor must not paint into child column initial=\(initiallySeparated) fit=\(refitSeparated) zoomOut=\(wheelSeparated)\n", stderr)
+            exit(1) // Expected RED without an assertion crash dialog.
+        }
+        rootCanvas.commitEditing()
+        let idleFit = rootCanvas.fitMapInView()
+        assert(abs(idleFit.width / world.width - 0.35) < 0.001,
+               "Fit Map must retain the ordinary 0.35 minimum after editing ends")
+        editCanvas.selectAndEdit(shortChildren[0].id)
+        guard let editField = editCanvas.subviews.compactMap({ $0 as? NSTextField }).first,
+              editField.frame.width >= 120, editField.frame.height >= 22,
+              editCanvas.bounds.insetBy(dx: 28, dy: 28).contains(editField.frame) else {
+            fputs("Low-zoom native editor must remain readable and inside viewport\n", stderr); exit(1)
+        }
+        let borders = [CGPoint(x: editField.frame.maxX + 5, y: editField.frame.midY),
+                       CGPoint(x: editField.frame.midX, y: editField.frame.maxY + 5)]
+        guard borders.allSatisfy(editCanvas.bounds.contains) else {
+            fputs("No room to measure edit-state borders\n", stderr); exit(1)
+        }
+        func paintedBorders() -> [NSColor?] {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 420, pixelsHigh: 260,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let context = NSGraphicsContext(bitmapImageRep: bitmap)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            editCanvas.draw(editCanvas.bounds) // Canvas paint only; exclude the native field subview.
+            NSGraphicsContext.restoreGraphicsState()
+            return borders.map { bitmap.colorAt(x: Int($0.x), y: Int(editCanvas.bounds.height - $0.y)) }
+                + [bitmap.colorAt(x: 1, y: 1)] // Untouched canvas backdrop.
+        }
+        let editingColors = paintedBorders()
+        editCanvas.commitEditing()
+        if editingColors[0] == editingColors[2] || editingColors[1] == editingColors[2] {
+            fputs("Selected node paint must enclose the editor on right and bottom, not just the viewport\n", stderr)
+            exit(1) // Expected RED without an assertion crash dialog.
+        }
+        assert(editCanvas.model.roots == [shortRoot] && editChanges == 0 && !editCanvas.model.undo(),
+               "Editor paint must not mutate model or undo history")
         let oversized = MapNode(id: UUID(), title: String(repeating: "Long editable idea ", count: 80),
                                 children: [], folded: false)
         let oversizedModel = MapModel(roots: [oversized], selected: oversized.id)

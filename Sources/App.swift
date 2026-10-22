@@ -110,12 +110,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let nodes = visibleNodes()
         guard !nodes.isEmpty else { return .null }
         let world = nodes.reduce(CGRect.null) { $0.union($1.frame) }
-        zoom = min(1, max(0.35, min((bounds.width - 128) / world.width,
-                                     (bounds.height - 128) / world.height)))
+        zoom = min(1, max(editor == nil ? 0.35 : 0.8,
+                          min((bounds.width - 128) / world.width, (bounds.height - 128) / world.height)))
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
         let selected = nodes.first(where: { $0.node.id == model.selected })
         if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
         editor?.frame = selected.map(editorFrame) ?? .zero
+        if editor != nil { revealSelection() }
         needsDisplay = true
         return screen(world)
     }
@@ -181,7 +182,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         for item in nodes {
             let box = screen(item.frame)
-            let shape = NSBezierPath(roundedRect: box, xRadius: 11 * zoom, yRadius: 11 * zoom)
+            var paintedBox = box
+            if item.node.id == model.selected, let editor {
+                paintedBox = box.union(editor.frame.insetBy(dx: -5, dy: -5))
+            }
+            let shape = NSBezierPath(roundedRect: paintedBox, xRadius: 11 * zoom, yRadius: 11 * zoom)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
             (item.node.id == model.selected || hovered ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
             NSColor.controlBackgroundColor.setFill()
@@ -230,6 +235,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard editor == nil else { return }
         revealSelection()
         guard let node = selectedNode() else { return }
+        if zoom < 0.8 {
+            let box = screen(node.frame)
+            zoom(at: CGPoint(x: box.midX, y: box.midY), by: 0.8 / zoom)
+            revealSelection()
+        }
         let field = NSTextField(frame: editorFrame(node))
         field.stringValue = node.node.title
         field.font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
@@ -395,7 +405,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
            model.moveNode(source, to: placement.parent, at: placement.index) { changed() }
     }
     private func zoom(at point: CGPoint, by factor: CGFloat) {
-        let next = min(3, max(0.35, zoom * factor))
+        let next = min(3, max(editor == nil ? 0.35 : 0.8, zoom * factor))
         offset.x = point.x - (point.x - offset.x) * next / zoom
         offset.y = point.y - (point.y - offset.y) * next / zoom
         zoom = next
