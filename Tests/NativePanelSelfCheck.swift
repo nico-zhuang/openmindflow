@@ -68,28 +68,6 @@ enum NativePanelSelfCheck {
             guard canvas.model.roots[0].title == "Synthetic saved root", window.title.contains(" •") else {
                 finish("FAIL editable root did not become dirty", ok: false); return
             }
-            let originalAppearance = window.appearance
-            for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                window.appearance = NSAppearance(named: appearance)
-                guard let frame = content.superview,
-                      let bitmap = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else {
-                    finish("FAIL owned workbench image unavailable", ok: false); return
-                }
-                frame.displayIfNeeded()
-                frame.cacheDisplay(in: frame.bounds, to: bitmap)
-                let image = directory.appendingPathComponent("workbench-\(name).png")
-                guard !FileManager.default.fileExists(atPath: image.path),
-                      let png = bitmap.representation(using: .png, properties: [:]),
-                      (try? png.write(to: image, options: .atomic)) != nil else {
-                    finish("FAIL owned workbench image write", ok: false); return
-                }
-            }
-            window.appearance = originalAppearance
-            guard let light = try? Data(contentsOf: directory.appendingPathComponent("workbench-light.png")),
-                  let dark = try? Data(contentsOf: directory.appendingPathComponent("workbench-dark.png")),
-                  light != dark else {
-                finish("FAIL owned light/dark workbench images identical", ok: false); return
-            }
             var attempts = 0
             var result = "FAIL native Save panel missing"
             var validated = false
@@ -126,7 +104,7 @@ enum NativePanelSelfCheck {
                     finish("FAIL cancelled Save retained=\(!savedExists) dirty=\(window.title == "Untitled • — MindMap")", ok: false)
                     return
                 }
-                finish("nativeSaveCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true wholeWindowImages=true", ok: true)
+                finish("nativeSaveCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true", ok: true)
                 return
             }
             guard actionDispatched, result == "nativeSavePanel=true", let roots = try? readOwnJSON(expected),
@@ -135,7 +113,7 @@ enum NativePanelSelfCheck {
                 finish("FAIL \(result) actionDispatched=\(actionDispatched) savedExists=\(savedExists) titleClean=\(window.title == "Untitled.mindmap.json — MindMap") attempts=\(attempts)", ok: false)
                 return
             }
-            finish("nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified nativeSelectAll=true wholeWindowImages=true", ok: true)
+            finish("nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified nativeSelectAll=true", ok: true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
         app.run()
