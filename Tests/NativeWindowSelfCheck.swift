@@ -131,8 +131,20 @@ enum NativeWindowSelfCheck {
                   reopened.currentEditor() != nil, reopened.stringValue == "Synthetic revised" else {
                 finish("FAIL submitted title did not reopen for a second native edit", passed: false); return
             }
-            guard capture("png") else {
-                finish("FAIL synthetic editor snapshot could not be saved safely", passed: false); return
+            let inheritedAppearance = canvas.appearance
+            canvas.appearance = NSAppearance(named: .aqua)
+            canvas.needsDisplay = true
+            let light = capture("light.png")
+            canvas.appearance = NSAppearance(named: .darkAqua)
+            canvas.needsDisplay = true
+            let dark = capture("dark.png")
+            canvas.appearance = inheritedAppearance
+            canvas.needsDisplay = true
+            guard light, dark,
+                  let lightData = try? Data(contentsOf: report.deletingPathExtension().appendingPathExtension("light.png")),
+                  let darkData = try? Data(contentsOf: report.deletingPathExtension().appendingPathExtension("dark.png")),
+                  lightData != darkData else {
+                finish("FAIL editor light/dark synthetic images missing or identical", passed: false); return
             }
             canvas.commitEditing()
             let gapWorld = CGPoint(x: secondFrame.midX,
@@ -151,7 +163,7 @@ enum NativeWindowSelfCheck {
             let order = model.roots[0].children.map(\.id)
             let reordered = order == [second.id, first.id, third.id]
             let undone = canvas.model.undo() && model.roots[0].children.map(\.id) == [first.id, second.id, third.id]
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true gapReorder=\(reordered) undo=\(undone)",
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone)",
                    passed: hasFieldEditor && renamed && reordered && undone)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
