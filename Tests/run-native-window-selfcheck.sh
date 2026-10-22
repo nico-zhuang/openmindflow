@@ -25,7 +25,7 @@ NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: env["SELFTEST_APP"]!
 RunLoop.main.run(until: Date().addingTimeInterval(8))
 if let text = try? String(contentsOfFile: env["SELFTEST_REPORT"]!, encoding: .utf8) {
     print(text, terminator: "")
-    exit(text.contains("secondEdit=true") && text.contains("lightDarkImages=true") && text.contains("gapReorder=true") && text.contains("undo=true") ? 0 : 1)
+    exit(text.contains("secondEdit=true") && text.contains("markedText=true") && text.contains("lightDarkImages=true") && text.contains("gapReorder=true") && text.contains("undo=true") && text.contains("reparentUndo=true") && text.contains("invalidPreserved=true") ? 0 : 1)
 }
 fputs("SELFTEST_NO_REPORT\n", stderr)
 exit(1)

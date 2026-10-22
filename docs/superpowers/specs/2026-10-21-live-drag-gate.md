@@ -46,7 +46,7 @@
 
 ## 2026-10-22 Agent 自主原生窗口复核
 
-在新建的 `0700` 标记目录复制独立 App，运行 [NativeWindowSelfCheck.swift](../../../Tests/NativeWindowSelfCheck.swift) 的**可见且 key 的合成窗口**，只向自身 `NSWindow.sendEvent`，不投递桌面全局鼠标或查看用户导图。修复前 PID `17145` 报告 `hit=MapCanvas`、两次编辑结束通知、双击字段消失；追至 `mouseDown` 在 `beginEditing` 聚焦字段后又 `makeFirstResponder(editor ?? self)`。删掉重复设焦点的一处调用后，独立 PID `19497`、`20037` 验证原生 `NSTextView` 持续聚焦，提交后**第二次双击重编辑**、同级空隙拖影/指示器、松手改序和撤销均通过；Agent 实际读图确认浅/深主题的合成编辑框可见。九项无窗口回归、`bash build.sh`、最新 `dist/MindMap-Native-Interaction-Preview.zip` 的 ZIP 完整性和可执行文件哈希通过；未将应用内局部事件冒充真实硬件鼠标，也未动 PID `11067`。
+在新建的 `0700` 标记目录复制独立 App，运行 [NativeWindowSelfCheck.swift](../../../Tests/NativeWindowSelfCheck.swift) 的**可见且 key 的合成窗口**，只向自身 `NSWindow.sendEvent`，不投递桌面全局鼠标或查看用户导图。修复前 PID `17145` 报告 `hit=MapCanvas`、两次编辑结束通知、双击字段消失；追至 `mouseDown` 在 `beginEditing` 聚焦字段后又 `makeFirstResponder(editor ?? self)`。删掉重复设焦点的一处调用后，独立 PID `19497`、`20037` 验证原生 `NSTextView` 持续聚焦，提交后**第二次双击重编辑**、同级空隙拖影/指示器、松手改序及撤销、拖入其他节点改归属并撤销、无效空白投放不改树均通过；原生 `NSTextView` 的中文 marked-text 组合→提交→模型标题正确，Agent 实际读图确认浅/深主题的合成中文编辑框可见。九项无窗口回归、`bash build.sh`、最新 `dist/MindMap-Native-Interaction-Preview.zip` 的 ZIP 完整性和可执行文件哈希通过；未将应用内局部事件冒充真实硬件鼠标，也未动 PID `11067`。
 
 G2/T3 的真实文件面板仍未通过：自有 App 的现成 AX 开窗夹具能打开 Open，却未能到达 Go to Folder 输入框，自动取消前未读用户文件；另一个自有 `NSSavePanel` 探针发现面板的 `directoryURL`/文件名属性虽然设为自有临时目录，实际 `url` 仍在目录外，因而**没有点击 Save**，探针已撤回。直接 JSON 持久化的无窗口闭环继续通过，但不能代替原生选择器验收。
 

@@ -131,6 +131,18 @@ enum NativeWindowSelfCheck {
                   reopened.currentEditor() != nil, reopened.stringValue == "Synthetic revised" else {
                 finish("FAIL submitted title did not reopen for a second native edit", passed: false); return
             }
+            guard let input = reopened.currentEditor() as? NSTextView else {
+                finish("FAIL inline field editor is not native NSTextView", passed: false); return
+            }
+            input.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+            guard input.hasMarkedText() else {
+                finish("FAIL native inline field rejected marked Chinese composition", passed: false); return
+            }
+            input.insertText("中文编辑", replacementRange: NSRange(location: NSNotFound, length: 0))
+            guard !input.hasMarkedText(), input.string == "中文编辑" else {
+                finish("FAIL marked Chinese composition did not commit into inline field", passed: false); return
+            }
             let inheritedAppearance = canvas.appearance
             canvas.appearance = NSAppearance(named: .aqua)
             canvas.needsDisplay = true
@@ -147,6 +159,9 @@ enum NativeWindowSelfCheck {
                 finish("FAIL editor light/dark synthetic images missing or identical", passed: false); return
             }
             canvas.commitEditing()
+            guard model.roots[0].children[0].title == "中文编辑" else {
+                finish("FAIL native marked text was not saved into model", passed: false); return
+            }
             let gapWorld = CGPoint(x: secondFrame.midX,
                                    y: (secondFrame.maxY + thirdFrame.minY) / 2)
             let gap = canvas.convert(CGPoint(x: fit.minX + (gapWorld.x - world.minX) * scale,
@@ -163,8 +178,25 @@ enum NativeWindowSelfCheck {
             let order = model.roots[0].children.map(\.id)
             let reordered = order == [second.id, first.id, third.id]
             let undone = canvas.model.undo() && model.roots[0].children.map(\.id) == [first.id, second.id, third.id]
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone)",
-                   passed: hasFieldEditor && renamed && reordered && undone)
+            let secondPoint = point(secondFrame)
+            guard send(.leftMouseDown, firstPoint), send(.leftMouseDragged, secondPoint),
+                  send(.leftMouseUp, secondPoint) else {
+                finish("FAIL synthetic reparent events", passed: false); return
+            }
+            let reparented = model.roots[0].children.map(\.id) == [second.id, third.id] &&
+                model.roots[0].children[0].children.map(\.id) == [first.id]
+            let reparentUndo = reparented && canvas.model.undo() &&
+                model.roots[0].children.map(\.id) == [first.id, second.id, third.id]
+            let beforeInvalid = model.roots
+            let invalid = canvas.convert(CGPoint(x: canvas.bounds.maxX - 40,
+                                                  y: canvas.bounds.maxY - 40), to: nil)
+            guard send(.leftMouseDown, firstPoint), send(.leftMouseDragged, invalid),
+                  send(.leftMouseUp, invalid) else {
+                finish("FAIL synthetic invalid drop events", passed: false); return
+            }
+            let invalidPreserved = model.roots == beforeInvalid
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved)",
+                   passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
         app.run()
