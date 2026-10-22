@@ -20,6 +20,7 @@ enum NativePanelSelfCheck {
               !FileManager.default.fileExists(atPath: ready.path) else { exit(1) }
         let opening = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "open-cancel"
         let failing = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure"
+        let toolbarMode = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "toolbar-new-child"
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let document = AppDelegate()
@@ -32,7 +33,9 @@ enum NativePanelSelfCheck {
             catch { fputs("REPORT_WRITE_FAILED\n", stderr); exit(1) }
             exit(ok ? 0 : 1)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { finish("FAIL native panel timeout", ok: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (toolbarMode ? 22 : 15)) {
+            finish("FAIL \(toolbarMode ? "native toolbar" : "native panel") timeout", ok: false)
+        }
         var focusChecks = 0
         func exercise() {
             guard app.isActive, let window = app.keyWindow, let content = window.contentView else {
@@ -52,6 +55,33 @@ enum NativePanelSelfCheck {
                 views += view.subviews
             }
             guard let canvas else { finish("FAIL native canvas missing", ok: false); return }
+            if toolbarMode {
+                guard window.isVisible, window.isKeyWindow,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
+                      canvas.model.roots.count == 1, canvas.model.roots[0].children.isEmpty,
+                      window.toolbar?.items.contains(where: { $0.label == "New Child" }) == true else {
+                    finish("FAIL owned toolbar setup", ok: false); return
+                }
+                do { try "ready\n".write(to: ready, atomically: true, encoding: .utf8) }
+                catch { finish("FAIL owned toolbar ready marker", ok: false); return }
+                var checks = 0
+                func verifyPress() {
+                    checks += 1
+                    if canvas.model.roots[0].children.count == 1 {
+                        let editor = canvas.subviews.compactMap { $0 as? NSTextField }.first
+                        let child = canvas.model.roots[0].children[0]
+                        guard canvas.model.selected == child.id, window.title == "Untitled • — MindMap",
+                              editor?.currentEditor() != nil, window.firstResponder is NSTextView else {
+                            finish("FAIL toolbar child selection, dirty title, or native editor", ok: false); return
+                        }
+                        finish("nativeToolbarNewChild=true selectedChild=true dirty=true nativeEditor=true", ok: true)
+                    } else if checks < 80 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: verifyPress)
+                    } else { finish("FAIL toolbar New Child AX press not observed", ok: false) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: verifyPress)
+                return
+            }
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "outline-return" {
                 var queue = [content]
                 var outline: NSOutlineView?

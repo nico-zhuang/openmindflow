@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --save-failure && $1 != --check-open-guard && $1 != --outline-return ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--save-failure|--check-open-guard|--outline-return]\n' "$0" >&2; exit 2; fi
+if [[ $# -gt 1 || ( $# -eq 1 && $1 != --cancel && $1 != --open-cancel && $1 != --save-failure && $1 != --check-open-guard && $1 != --outline-return && $1 != --toolbar-new-child ) ]]; then printf 'Usage: %s [--cancel|--open-cancel|--save-failure|--check-open-guard|--outline-return|--toolbar-new-child]\n' "$0" >&2; exit 2; fi
 cd "$(dirname "$0")/.."
 if [[ ${1:-} == --check-open-guard ]]; then
   swift -e 'import Foundation
@@ -31,6 +31,7 @@ let env = ProcessInfo.processInfo.environment
 let opening = env["SELFTEST_CANCEL"] == "--open-cancel"
 let failing = env["SELFTEST_CANCEL"] == "--save-failure"
 let outlineReturn = env["SELFTEST_CANCEL"] == "--outline-return"
+let toolbarNewChild = env["SELFTEST_CANCEL"] == "--toolbar-new-child"
 let cancelling = env["SELFTEST_CANCEL"] == "--cancel" || opening
 let directory = URL(fileURLWithPath: env["SELFTEST_DIR"]!).resolvingSymlinksInPath()
 let ownApp = URL(fileURLWithPath: env["SELFTEST_APP"]!).resolvingSymlinksInPath()
@@ -45,6 +46,45 @@ guard (outlineReturn || AXIsProcessTrusted()),
 func attribute(_ item: AXUIElement, _ key: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(item, key as CFString, &value) == .success ? value : nil
+}
+func toolbarNewChildButton(for pid: pid_t) -> AXUIElement? {
+    func children(_ item: AXUIElement) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(item, kAXChildrenAttribute as CFString, &value) {
+        case .success: return value as? [AXUIElement]
+        case .noValue, .attributeUnsupported: return []
+        default: return nil // Never mistake a failed AX query for a leaf.
+        }
+    }
+    guard let windows = attribute(AXUIElementCreateApplication(pid), kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+    let ownWindows = windows.filter { attribute($0, kAXTitleAttribute) as? String == "Untitled — MindMap" }
+    guard ownWindows.count == 1 else { return nil }
+    var queue = [ownWindows[0]], toolbars: [AXUIElement] = [], index = 0
+    while index < queue.count {
+        guard index < 400 else { return nil }
+        let item = queue[index]; index += 1
+        guard let role = attribute(item, kAXRoleAttribute) as? String,
+              let next = children(item) else { return nil }
+        if role == kAXToolbarRole { toolbars.append(item) }
+        queue += next
+    }
+    guard toolbars.count == 1 else { return nil }
+    queue = [toolbars[0]]; index = 0
+    var matches: [AXUIElement] = []
+    while index < queue.count {
+        guard index < 100 else { return nil }
+        let item = queue[index]; index += 1
+        guard let role = attribute(item, kAXRoleAttribute) as? String,
+              let next = children(item) else { return nil }
+        let exactLabel = attribute(item, kAXTitleAttribute) as? String == "New Child" ||
+                         attribute(item, kAXDescriptionAttribute) as? String == "New Child"
+        if role == kAXButtonRole,
+           exactLabel, (attribute(item, kAXEnabledAttribute) as? NSNumber)?.boolValue == true {
+            matches.append(item)
+        }
+        queue += next
+    }
+    return matches.count == 1 ? matches[0] : nil
 }
 func panelButton(for pid: pid_t, wanted: String) -> AXUIElement? {
     let ax = AXUIElementCreateApplication(pid)
@@ -92,7 +132,7 @@ configuration.createsNewApplicationInstance = true
 configuration.activates = true
 configuration.environment = ["MINDMAP_SELFTEST_REPORT": report.path,
                              "MINDMAP_SELFTEST_PANEL_DIR": directory.path,
-                             "MINDMAP_PANEL_ACTION": outlineReturn ? "outline-return" : failing ? "save-failure" : opening ? "open-cancel" : cancelling ? "cancel" : "save"]
+                             "MINDMAP_PANEL_ACTION": toolbarNewChild ? "toolbar-new-child" : outlineReturn ? "outline-return" : failing ? "save-failure" : opening ? "open-cancel" : cancelling ? "cancel" : "save"]
 NSWorkspace.shared.openApplication(at: ownApp, configuration: configuration) { app, error in
     if let app { print("PANEL_LAUNCH_REQUEST=\(app.bundleIdentifier ?? "unknown")") }
     else { fputs("PANEL_LAUNCH_FAILED=\(error?.localizedDescription ?? "unknown")\n", stderr) }
@@ -105,18 +145,28 @@ func ownedRunning() -> NSRunningApplication? {
 }
 var pressed = false
 var alertDismissed = false
-let deadline = Date().addingTimeInterval(18)
+let deadline = Date().addingTimeInterval(toolbarNewChild ? 24 : 18)
 while Date() < deadline {
     if let text = try? String(contentsOf: report, encoding: .utf8) {
         print(text, terminator: "")
-        let expected = outlineReturn ? "nativeOutlineReturn=true sameNode=true noSibling=true key=true"
+        let expected = toolbarNewChild ? "nativeToolbarNewChild=true selectedChild=true dirty=true nativeEditor=true"
+                       : outlineReturn ? "nativeOutlineReturn=true sameNode=true noSibling=true key=true"
                        : failing ? "nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true"
                        : opening ? "nativeOpenCancel=true ownModelRetained=true dirtyRetained=true"
                        : cancelling ? "nativeSaveCancel=true ownModelRetained=true dirtyRetained=true"
                                     : "nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified"
         exit(text.contains(expected) && (outlineReturn || pressed) && (!failing || alertDismissed) ? 0 : 1)
     }
-    if !outlineReturn, !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
+    if toolbarNewChild, !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
+       let owned = ownedRunning(),
+       NSWorkspace.shared.frontmostApplication?.processIdentifier == owned.processIdentifier,
+       let button = toolbarNewChildButton(for: owned.processIdentifier) {
+        let status = AXUIElementPerformAction(button, kAXPressAction as CFString)
+        print("OWNED_TOOLBAR_NEW_CHILD_AX_PRESS=\(status.rawValue) pid=\(owned.processIdentifier)")
+        guard status == .success else { _ = owned.terminate(); exit(1) }
+        pressed = true
+    }
+    if !outlineReturn, !toolbarNewChild, !pressed, (try? String(contentsOf: ready, encoding: .utf8)) == "ready\n",
        let owned = ownedRunning(), let button = panelButton(for: owned.processIdentifier,
                                                         wanted: cancelling ? "Cancel" : "Save") {
         let status = AXUIElementPerformAction(button, kAXPressAction as CFString)
