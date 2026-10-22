@@ -57,6 +57,25 @@ enum CanvasCommandTests {
         let workbench = appDelegate.makeWorkbench(canvas: canvas)
         appDelegate.installMenu()
         assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "View", "Node"])
+        guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else {
+            fputs("Missing Edit menu\n", stderr)
+            exit(1)
+        }
+        let textCommands = [("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
+                            ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")]
+        let missingCommands = textCommands.filter { editMenu.item(withTitle: $0.0) == nil }.map { $0.0 }
+        if !missingCommands.isEmpty {
+            fputs("Missing native Edit commands: \(missingCommands.joined(separator: ", "))\n", stderr)
+            exit(1)
+        }
+        for (title, action, key) in textCommands {
+            let item = editMenu.item(withTitle: title)!
+            if item.action.map(NSStringFromSelector) != action || item.keyEquivalent != key ||
+                item.keyEquivalentModifierMask != [.command] || item.target != nil {
+                fputs("\(title) must use \(action), Command-\(key.uppercased()), and a nil responder-chain target\n", stderr)
+                exit(1)
+            }
+        }
         let viewMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "View" }!
         let outlineToggle = viewMenu.item(withTitle: "Show/Hide Outline")!
         assert(viewMenu.items.count == 1 && outlineToggle.keyEquivalent == "s")
@@ -224,6 +243,20 @@ enum CanvasCommandTests {
         let distantEditor = smallCanvas.subviews.compactMap { $0 as? NSTextField }.first!
         assert(distantEditor.frame.maxY <= smallCanvas.bounds.maxY - 24,
                "Editing a distant node must reveal its field inside the canvas")
+        let oversized = MapNode(id: UUID(), title: String(repeating: "Long editable idea ", count: 80),
+                                children: [], folded: false)
+        let oversizedModel = MapModel(roots: [oversized], selected: oversized.id)
+        let oversizedCanvas = MapCanvas(model: oversizedModel)
+        oversizedCanvas.frame = smallCanvas.frame
+        oversizedCanvas.selectAndEdit(oversized.id)
+        let oversizedField = oversizedCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        if !oversizedCanvas.bounds.insetBy(dx: 28, dy: 28).contains(oversizedField.frame) {
+            fputs("Multiline native editor must stay entirely inside a narrow viewport\n", stderr)
+            exit(1)
+        }
+        oversizedField.stringValue += "saved"
+        oversizedCanvas.commitEditing()
+        assert(oversizedModel.roots[0].title.hasSuffix("saved"))
         func localWheel(_ amount: Int32, command: Bool = false) -> NSEvent {
             let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                              wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)!

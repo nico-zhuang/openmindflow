@@ -98,8 +98,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let textHeight = (node.node.title as NSString).boundingRect(
             with: CGSize(width: width - 8, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
-        let height = max(22, box.height - 22 * zoom, ceil(textHeight) + 6)
-        // ponytail: a multiline editor taller than the viewport needs a scrollable text view.
+        let height = min(max(22, box.height - 22 * zoom, ceil(textHeight) + 6),
+                         max(22, bounds.height - 56))
+        // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
         return CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
                       width: width, height: height)
     }
@@ -674,6 +675,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let redo = editMenu.addItem(withTitle: "Redo", action: #selector(redoEdit(_:)), keyEquivalent: "Z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         redo.target = self
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.submenu = editMenu
         main.addItem(edit)
         let view = NSMenuItem(title: "View", action: nil, keyEquivalent: "")

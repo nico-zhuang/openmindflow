@@ -258,7 +258,43 @@ enum NativeWindowSelfCheck {
                   axHelp("Folded") == "Expanded, 1 child", window.isKeyWindow else {
                 finish("FAIL native canvas expanded AX help=\(axHelp("Folded") ?? "nil") or lost inline edit/key window", passed: false); return
             }
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true",
+            let longNode = MapNode(id: UUID(), title: String(repeating: "Long editable idea ", count: 80),
+                                   children: [], folded: false)
+            canvas.model = MapModel(roots: [longNode], selected: longNode.id)
+            canvas.selectAndEdit(longNode.id)
+            guard let longField = canvas.subviews.compactMap({ $0 as? NSTextField }).first,
+                  longField.currentEditor() != nil,
+                  canvas.bounds.insetBy(dx: 28, dy: 28).contains(longField.frame),
+                  window.isKeyWindow else {
+                finish("FAIL native long-title editor outside narrow viewport or lost focus", passed: false); return
+            }
+            let endKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
+                                         timestamp: ProcessInfo.processInfo.systemUptime,
+                                         windowNumber: window.windowNumber, context: nil,
+                                         characters: "\u{f701}", charactersIgnoringModifiers: "\u{f701}",
+                                         isARepeat: false, keyCode: 125)!
+            window.sendEvent(endKey) // Local key event to this synthetic window only.
+            guard let fieldEditor = longField.currentEditor() as? NSTextView else {
+                finish("FAIL native multiline field editor is not NSTextView", passed: false); return
+            }
+            let end = (longField.stringValue as NSString).length
+            let caret = fieldEditor.firstRect(forCharacterRange: NSRange(location: end, length: 0), actualRange: nil)
+            let fieldOnScreen = window.convertToScreen(canvas.convert(longField.frame, to: nil))
+            guard fieldEditor.selectedRange.location == end,
+                  fieldOnScreen.contains(caret.origin) else {
+                finish("FAIL long-title caret did not scroll into visible native editor", passed: false); return
+            }
+            let typeEnd = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime,
+                                          windowNumber: window.windowNumber, context: nil,
+                                          characters: "x", charactersIgnoringModifiers: "x",
+                                          isARepeat: false, keyCode: 7)!
+            window.sendEvent(typeEnd) // Only this owned window's active native field editor.
+            canvas.commitEditing()
+            guard canvas.model.roots[0].title == longNode.title + "x" else {
+                finish("FAIL native long-title keyboard insertion or commit truncated text", passed: false); return
+            }
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true narrowEditor=true foldAX=true longTitle=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)

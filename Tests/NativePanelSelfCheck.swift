@@ -54,10 +54,41 @@ enum NativePanelSelfCheck {
             guard let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
                 finish("FAIL native inline editor missing", ok: false); return
             }
+            guard let selectAll = app.mainMenu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Select All"),
+                  let action = selectAll.action, let editor = field.currentEditor() else {
+                finish("FAIL native Select All menu or field editor missing", ok: false); return
+            }
+            editor.selectedRange = NSRange(location: 0, length: 0)
+            guard app.sendAction(action, to: selectAll.target, from: selectAll),
+                  editor.selectedRange.length == (editor.string as NSString).length else {
+                finish("FAIL native Select All responder-chain action", ok: false); return
+            }
             field.stringValue = "Synthetic saved root"
             canvas.commitEditing()
             guard canvas.model.roots[0].title == "Synthetic saved root", window.title.contains(" •") else {
                 finish("FAIL editable root did not become dirty", ok: false); return
+            }
+            let originalAppearance = window.appearance
+            for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+                window.appearance = NSAppearance(named: appearance)
+                guard let frame = content.superview,
+                      let bitmap = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else {
+                    finish("FAIL owned workbench image unavailable", ok: false); return
+                }
+                frame.displayIfNeeded()
+                frame.cacheDisplay(in: frame.bounds, to: bitmap)
+                let image = directory.appendingPathComponent("workbench-\(name).png")
+                guard !FileManager.default.fileExists(atPath: image.path),
+                      let png = bitmap.representation(using: .png, properties: [:]),
+                      (try? png.write(to: image, options: .atomic)) != nil else {
+                    finish("FAIL owned workbench image write", ok: false); return
+                }
+            }
+            window.appearance = originalAppearance
+            guard let light = try? Data(contentsOf: directory.appendingPathComponent("workbench-light.png")),
+                  let dark = try? Data(contentsOf: directory.appendingPathComponent("workbench-dark.png")),
+                  light != dark else {
+                finish("FAIL owned light/dark workbench images identical", ok: false); return
             }
             var attempts = 0
             var result = "FAIL native Save panel missing"
@@ -76,23 +107,35 @@ enum NativePanelSelfCheck {
                             result = "nativeSavePanel=true"
                         }
                     }
-                    if attempts >= 100 { timer.invalidate(); panel.cancel(nil) }
-                } else if attempts >= 100 {
+                }
+                if attempts >= 100 {
+                    result = "FAIL native Save panel timeout"
                     timer.invalidate()
-                    app.abortModal()
+                    if let panel = app.modalWindow as? NSSavePanel { panel.cancel(nil) }
+                    else { app.abortModal() }
                 }
             }
             RunLoop.main.add(timer, forMode: .modalPanel)
             let actionDispatched = app.sendAction(NSSelectorFromString("saveFile:"), to: document, from: nil)
             timer.invalidate()
             let savedExists = FileManager.default.fileExists(atPath: expected.path)
+            if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "cancel" {
+                guard actionDispatched, result == "nativeSavePanel=true", !savedExists,
+                      canvas.model.roots[0].title == "Synthetic saved root",
+                      window.title == "Untitled • — MindMap" else {
+                    finish("FAIL cancelled Save retained=\(!savedExists) dirty=\(window.title == "Untitled • — MindMap")", ok: false)
+                    return
+                }
+                finish("nativeSaveCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true wholeWindowImages=true", ok: true)
+                return
+            }
             guard actionDispatched, result == "nativeSavePanel=true", let roots = try? readOwnJSON(expected),
                   roots.count == 1, roots[0].title == "Synthetic saved root",
                   window.title == "Untitled.mindmap.json — MindMap" else {
                 finish("FAIL \(result) actionDispatched=\(actionDispatched) savedExists=\(savedExists) titleClean=\(window.title == "Untitled.mindmap.json — MindMap") attempts=\(attempts)", ok: false)
                 return
             }
-            finish("nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified", ok: true)
+            finish("nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified nativeSelectAll=true wholeWindowImages=true", ok: true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)
         app.run()
