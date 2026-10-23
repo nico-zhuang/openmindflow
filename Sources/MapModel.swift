@@ -275,11 +275,31 @@ final class MapModel {
             let center = point.x + Double(width - old) / 2
             return center.isFinite && abs(center) <= 1_000_000
         }) else { return false }
+        let shifts = Dictionary(uniqueKeysWithValues: paths.map { path in
+            let node = Self.node(at: path[...], in: roots)
+            let old = visibleWidths[node.id]!
+            let width = min(1000, max(60, old + delta))
+            return (node.id, node.width == width ? 0 : Double(width - old))
+        })
+        func safe(_ node: MapNode, ancestor: Double) -> Bool {
+            let own = shifts[node.id] ?? 0
+            if let point = node.location, abs(point.x + ancestor + own / 2) > 1_000_000 { return false }
+            return node.children.allSatisfy { safe($0, ancestor: ancestor + own) }
+        }
+        guard roots.allSatisfy({ safe($0, ancestor: 0) }) else { return false }
+        func shiftChildren(_ children: inout [MapNode], by distance: Double) {
+            for index in children.indices {
+                children[index].location?.x += distance
+                shiftChildren(&children[index].children, by: distance)
+            }
+        }
         return editSelected { node in
             let old = visibleWidths[node.id]!
             let width = min(1000, max(60, old + delta))
             guard node.width != width else { return }
-            if let point = node.location { node.location?.x = point.x + Double(width - old) / 2 }
+            let distance = Double(width - old)
+            node.location?.x += distance / 2
+            shiftChildren(&node.children, by: distance)
             node.width = width
         }
     }
@@ -321,6 +341,10 @@ final class MapModel {
 
     @discardableResult
     func resetStrokeStyle() -> Bool { editSelected { $0.strokeStyle = nil } }
+    @discardableResult
+    func resetStrokeColor() -> Bool { editSelected { $0.branchStrokeColor = nil } }
+    @discardableResult
+    func resetStrokeWidth() -> Bool { editSelected { $0.branchStrokeWidth = nil } }
 
     func rename(_ title: String, initialWidth: CGFloat? = nil) {
         guard let path = Self.path(to: selected, in: roots),

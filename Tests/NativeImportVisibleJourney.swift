@@ -21,11 +21,15 @@ import Darwin
             fillColor: [0.32, 0.18, 0.55, 1]), child.id: MindNodePresentation(
             location: CGPoint(x: 470, y: 160), maxWidth: 136,
             allowToShrinkWidth: false, font: nil, styleChangedByUser: false, fillColor: nil)]
-        let workbench = AppDelegate().makeWorkbench(canvas: canvas)
+        let delegate = AppDelegate()
+        let workbench = delegate.makeWorkbench(canvas: canvas)
+        delegate.installMenu()
         let window = NSWindow(contentRect: CGRect(x: 120, y: 100, width: 1200, height: 600),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "MindMap native import synthetic acceptance"
         window.contentViewController = workbench
+        window.toolbar = delegate.makeToolbar()
+        window.setContentSize(NSSize(width: 900, height: 600)) // Exercise the squeezed three-column layout too.
         window.contentView?.layoutSubtreeIfNeeded()
         guard workbench.splitViewItems.count == 3,
               let inspector = workbench.splitViewItems[2].viewController.view as? StyleInspector,
@@ -50,6 +54,26 @@ import Darwin
             receipt("FAIL visible=\(window.isVisible) key=\(window.isKeyWindow) main=\(window.isMainWindow) active=\(front) appActive=\(app.isActive) appKey=\(app.keyWindow?.title ?? "none") appMain=\(app.mainWindow?.title ?? "none") appWindowCount=\(app.windows.count)")
             exit(1)
         }
+        guard let outlineItem = delegate.toolbar(window.toolbar!,
+                   itemForItemIdentifier: NSToolbarItem.Identifier("outline"), willBeInsertedIntoToolbar: true),
+              let outlineAction = outlineItem.action else { receipt("FAIL missing-outline-toolbar-item"); exit(9) }
+        let initialFrame = window.frame
+        let initialCanvasWidth = canvas.bounds.width
+        for turn in 0..<6 {
+            guard app.sendAction(outlineAction, to: outlineItem.target, from: outlineItem) else {
+                receipt("FAIL outline-action"); exit(9)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            guard window.frame == initialFrame else {
+                receipt("FAIL sidebar-window-drift before=\(initialFrame) after=\(window.frame)"); exit(9)
+            }
+            if turn.isMultiple(of: 2) && canvas.bounds.width < initialCanvasWidth + 100 {
+                receipt("FAIL collapsed-outline-did-not-return-width-to-canvas"); exit(9)
+            }
+            if !turn.isMultiple(of: 2) && abs(canvas.bounds.width - initialCanvasWidth) > 1 {
+                receipt("FAIL reopened-outline-did-not-slide-into-left-edge"); exit(9)
+            }
+        }
         guard let hit = canvas.frameForAccessibility(child.id), hit.width == 136,
               canvas.accessibilityChildren()?.count ?? 0 >= 2 else { receipt("FAIL imported-geometry-or-AX"); exit(2) }
         canvas.selectAndEdit(root.id)
@@ -67,6 +91,11 @@ import Darwin
             receipt("FAIL inspector-font-size-did-not-update-editor"); exit(8)
         }
         canvas.commitEditing()
+        inspector.colorPopup.selectItem(withTitle: "More…")
+        inspector.changeColorSelection(inspector.colorPopup)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        guard NSColorPanel.shared.isVisible else { receipt("FAIL inspector-more-color-panel-not-visible"); exit(10) }
+        NSColorPanel.shared.orderOut(nil)
         guard let fontItem = canvas.contextMenu(for: root.id).item(withTitle: "Font…"),
               app.sendAction(fontItem.action!, to: fontItem.target, from: fontItem) else {
             receipt("FAIL native-font-menu-action"); exit(4)
@@ -76,7 +105,7 @@ import Darwin
             receipt("FAIL native-font-panel-not-visible"); exit(5)
         }
         NSFontManager.shared.fontPanel(false)?.orderOut(nil)
-        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true fontPanel=true styleInspector=true sizeEdit=true")
+        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true fontPanel=true styleInspector=true sizeEdit=true moreColorPanel=true sixSidebarToggles=true")
         window.orderOut(nil)
     }
 }

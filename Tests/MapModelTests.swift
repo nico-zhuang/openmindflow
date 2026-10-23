@@ -61,6 +61,25 @@ enum MapModelTests {
         assert(aligned.setWidth(180, anchoredFrom: 136))
         assert(aligned.roots[0].width == 180 && aligned.roots[0].location == SIMD2(522, 170))
         assert(aligned.undo() && aligned.roots[0].width == nil && aligned.roots[0].location == SIMD2(500, 170))
+        let connectedLeaf = MapNode(id: UUID(), title: "leaf", children: [], folded: false, location: SIMD2(780, 170))
+        let branch = MapNode(id: UUID(), title: "branch", children: [connectedLeaf], folded: false,
+                             location: SIMD2(500, 170))
+        let parent = MapNode(id: UUID(), title: "root", children: [branch], folded: false,
+                             location: SIMD2(200, 170))
+        let reflow = MapModel(roots: [parent], selected: parent.id)
+        assert(reflow.resizeSelected(by: 80, visibleWidths: [parent.id: 170]))
+        assert(reflow.roots[0].location == SIMD2(240, 170) &&
+               reflow.roots[0].children[0].location == SIMD2(580, 170) &&
+               reflow.roots[0].children[0].children[0].location == SIMD2(860, 170),
+               "Widening a positioned parent keeps downstream branch gaps instead of reversing connectors")
+        assert(reflow.undo() && reflow.roots == [parent], "One undo restores widths and all dependent world positions")
+        reflow.selectOnly(parent.id)
+        assert(reflow.toggleSelection(branch.id))
+        assert(reflow.resizeSelected(by: 40, visibleWidths: [parent.id: 170, branch.id: 136]))
+        assert(reflow.roots[0].children[0].location == SIMD2(560, 170) &&
+               reflow.roots[0].children[0].children[0].location == SIMD2(860, 170),
+               "Overlapping selection moves a child by parent delta plus its own anchored half delta only once")
+        assert(reflow.undo() && reflow.roots == [parent])
         let shiftedChild = MapNode(id: UUID(), title: "nested", children: [], folded: false,
                                    location: SIMD2(120, 70))
         let shifting = MapNode(id: UUID(), title: "moving", children: [shiftedChild], folded: false,
@@ -370,7 +389,8 @@ enum MapModelTests {
                                                                     right: CGPoint(x: 480, y: 200)]))
         assert(group.roots[0].children.map(\.id) == [target])
         assert(group.roots[0].children[0].children.map(\.id) == [left, right])
-        assert(group.roots[0].children[0].children[0].children[0].location == SIMD2(410, 220))
+        assert(group.roots[0].children[0].children[0].children[0].location == SIMD2(430, 220),
+               "Resized descendant keeps its 20pt branch gap when the entire group is subsequently reparented")
         assert(group.undo() && group.roots == beforeInvalid && group.selectedIDs == [left, right])
         assert(group.redo() && group.roots[0].children[0].children.map(\.id) == [left, right])
         group.selected = left

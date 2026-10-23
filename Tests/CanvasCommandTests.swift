@@ -203,15 +203,15 @@ enum CanvasCommandTests {
                "Command-N should add and edit one main/root node")
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
-        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "undo", "redo"])
+        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "style", "undo", "redo"])
         for (index, pair) in zip(identifiers,
-                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "undoEdit:", "redoEdit:"]).enumerated() {
+                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "toggleStyle:", "undoEdit:", "redoEdit:"]).enumerated() {
             let (identifier, action) = pair
             let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
                                            willBeInsertedIntoToolbar: true)!
             assert(item.target as AnyObject? === appDelegate)
             assert(item.action.map(NSStringFromSelector) == action)
-            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Undo", "Redo"][index])
+            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Show/Hide Style", "Undo", "Redo"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
         func selectedAppearance(_ menu: NSMenu) -> [String] {

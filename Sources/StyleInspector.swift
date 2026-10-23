@@ -2,14 +2,19 @@ import AppKit
 
 final class StyleInspector: NSView {
     private let canvas: MapCanvas
-    let familyField = NSTextField()
+    private static let widths: [(String, CGFloat)] = [("Hairline", 0.75), ("Thin", 1.5),
+                                                       ("Medium", 3), ("Bold", 5), ("Heavy", 8)]
+    private static let colors = [("Teal", "#14B8A6FF"), ("Blue", "#3478F6FF"),
+                                 ("Coral", "#F97373FF"), ("Gold", "#EAB308FF"),
+                                 ("Gray", "#8B95A5FF")]
+    let familyPopup = NSPopUpButton()
+    let fontPreview = NSTextField(labelWithString: "Aa 字")
     let fontSizeField = NSTextField()
     let fontSizeStepper = NSStepper()
-    let alignmentControl = NSSegmentedControl(labels: ["L", "C", "R", "J"], trackingMode: .selectOne, target: nil, action: nil)
-    let colorWell = NSColorWell()
+    let alignmentControl = NSSegmentedControl(labels: ["", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    let colorPopup = NSPopUpButton()
     let colorState = NSTextField(labelWithString: "")
-    let strokeWidthField = NSTextField()
-    let strokeWidthSlider = NSSlider(value: 2, minValue: 0.5, maxValue: 12, target: nil, action: nil)
+    let strokeWidthPopup = NSPopUpButton()
     let strokeStylePopup = NSPopUpButton()
 
     override var intrinsicContentSize: NSSize { NSSize(width: 280, height: NSView.noIntrinsicMetric) }
@@ -43,13 +48,24 @@ final class StyleInspector: NSView {
             stack.addArrangedSubview(line)
             line.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         section("FONT")
-        familyField.placeholderString = "Family"
-        familyField.setAccessibilityLabel("Font family")
-        familyField.target = self
-        familyField.action = #selector(changeFontFamily(_:))
-        row("Family", familyField)
+        familyPopup.addItem(withTitle: "Mixed")
+        familyPopup.addItem(withTitle: "Unavailable")
+        for family in NSFontManager.shared.availableFontFamilies.sorted() {
+            let item = familyPopup.menu!.addItem(withTitle: family, action: nil, keyEquivalent: "")
+            let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 14)
+                ?? .systemFont(ofSize: 14)
+            item.attributedTitle = NSAttributedString(string: family, attributes: [.font: font])
+            item.representedObject = font.fontName
+        }
+        familyPopup.setAccessibilityLabel("Font family")
+        familyPopup.target = self
+        familyPopup.action = #selector(changeFontFamily(_:))
+        row("Family", familyPopup)
+        fontPreview.setAccessibilityLabel("Font preview")
+        row("Preview", fontPreview)
         fontSizeField.setAccessibilityLabel("Font size")
         fontSizeField.target = self
         fontSizeField.action = #selector(changeFontSize(_:))
@@ -62,30 +78,38 @@ final class StyleInspector: NSView {
         sizeControls.spacing = 6
         row("Size", sizeControls)
         alignmentControl.setAccessibilityLabel("Paragraph alignment")
-        for (index, title) in ["Left", "Center", "Right", "Justify"].enumerated() {
-            alignmentControl.setToolTip(title, forSegment: index)
+        for (index, pair) in [("Left", "text.alignleft"), ("Center", "text.aligncenter"),
+                              ("Right", "text.alignright"), ("Justify", "text.justify")].enumerated() {
+            alignmentControl.setImage(NSImage(systemSymbolName: pair.1, accessibilityDescription: pair.0), forSegment: index)
+            alignmentControl.setToolTip(pair.0, forSegment: index)
         }
         alignmentControl.target = self
         alignmentControl.action = #selector(changeAlignment(_:))
         row("Align", alignmentControl)
         section("CONNECTION")
-        colorWell.setAccessibilityLabel("Connection color")
-        colorWell.target = self
-        colorWell.action = #selector(changeStrokeColor(_:))
-        colorWell.widthAnchor.constraint(equalToConstant: 52).isActive = true
-        let colorControls = NSStackView(views: [colorWell, colorState])
-        colorControls.spacing = 8
+        colorPopup.addItems(withTitles: ["Mixed", "Default", "Custom"])
+        for (title, hex) in Self.colors {
+            let item = colorPopup.menu!.addItem(withTitle: title, action: nil, keyEquivalent: "")
+            if let color = Self.color(hex) {
+                item.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                    color.setFill()
+                    NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+                    return true
+                }
+            }
+        }
+        colorPopup.addItem(withTitle: "More…")
+        colorPopup.setAccessibilityLabel("Connection color")
+        colorPopup.target = self
+        colorPopup.action = #selector(changeColorSelection(_:))
+        let colorControls = NSStackView(views: [colorPopup, colorState])
+        colorControls.spacing = 6
         row("Color", colorControls)
-        strokeWidthField.setAccessibilityLabel("Connection width")
-        strokeWidthField.target = self
-        strokeWidthField.action = #selector(changeStrokeWidth(_:))
-        strokeWidthField.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        strokeWidthSlider.setAccessibilityLabel("Connection width slider")
-        strokeWidthSlider.target = self
-        strokeWidthSlider.action = #selector(changeStrokeWidth(_:))
-        let widthControls = NSStackView(views: [strokeWidthField, strokeWidthSlider])
-        widthControls.spacing = 8
-        row("Width", widthControls)
+        strokeWidthPopup.addItems(withTitles: ["Default", "Mixed", "Custom"] + Self.widths.map(\.0))
+        strokeWidthPopup.setAccessibilityLabel("Connection width")
+        strokeWidthPopup.target = self
+        strokeWidthPopup.action = #selector(changeStrokeWidth(_:))
+        row("Width", strokeWidthPopup)
         strokeStylePopup.addItems(withTitles: ["Default", "Solid", "Dashed", "Mixed"])
         strokeStylePopup.setAccessibilityLabel("Connection line style")
         strokeStylePopup.target = self
@@ -95,6 +119,16 @@ final class StyleInspector: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
+
+    private static func color(_ hex: String) -> NSColor? {
+        guard hex.count == 9, hex.first == "#",
+              let red = UInt8(hex.dropFirst().prefix(2), radix: 16),
+              let green = UInt8(hex.dropFirst(3).prefix(2), radix: 16),
+              let blue = UInt8(hex.dropFirst(5).prefix(2), radix: 16),
+              let alpha = UInt8(hex.dropFirst(7).prefix(2), radix: 16) else { return nil }
+        return NSColor(srgbRed: CGFloat(red) / 255, green: CGFloat(green) / 255,
+                       blue: CGFloat(blue) / 255, alpha: CGFloat(alpha) / 255)
+    }
 
     private func selectedNodes() -> [(MapNode, Bool)] {
         let selected = canvas.model.selectedIDs
@@ -108,14 +142,16 @@ final class StyleInspector: NSView {
 
     func refresh() {
         let nodes = selectedNodes()
-        for control: NSControl in [familyField, fontSizeField, fontSizeStepper, alignmentControl,
-                                   colorWell, strokeWidthField, strokeWidthSlider, strokeStylePopup] {
+        for control: NSControl in [familyPopup, fontSizeField, fontSizeStepper, alignmentControl,
+                                   colorPopup, strokeWidthPopup, strokeStylePopup] {
             control.isEnabled = !nodes.isEmpty
         }
         guard let first = nodes.first else {
-            familyField.stringValue = ""
+            familyPopup.selectItem(withTitle: "Mixed")
+            fontPreview.stringValue = "No selection"
             fontSizeField.stringValue = ""
-            strokeWidthField.stringValue = ""
+            strokeWidthPopup.selectItem(withTitle: "Default")
+            colorPopup.selectItem(withTitle: "Default")
             alignmentControl.selectedSegment = -1
             colorState.stringValue = "No selection"
             strokeStylePopup.selectItem(withTitle: "Default")
@@ -135,8 +171,21 @@ final class StyleInspector: NSView {
         }
         let families = nodes.map(family), sizes = nodes.map(size)
         let sameFamily = families.allSatisfy { $0 == families[0] }
-        familyField.stringValue = sameFamily ? families[0] : ""
-        familyField.placeholderString = sameFamily ? "Family" : "Mixed"
+        if sameFamily {
+            let display = NSFont(name: families[0], size: 16)?.familyName ?? families[0]
+            if familyPopup.item(withTitle: display) != nil { familyPopup.selectItem(withTitle: display) }
+            else {
+                let unavailable = familyPopup.item(at: 1)!
+                unavailable.title = "Unavailable: \(families[0])"
+                familyPopup.select(unavailable)
+            }
+            fontPreview.stringValue = "Aa 字"
+            fontPreview.font = NSFont(name: families[0], size: 18) ?? .systemFont(ofSize: 18)
+        } else {
+            familyPopup.selectItem(withTitle: "Mixed")
+            fontPreview.stringValue = "Mixed"
+            fontPreview.font = .systemFont(ofSize: 13)
+        }
         let sameSize = sizes.allSatisfy { $0 == sizes[0] }
         fontSizeField.stringValue = sameSize ? String(format: "%g", sizes[0]) : ""
         fontSizeField.placeholderString = sameSize ? "Size" : "Mixed"
@@ -149,19 +198,14 @@ final class StyleInspector: NSView {
         let color = first.0.branchStrokeColor
         let sameColor = nodes.allSatisfy { $0.0.branchStrokeColor == color }
         colorState.stringValue = sameColor ? (color == nil ? "Default" : "") : "Mixed"
-        if sameColor, let color, color.count == 9, color.first == "#",
-           let red = UInt8(color.dropFirst().prefix(2), radix: 16),
-           let green = UInt8(color.dropFirst(3).prefix(2), radix: 16),
-           let blue = UInt8(color.dropFirst(5).prefix(2), radix: 16),
-           let alpha = UInt8(color.dropFirst(7).prefix(2), radix: 16) {
-            colorWell.color = NSColor(srgbRed: CGFloat(red) / 255, green: CGFloat(green) / 255,
-                                      blue: CGFloat(blue) / 255, alpha: CGFloat(alpha) / 255)
-        } else { colorWell.color = .systemTeal }
+        colorPopup.selectItem(withTitle: sameColor
+            ? color.map { saved in Self.colors.first(where: { $0.1 == saved.uppercased() })?.0 ?? "Custom" }
+                ?? "Default" : "Mixed")
         let width = first.0.branchStrokeWidth
         let sameWidth = nodes.allSatisfy { $0.0.branchStrokeWidth == width }
-        strokeWidthField.stringValue = sameWidth ? width.map { String(format: "%g", Double($0)) } ?? "" : ""
-        strokeWidthField.placeholderString = sameWidth ? (width == nil ? "Default" : "Width") : "Mixed"
-        strokeWidthSlider.doubleValue = Double(width ?? 2)
+        strokeWidthPopup.selectItem(withTitle: sameWidth
+            ? width.map { value in Self.widths.first(where: { $0.1 == value })?.0 ?? "Custom" }
+                ?? "Default" : "Mixed")
         let style = first.0.strokeStyle
         strokeStylePopup.selectItem(withTitle: nodes.allSatisfy({ $0.0.strokeStyle == style })
                                         ? style.map { $0.capitalized } ?? "Default" : "Mixed")
@@ -175,8 +219,7 @@ final class StyleInspector: NSView {
     }
 
     @objc func changeFontFamily(_ sender: Any?) {
-        let family = familyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !family.isEmpty else { refresh(); return }
+        guard let family = familyPopup.selectedItem?.representedObject as? String else { refresh(); return }
         changed(canvas.model.setFont(family: family))
     }
     @objc func changeFontSize(_ sender: Any?) {
@@ -189,16 +232,32 @@ final class StyleInspector: NSView {
         guard names.indices.contains(alignmentControl.selectedSegment) else { return }
         changed(canvas.model.setAlignment(names[alignmentControl.selectedSegment]))
     }
+    @objc func changeColorSelection(_ sender: Any?) {
+        guard let choice = colorPopup.titleOfSelectedItem else { return }
+        if choice == "More…" {
+            refresh() // Opening the color panel does not itself change the selection or create undo.
+            let panel = NSColorPanel.shared
+            if let hex = selectedNodes().first?.0.branchStrokeColor, let color = Self.color(hex) { panel.color = color }
+            panel.setTarget(self)
+            panel.setAction(#selector(changeStrokeColor(_:)))
+            panel.makeKeyAndOrderFront(nil)
+        } else if choice == "Default" { changed(canvas.model.resetStrokeColor()) }
+        else if let hex = Self.colors.first(where: { $0.0 == choice })?.1 {
+            changed(canvas.model.setBranchStroke(color: hex))
+        } else { refresh() }
+    }
     @objc func changeStrokeColor(_ sender: Any?) {
-        guard let color = colorWell.color.usingColorSpace(.deviceRGB) else { return }
+        guard let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
         let components = [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
         let hex = "#" + components.map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
         changed(canvas.model.setBranchStroke(color: hex))
     }
     @objc func changeStrokeWidth(_ sender: Any?) {
-        if sender as? NSSlider === strokeWidthSlider { strokeWidthField.stringValue = "\(strokeWidthSlider.doubleValue)" }
-        guard let width = Double(strokeWidthField.stringValue) else { refresh(); return }
-        changed(canvas.model.setBranchStroke(width: CGFloat(width)))
+        guard let choice = strokeWidthPopup.titleOfSelectedItem else { return }
+        if choice == "Default" { changed(canvas.model.resetStrokeWidth()) }
+        else if let width = Self.widths.first(where: { $0.0 == choice })?.1 {
+            changed(canvas.model.setBranchStroke(width: width))
+        } else { refresh() }
     }
     @objc func changeStrokeStyle(_ sender: Any?) {
         guard let value = strokeStylePopup.titleOfSelectedItem?.lowercased() else { return }

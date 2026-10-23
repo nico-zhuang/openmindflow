@@ -107,7 +107,7 @@ enum OutlineWorkbenchTests {
         let rightCanvas = MapCanvas(model: rightModel)
         let rightOutline = MapOutlineView(canvas: rightCanvas)
         let rightWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 350),
-                                   styleMask: [.titled], backing: .buffered, defer: false)
+                                   styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         rightWindow.contentView = rightOutline // Attached but never shown or activated.
         rightWindow.contentView?.layoutSubtreeIfNeeded()
         let rowBox = rightOutline.outlineView.rect(ofRow: 2)
@@ -154,8 +154,11 @@ enum OutlineWorkbenchTests {
         delegate.installMenu()
         let item = NSApp.mainMenu!.item(withTitle: "View")!.submenu!.item(withTitle: "Show/Hide Outline")!
         let unchanged = manyCanvas.model.roots
+        let expandedCanvasWidth = manyCanvas.bounds.width
         let hideSent = NSApp.sendAction(item.action!, to: item.target, from: item)
-        guard hideSent, sidebar.isCollapsed, sideWindow.firstResponder === manyCanvas else {
+        sideWindow.contentView?.layoutSubtreeIfNeeded()
+        guard hideSent, sidebar.isCollapsed, sideWindow.firstResponder === manyCanvas,
+              manyCanvas.bounds.width > expandedCanvasWidth + 100 else {
             fputs("Hiding outline must collapse and focus canvas (sent=\(hideSent), collapsed=\(sidebar.isCollapsed), responder=\(String(describing: sideWindow.firstResponder)))\n", stderr)
             exit(1)
         }
@@ -164,6 +167,28 @@ enum OutlineWorkbenchTests {
             fputs("Showing outline must restore its sidebar without changing the map\n", stderr)
             exit(1)
         }
+        sideWindow.contentView?.layoutSubtreeIfNeeded()
+        let stableFrame = sideWindow.frame
+        for _ in 0..<6 {
+            assert(NSApp.sendAction(item.action!, to: item.target, from: item))
+            sideWindow.contentView?.layoutSubtreeIfNeeded()
+            guard sideWindow.frame == stableFrame else {
+                fputs("Outline shifted window: before=\(stableFrame), after=\(sideWindow.frame), collapsed=\(sidebar.isCollapsed)\n", stderr)
+                exit(1)
+            }
+        }
+        assert(!sidebar.isCollapsed)
+        let toolbar = delegate.makeToolbar()
+        let styleID = NSToolbarItem.Identifier("style")
+        assert(delegate.toolbarDefaultItemIdentifiers(toolbar).contains(styleID),
+               "Toolbar must expose a native Show/Hide Style inspector switch")
+        guard let styleButton = delegate.toolbar(toolbar, itemForItemIdentifier: styleID, willBeInsertedIntoToolbar: true),
+              let action = styleButton.action else { fatalError("Style toolbar switch missing") }
+        let inspectorItem = workbench.splitViewItems[2]
+        assert(NSApp.sendAction(action, to: styleButton.target, from: styleButton) && inspectorItem.isCollapsed)
+        assert(sideWindow.frame == stableFrame, "Right inspector collapse cannot resize or shift the window")
+        assert(NSApp.sendAction(action, to: styleButton.target, from: styleButton) && !inspectorItem.isCollapsed)
+        assert(sideWindow.frame == stableFrame)
         sideWindow.orderOut(nil)
 
         let deepest = UUID()

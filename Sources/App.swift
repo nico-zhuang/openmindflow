@@ -1212,7 +1212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             updateTitle()
             canvas.fitMapInView()
             window.makeFirstResponder(canvas)
-            alert("MindNode imported read-only", detail: "The saved node positions, title widths and fonts, embedded theme colors and branch strokes are shown. Cross-connections and attachments are not displayed; styling is not round-tripped. Save creates a new .mindmap.json file and never overwrites the MindNode package.")
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
@@ -1276,12 +1275,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
     @objc private func showNodeFont(_ sender: Any?) { canvas.showFontPanel() }
     @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
-    @objc private func toggleOutline(_ sender: Any?) {
-        splitController.toggleSidebar(sender)
-        if splitController.splitViewItems[0].isCollapsed {
-            splitController.view.window?.makeFirstResponder(canvas)
-        }
+    private func togglePane(at index: Int) {
+        let window = splitController.view.window
+        let frame = window?.frame
+        let item = splitController.splitViewItems[index]
+        item.isCollapsed.toggle()
+        if let frame, window?.frame != frame { window?.setFrame(frame, display: true) }
+        if item.isCollapsed { window?.makeFirstResponder(canvas) }
     }
+    @objc private func toggleOutline(_ sender: Any?) { togglePane(at: 0) }
+    @objc private func toggleStyle(_ sender: Any?) { togglePane(at: 2) }
 
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
         self.canvas = canvas
@@ -1318,7 +1321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.init("new-main"), .init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
-         .init("outline"), .flexibleSpace, .init("undo"), .init("redo")]
+         .init("outline"), .flexibleSpace, .init("style"), .init("undo"), .init("redo")]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -1333,6 +1336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         case "fold-node": details = ("Fold/Unfold", "chevron.right", #selector(foldNode(_:)))
         case "fit-map": details = ("Fit Map", "arrow.up.left.and.arrow.down.right", #selector(fitMap(_:)))
         case "outline": details = ("Show/Hide Outline", "sidebar.left", #selector(toggleOutline(_:)))
+        case "style": details = ("Show/Hide Style", "sidebar.right", #selector(toggleStyle(_:)))
         case "undo": details = ("Undo", "arrow.uturn.backward", #selector(undoEdit(_:)))
         case "redo": details = ("Redo", "arrow.uturn.forward", #selector(redoEdit(_:)))
         default: return nil
@@ -1394,6 +1398,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             action: #selector(toggleOutline(_:)), keyEquivalent: "s")
         outlineItem.keyEquivalentModifierMask = [.option, .command]
         outlineItem.target = self
+        let styleItem = viewMenu.addItem(withTitle: "Show/Hide Style Inspector",
+            action: #selector(toggleStyle(_:)), keyEquivalent: "i")
+        styleItem.keyEquivalentModifierMask = [.option, .command]
+        styleItem.target = self
         let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let appearanceMenu = NSMenu(title: "Appearance")
         for title in ["System", "Light", "Dark"] {
