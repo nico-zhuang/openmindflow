@@ -424,6 +424,98 @@ enum CanvasCommandTests {
             fputs("Cached AX bounds must restore on Escape without committing\n", stderr); exit(1)
         }
         crossCanvas.mouseUp(with: mouse(.leftMouseUp, blankPoint))
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let springModel = MapModel(roots: beforeCrossMove, selected: crossSource.id)
+            let springCanvas = MapCanvas(model: springModel)
+            let springWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 700),
+                                        styleMask: [.borderless], backing: .buffered, defer: false)
+            springWindow.contentView = springCanvas // Attached for native motion; never shown or made key.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03)) // Drain initial window layout before counting spring ticks.
+            let origin = springCanvas.frameForAccessibility(leftChild.id)!
+            let sourceOrigin = springCanvas.frameForAccessibility(crossSource.id)!
+            let childOrigin = springCanvas.frameForAccessibility(nestedLeaf.id)!
+            let springStart = CGPoint(x: crossSourceFrame.midX + 80,
+                                      y: springCanvas.bounds.height - crossSourceFrame.midY - 90)
+            let springGap = CGPoint(x: beforeFrame.midX + 80,
+                                    y: springCanvas.bounds.height - (beforeFrame.maxY + afterFrame.minY) / 2 - 90)
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
+            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
+            let initial = springCanvas.frameForAccessibility(leftChild.id)!
+            let targetY = origin.midY - siblingShift
+            if abs(initial.midY - targetY) < 1 ||
+               abs(springCanvas.frameForAccessibility(crossSource.id)!.minX - sourceOrigin.minX - (springGap.x - springStart.x)) > 0.01 ||
+               abs(springCanvas.frameForAccessibility(nestedLeaf.id)!.minX - childOrigin.minX - (springGap.x - springStart.x)) > 0.01 ||
+               springModel.roots != beforeCrossMove {
+                fputs("Attached preview must initially ease siblings without lagging dragged subtree or mutating model\n", stderr); exit(1)
+            }
+            let layoutsBeforeTick = mapLayoutInvocations
+            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+            let intermediate = springCanvas.frameForAccessibility(leftChild.id)!
+            if abs(intermediate.midY - targetY) >= abs(initial.midY - targetY) ||
+               abs(intermediate.midY - targetY) < 0.1 || mapLayoutInvocations != layoutsBeforeTick {
+                fputs("Spring tick must advance AX/painted sibling toward target without recomputing layout: initial=\(initial.midY), next=\(intermediate.midY), target=\(targetY), layouts=\(mapLayoutInvocations - layoutsBeforeTick)\n", stderr); exit(1)
+            }
+            springCanvas.advanceSpring(at: ProcessInfo.processInfo.systemUptime + 0.25)
+            if abs(springCanvas.frameForAccessibility(leftChild.id)!.midY - targetY) >=
+               abs(intermediate.midY - targetY) / 2 {
+                fputs("A delayed spring tick must safely catch up using bounded real elapsed time\n", stderr); exit(1)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.65))
+            let settled = springCanvas.frameForAccessibility(leftChild.id)!.midY
+            let settledPaint = image(springCanvas)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+            if abs(settled - targetY) > 0.1 ||
+               abs(springCanvas.frameForAccessibility(leftChild.id)!.midY - targetY) > 0.1 ||
+               image(springCanvas) != settledPaint {
+                fputs("Converged sibling must stay painted/AX at target until pointer moves or releases\n", stderr); exit(1)
+            }
+            springCanvas.mouseUp(with: mouse(.leftMouseUp, springGap))
+            if springModel.roots[0].children.last?.children.map(\.id) != [leftChild.id, crossSource.id, rightChild.id] ||
+               abs(springCanvas.frameForAccessibility(leftChild.id)!.midY - targetY) > 0.01 ||
+               !springModel.undo() || springModel.roots != beforeCrossMove {
+                fputs("Release must snap to canonical geometry and preserve single undoable move\n", stderr); exit(1)
+            }
+            springCanvas.needsDisplay = true // Undo changed the model without going through canvas.changed().
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
+            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
+            _ = springCanvas.frameForAccessibility(leftChild.id)
+            let blank = CGPoint(x: 900, y: 40)
+            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, blank))
+            if springCanvas.frameForAccessibility(leftChild.id)! != origin {
+                fputs("Invalid attached drag must immediately restore sibling geometry\n", stderr); exit(1)
+            }
+            springCanvas.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil, characters: "\u{1b}",
+                charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
+            if springCanvas.frameForAccessibility(crossSource.id)! != sourceOrigin || springModel.roots != beforeCrossMove {
+                fputs("Escape must cancel attached drag and clear its spring\n", stderr); exit(1)
+            }
+            springCanvas.mouseUp(with: mouse(.leftMouseUp, blank))
+            let canonicalPaint = image(springCanvas)
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
+            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
+            _ = springCanvas.frameForAccessibility(leftChild.id)
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, blank)) // Interrupt with a canonical-layout miss.
+            if springCanvas.frameForAccessibility(leftChild.id)! != origin || image(springCanvas) != canonicalPaint {
+                fputs("A no-hit mousedown must clear cached spring presentation and repaint canonical geometry\n", stderr); exit(1)
+            }
+            springCanvas.mouseUp(with: mouse(.leftMouseUp, blank))
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
+            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
+            _ = springCanvas.frameForAccessibility(leftChild.id)
+            springCanvas.advanceSpring(at: ProcessInfo.processInfo.systemUptime + 0.18)
+            let painted = springCanvas.frameForAccessibility(leftChild.id)!
+            if abs(painted.midY - origin.midY) <= origin.height / 2 {
+                fputs("Synthetic moving sibling did not clear its canonical hit box\n", stderr); exit(1)
+            }
+            let hit = springWindow.convertFromScreen(painted)
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: hit.midX, y: hit.midY)))
+            if springModel.selected != leftChild.id || springCanvas.frameForAccessibility(leftChild.id)! != origin {
+                fputs("Mousedown must select the painted moving sibling, then clear spring frames\n", stderr); exit(1)
+            }
+            springCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: hit.midX, y: hit.midY)))
+            springWindow.orderOut(nil)
+        }
         let centerParent = MapNode(id: UUID(), title: "Target", children: [], folded: false)
         let centerSource = MapNode(id: UUID(), title: "Dragged", children: [], folded: false)
         let centerModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [centerParent, centerSource], folded: false)],
@@ -771,6 +863,6 @@ enum CanvasCommandTests {
             fputs("Unfolding a canvas branch must refresh its accessibility state\n", stderr)
             exit(1)
         }
-        print("canvas command, drag, pan and viewport-fit tests passed (no windows)")
+        print("canvas command, drag, pan and viewport-fit tests passed (no visible windows)")
     }
 }

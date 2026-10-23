@@ -17,9 +17,10 @@ private final class MapNodeAX: NSAccessibilityElement {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
+    var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
+            if springTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
             previewCache = nil
             let visibleIDs = Set(visibleNodes().map { $0.node.id })
             if needsDisplay, window != nil { NSAccessibility.post(element: self, notification: .layoutChanged) }
@@ -43,6 +44,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var dragGrab = CGPoint.zero
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
     private var previewCache: (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?)?
+    private var springPositions: [UUID: (point: CGPoint, velocity: CGPoint)] = [:]
+    private var springTargets: [UUID: CGPoint] = [:]
+    private var springTimer: Timer?
+    private var springLastTick: TimeInterval?
+    private var springTick = false
+    // ponytail: drag-only spring; release/Escape snap until Gate B owns settling and interruption.
+    private let springResponse: CGFloat = 0.26, springDamping: CGFloat = 0.95
     private var announcedSelection: UUID
 
     init(model: MapModel) {
@@ -51,6 +59,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
+    deinit { springTimer?.invalidate() }
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         if editor != nil { revealSelection(); needsDisplay = true }
@@ -159,9 +168,56 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         return nil
     }
+    private func pauseSpring() {
+        springTimer?.invalidate()
+        springTimer = nil
+        springLastTick = nil
+    }
+    private func stopSpring() {
+        pauseSpring()
+        springPositions.removeAll()
+        springTargets.removeAll()
+    }
+    func advanceSpring(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            stopSpring(); needsDisplay = true; return
+        }
+        if previewCache == nil { _ = previewGeometry() }
+        guard !springPositions.isEmpty, var cached = previewCache else { return }
+        // ponytail: cap stalls at 250ms and integrate in ≤120Hz steps; use display-link timing if long stalls matter.
+        let elapsed = min(max(now - (springLastTick ?? now), 0), 0.25)
+        springLastTick = now
+        guard elapsed > 0 else { return }
+        let steps = Int(ceil(elapsed * 120)), dt = CGFloat(elapsed) / CGFloat(steps)
+        let omega: CGFloat = 4.6 / springResponse
+        for (id, var motion) in springPositions {
+            guard let target = springTargets[id] else { continue }
+            for _ in 0..<steps {
+                motion.velocity.x += ((target.x - motion.point.x) * omega * omega - 2 * springDamping * omega * motion.velocity.x) * dt
+                motion.velocity.y += ((target.y - motion.point.y) * omega * omega - 2 * springDamping * omega * motion.velocity.y) * dt
+                motion.point.x += motion.velocity.x * dt
+                motion.point.y += motion.velocity.y * dt
+            }
+            if hypot(target.x - motion.point.x, target.y - motion.point.y) < 0.1 &&
+               hypot(motion.velocity.x, motion.velocity.y) < 0.5 {
+                motion.point = target
+            }
+            springPositions[id] = motion
+        }
+        cached.nodes = cached.nodes.map { item in
+            guard let point = springPositions[item.node.id]?.point else { return item }
+            return LaidOutNode(node: item.node,
+                frame: CGRect(origin: point, size: item.frame.size), parent: item.parent)
+        }
+        previewCache = cached
+        if springPositions.allSatisfy({ id, motion in motion.point == springTargets[id] }) { pauseSpring() }
+        springTick = true; needsDisplay = true; springTick = false
+    }
     private func previewGeometry() -> (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?) {
         if let previewCache { return previewCache }
         var nodes = visibleNodes()
+        let committed = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame.origin) })
+        var draggedIDs = Set<UUID>()
         let drop = dragSource.flatMap { source in
             dragPoint.flatMap { validDrop(at: $0, source: source, nodes: nodes) }
         }
@@ -173,6 +229,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 if !node.folded { node.children.forEach(collect) }
             }
             collect(sourceNode.node)
+            draggedIDs = moving
             let sourceBox = screen(sourceNode.frame)
             let dx = (point.x - dragGrab.x - sourceBox.minX) / zoom
             let dy = (point.y - dragGrab.y - sourceBox.minY) / zoom
@@ -186,6 +243,31 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
+        if drop != nil, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let present = Set(nodes.map { $0.node.id })
+            springPositions = springPositions.filter { present.contains($0.key) && !draggedIDs.contains($0.key) }
+            springTargets.removeAll()
+            for index in nodes.indices {
+                let item = nodes[index], id = item.node.id
+                guard !draggedIDs.contains(id) else { continue }
+                let target = item.frame.origin
+                if springPositions[id] == nil, let origin = committed[id], origin != target {
+                    springPositions[id] = (origin, .zero)
+                }
+                if let current = springPositions[id] {
+                    springTargets[id] = target
+                    nodes[index] = LaidOutNode(node: item.node,
+                        frame: CGRect(origin: current.point, size: item.frame.size), parent: item.parent)
+                }
+            }
+            if springTargets.isEmpty { stopSpring() }
+            if springTimer == nil, springPositions.contains(where: { $0.value.point != springTargets[$0.key] }) {
+                springLastTick = ProcessInfo.processInfo.systemUptime
+                let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in self?.advanceSpring() }
+                RunLoop.main.add(timer, forMode: .common)
+                springTimer = timer
+            }
+        } else { stopSpring() }
         previewCache = (nodes, drop)
         return (nodes, drop)
     }
@@ -349,7 +431,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         switch event.keyCode {
         case 53 where dragSource != nil:
-            dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true
+            stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true
         case 48 where event.modifierFlags.contains(.option): addParent()
         case 48: addChild()                         // Tab
         case 36, 76:
@@ -390,11 +472,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     override func mouseDown(with event: NSEvent) {
         commitEditing()
+        let wasPresented = !springPositions.isEmpty
+        let hitNodes = wasPresented ? previewGeometry().nodes : visibleNodes()
+        stopSpring()
         dragSource = nil
         dragPoint = nil
+        if wasPresented { needsDisplay = true } // A no-hit click must not leave stale spring paint or AX.
         let point = convert(event.locationInWindow, from: nil)
         dragOrigin = point
-        if let node = visibleNodes().last(where: { screen($0.frame).contains(point) }) {
+        if let node = hitNodes.last(where: { screen($0.frame).contains(point) }) {
             model.selected = node.node.id
             dragSource = event.clickCount == 1 && node.parent != nil ? node.node.id : nil
             let box = screen(node.frame)
@@ -422,7 +508,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true }
+        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true }
         guard let source = dragSource, dragPoint != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         if let placement = validDrop(at: point, source: source, nodes: visibleNodes()),

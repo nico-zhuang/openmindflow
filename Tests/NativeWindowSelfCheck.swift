@@ -264,10 +264,22 @@ enum NativeWindowSelfCheck {
                   send(.leftMouseDown, crossStart), send(.leftMouseDragged, crossGap),
                   crossModel.roots[0].children.map(\.id) == [source.id, destination.id],
                   abs(sourceAX.accessibilityFrame().minX - sourceInitial.minX - (crossGap.x - crossStart.x)) < 1,
-                  abs(movingAX.accessibilityFrame().minX - childInitial.minX - (crossGap.x - crossStart.x)) < 1,
-                  abs(beforeAX.accessibilityFrame().minY - siblingInitial.minY - siblingScreenShift) < 1,
-                  capture("live.png") else {
-                finish("FAIL native preview source/child pointer coupling or sibling live reflow", passed: false); return
+                  abs(movingAX.accessibilityFrame().minX - childInitial.minX - (crossGap.x - crossStart.x)) < 1 else {
+                finish("FAIL native preview source/child pointer coupling", passed: false); return
+            }
+            let targetY = siblingInitial.minY + siblingScreenShift
+            let firstY = beforeAX.accessibilityFrame().minY
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                guard abs(firstY - siblingInitial.minY) < abs(siblingScreenShift),
+                      abs(firstY - targetY) > 0.1 else {
+                    finish("FAIL native sibling must start between committed and preview positions", passed: false); return
+                }
+                for _ in 0..<40 where abs(beforeAX.accessibilityFrame().minY - targetY) >= 1 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                }
+            }
+            guard abs(beforeAX.accessibilityFrame().minY - targetY) < 1, capture("live.png") else {
+                finish("FAIL native sibling spring did not reach preview or capture failed", passed: false); return
             }
             guard send(.leftMouseUp, crossGap),
                   crossModel.roots[0].children.last?.children.map(\.id) == [before.id, source.id, after.id],
