@@ -134,7 +134,9 @@ enum OutlineWorkbenchTests {
 
         let delegate = AppDelegate()
         let workbench = delegate.makeWorkbench(canvas: manyCanvas)
-        assert(workbench.splitViewItems.count == 2)
+        assert(workbench.splitViewItems.count == 3 &&
+               workbench.splitViewItems[2].viewController.view is StyleInspector,
+               "Workbench must expose a native right-side Style inspector beside outline and canvas")
         let sidebar = workbench.splitViewItems[0]
         assert(sidebar.canCollapse && sidebar.minimumThickness == 180 && sidebar.maximumThickness == 320)
         assert(sidebar.viewController.view is MapOutlineView)
@@ -144,6 +146,9 @@ enum OutlineWorkbenchTests {
                                   styleMask: [.titled], backing: .buffered, defer: false)
         sideWindow.contentViewController = workbench // Never shown or activated.
         sideWindow.contentView?.layoutSubtreeIfNeeded()
+        assert(sideWindow.contentView!.bounds.width >= 1000 && manyCanvas.bounds.width >= 400 &&
+               manyCanvas.bounds.height >= 400,
+               "Attaching the three-column controller must not shrink the window and canvas to a zero-width 26pt strip")
         let attachedOutline = sidebar.viewController.view as! MapOutlineView
         assert(sideWindow.makeFirstResponder(attachedOutline.outlineView))
         delegate.installMenu()

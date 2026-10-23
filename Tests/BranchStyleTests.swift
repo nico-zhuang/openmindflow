@@ -3,13 +3,14 @@ import AppKit
 @main enum BranchStyleTests {
     static func main() {
         guard mapFont(isRoot: false).fontName == "STSongti-SC-Regular",
-              mapFont(isRoot: false).pointSize == 16,
-              mapFont(isRoot: true).pointSize == 20 else {
+              mapFont(isRoot: false).pointSize == 20,
+              mapFont(isRoot: true).pointSize == 24 else {
             fputs("Node labels should use the original window's serif-style proportions, not the old 14pt system font\n", stderr)
             exit(1)
         }
         let child = MapNode(id: UUID(), title: "Branch", children: [], folded: false)
-        let root = MapNode(id: UUID(), title: "Root", children: [child], folded: false)
+        let nearbyChild = MapNode(id: UUID(), title: "Nearby", children: [], folded: false)
+        let root = MapNode(id: UUID(), title: "Root", children: [child, nearbyChild], folded: false)
         let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         canvas.frame = CGRect(x: 0, y: 0, width: 900, height: 400)
         let nodes = mapLayout([root])
@@ -98,6 +99,11 @@ import AppKit
             fputs("An imported original v9 branch must use its own color and stroke width, not the fallback palette\n", stderr)
             exit(1)
         }
+        let endCapX = Int(box.maxX + 80 + 3)
+        let endCap = originalStyled.colorAt(x: endCapX, y: originalStyled.pixelsHigh - baseline - 1)
+        guard similar(endCap, NSColor(srgbRed: 0.2, green: 0.7, blue: 0.3, alpha: 1), tolerance: 0.12) else {
+            fputs("Branch line endpoints need smooth round caps, not squared-off cuts\n", stderr); exit(1)
+        }
         canvas.selectNode(child.id)
         let selectedStyle = paint()
         let originalLine = originalStyled.colorAt(x: x, y: originalStyled.pixelsHigh - baseline - 1)
@@ -111,12 +117,17 @@ import AppKit
         guard !similar(selectedBackdrop, unselectedBackdrop) else {
             fputs("Selected child needs a highlight box around the text, not the underline\n", stderr); exit(1)
         }
-        let plusX = Int(box.maxX + 80 + 24), plusY = Int(box.maxY + 90 - 7)
+        let plusX = Int(box.maxX + 80 + 15), plusY = Int(box.maxY + 90 - 7)
         let hiddenPlus = paint().colorAt(x: plusX, y: 400 - plusY - 1)
         let hover = NSEvent.mouseEvent(with: .mouseMoved,
             location: CGPoint(x: plusX, y: 400 - plusY), modifierFlags: [], timestamp: 0,
             windowNumber: 0, context: nil, eventNumber: 1, clickCount: 0, pressure: 0)!
         canvas.mouseMoved(with: hover)
+        let nearby = canvas.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }
+            .filter { $0.accessibilityLabel() == "Add Child" } ?? []
+        guard nearby.count >= 2 && nearby.count <= 3 else {
+            fputs("Near a sibling cluster, show the nearest two or three add buttons rather than only one\n", stderr); exit(1)
+        }
         let shownPlus = paint().colorAt(x: plusX, y: 400 - plusY - 1)
         guard !similar(hiddenPlus, shownPlus) else {
             fputs("Plus should appear only when the pointer approaches a branch endpoint\n", stderr); exit(1)
@@ -126,9 +137,22 @@ import AppKit
         guard similar(hiddenPlus, gonePlus) else {
             fputs("Plus must disappear when the pointer leaves the canvas\n", stderr); exit(1)
         }
+        assert(canvas.model.setBranchStroke(width: 10, color: "#E10000FF", style: "dashed"))
+        canvas.needsDisplay = true
+        let custom = paint()
+        let customY = custom.pixelsHigh - baseline - 1
+        let samples = (Int(box.maxX + 80 - 65)..<Int(box.maxX + 80 - 5)).map {
+            rgba(custom.colorAt(x: $0, y: customY))
+        }
+        let red = samples.filter { $0.count == 3 && $0[0] > 0.6 && $0[1] < 0.2 && $0[2] < 0.2 }.count
+        guard red > 5 && red < samples.count - 5 else {
+            fputs("Inspector stroke color and dashed style must render real colored gaps; red=\(red) total=\(samples.count) first=\(samples.first ?? []) last=\(samples.last ?? [])\n", stderr); exit(1)
+        }
+        assert(canvas.model.setAlignment("right"))
+        canvas.needsDisplay = true
         canvas.selectAndEdit(child.id)
         guard let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first,
-              !field.isBordered && !field.drawsBackground,
+              field.alignment == .right && !field.isBordered && !field.drawsBackground,
               canvas.frameForAccessibility(child.id) != nil else {
             fputs("Editing must keep invisible hit geometry without restoring a card or text-field box\n", stderr)
             exit(1)

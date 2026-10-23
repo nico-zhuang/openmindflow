@@ -319,6 +319,9 @@ final class MapModel {
         }
     }
 
+    @discardableResult
+    func resetStrokeStyle() -> Bool { editSelected { $0.strokeStyle = nil } }
+
     func rename(_ title: String, initialWidth: CGFloat? = nil) {
         guard let path = Self.path(to: selected, in: roots),
               Self.node(at: path[...], in: roots).title != title else { return }

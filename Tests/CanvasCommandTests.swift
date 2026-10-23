@@ -74,6 +74,18 @@ enum CanvasCommandTests {
         assert(returnModel.roots[0].children.count == 2 &&
                returnCanvas.subviews.contains(where: { $0 is NSTextField }),
                "Second Return on canvas should create and edit a sibling")
+        let freshCanvas = MapCanvas(model: MapModel(roots: [], selected: UUID()))
+        freshCanvas.frame = CGRect(x: 0, y: 0, width: 900, height: 700)
+        freshCanvas.addMainNode()
+        let freshField = freshCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        freshField.stringValue = "Hi"
+        freshCanvas.commitEditing()
+        let firstWidth = freshCanvas.model.roots[0].width
+        assert(firstWidth != nil && firstWidth! >= 60 && firstWidth! < 170,
+               "First text edit of a newly created node must set a compact measured width, not the old 170pt minimum")
+        freshCanvas.undo()
+        assert(freshCanvas.model.roots[0].title.isEmpty && freshCanvas.model.roots[0].width == nil,
+               "First title and measured width need a single undo step")
         let rightA = MapNode(id: UUID(), title: "A", children: [], folded: false)
         let rightB = MapNode(id: UUID(), title: "B", children: [], folded: false)
         let rightRoot = MapNode(id: UUID(), title: "Root", children: [rightA, rightB], folded: false)

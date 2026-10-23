@@ -3,8 +3,8 @@ import AppKit
 @main
 enum LayoutTests {
     static func main() throws {
-        assert(mapFont(isRoot: true).pointSize == 20)
-        assert(mapFont(isRoot: false).pointSize == 16)
+        assert(mapFont(isRoot: true).pointSize == 24)
+        assert(mapFont(isRoot: false).pointSize == 20)
         assert(mapFont(isRoot: true) != mapFont(isRoot: false))
         let fontRoot = MapNode(id: UUID(), title: "Preview", children: [], folded: false)
         var largerRoot = fontRoot
@@ -22,6 +22,8 @@ enum LayoutTests {
         assert(first.map(\.frame) == mapLayout(roots).map(\.frame), "Layout must be deterministic")
         assert(first.map(\.node.id) == [root.id, root.children[0].id, root.children[1].id, secondRoot.id])
         assert(first[1].frame.maxY < first[2].frame.minY, "Children must not overlap")
+        assert(first[2].frame.minY - first[1].frame.maxY == 24,
+               "New auto-layout siblings should have a tighter 24pt default gap")
         assert(first[1].frame.minX == first[2].frame.minX)
         assert(first[0].frame.maxX < first[1].frame.minX)
         assert(first[2].frame.maxY < first[3].frame.minY, "Roots must not overlap")

@@ -363,7 +363,7 @@ enum MapModelTests {
         let beforeInvalid = group.roots
         assert(!group.moveSelectedNodes(to: nested, at: 0))
         assert(!group.moveSelectedNodes(to: groupRoot, at: 0), "Identity group move cannot unfold or add history")
-        assert(!group.moveSelectedNodes(to: target, at: 0, locations: [left: CGPoint(x: .nan, y: 0),
+        assert(!group.moveSelectedNodes(to: target, at: 0, locations: [left: CGPoint(x: CGFloat.nan, y: 0),
                                                                       right: CGPoint(x: 480, y: 200)]))
         assert(group.roots == beforeInvalid)
         assert(group.moveSelectedNodes(to: target, at: 0, locations: [left: CGPoint(x: 400, y: 200),

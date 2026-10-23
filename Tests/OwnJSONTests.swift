@@ -91,6 +91,39 @@ enum OwnJSONTests {
         try writeOwnJSON([resized], to: customWidthURL)
         let reopenedStyled = try readOwnJSON(customWidthURL)
         assert(reopenedStyled == [resized], "Edited original-style font family and size survive separate Save/Open")
+        resized.textAlignment = "right"
+        resized.branchStrokeWidth = 4
+        resized.branchStrokeColor = "#33AADDFF"
+        resized.strokeStyle = "dashed"
+        try writeOwnJSON([resized], to: customWidthURL)
+        let styledAgain = try readOwnJSON(customWidthURL)
+        assert(styledAgain == [resized],
+               "Right inspector alignment, custom color, stroke width and dash survive separate Save/Open")
+        let invalidStyleURL = scratch.appendingPathComponent("invalid-style.mindmap.json")
+        var unsafeStyle = resized
+        for alignment in ["unexpected", "", "LEFT"] {
+            unsafeStyle.textAlignment = alignment
+            try JSONEncoder().encode([unsafeStyle]).write(to: invalidStyleURL)
+            rejects { _ = try readOwnJSON(invalidStyleURL) }
+            rejects { try writeOwnJSON([unsafeStyle], to: url) }
+        }
+        unsafeStyle = resized
+        unsafeStyle.branchStrokeColor = "bad-color"
+        try JSONEncoder().encode([unsafeStyle]).write(to: invalidStyleURL)
+        rejects { _ = try readOwnJSON(invalidStyleURL) }
+        rejects { try writeOwnJSON([unsafeStyle], to: url) }
+        unsafeStyle = resized
+        unsafeStyle.branchStrokeWidth = -1
+        try JSONEncoder().encode([unsafeStyle]).write(to: invalidStyleURL)
+        rejects { _ = try readOwnJSON(invalidStyleURL) }
+        rejects { try writeOwnJSON([unsafeStyle], to: url) }
+        unsafeStyle = resized
+        unsafeStyle.strokeStyle = "thirdparty"
+        try JSONEncoder().encode([unsafeStyle]).write(to: invalidStyleURL)
+        rejects { _ = try readOwnJSON(invalidStyleURL) }
+        rejects { try writeOwnJSON([unsafeStyle], to: url) }
+        let afterUnsafeStyle = try readOwnJSON(url)
+        assert(afterUnsafeStyle == expected, "Rejecting malformed style must not overwrite an existing map")
         let invalidFontURL = scratch.appendingPathComponent("invalid-font.mindmap.json")
         var invalidFont = resized
         for value in [0.0, 513, -2] {

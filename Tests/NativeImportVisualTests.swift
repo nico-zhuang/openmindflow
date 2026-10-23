@@ -110,7 +110,7 @@ import AppKit
         assert(canvas.model.roots[0].children[0].location == SIMD2(500, 170),
                "Undo restores original MindNode saved position and source parent")
         let branch = canvas.frameForAccessibility(child.id)!
-        let plusX = branch.maxX + 24, plusY = branch.maxY - 7
+        let plusX = branch.maxX + 15, plusY = branch.maxY - 7
         canvas.mouseMoved(with: mouse(.mouseMoved, x: plusX, y: plusY))
         canvas.mouseDown(with: mouse(.leftMouseDown, x: plusX, y: plusY))
         canvas.mouseUp(with: mouse(.leftMouseUp, x: plusX, y: plusY))

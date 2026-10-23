@@ -31,7 +31,7 @@ func dropPlacement(at point: CGPoint, over node: LaidOutNode,
 }
 
 func mapFont(isRoot: Bool, zoom: CGFloat = 1, node: MapNode? = nil) -> NSFont {
-    let size: CGFloat = CGFloat(node?.fontSize ?? (isRoot ? 20 : 16)) * zoom
+    let size: CGFloat = CGFloat(node?.fontSize ?? (isRoot ? 24 : 20)) * zoom
     return node?.fontFamily.flatMap { NSFont(name: $0, size: size) }
         ?? NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
@@ -77,7 +77,7 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             return LaidOutNode(node: node, frame: frame, parent: item.parent)
         }
     }
-    let gap: CGFloat = 32
+    let gap: CGFloat = 24
     var sizes: [UUID: CGSize] = [:]
     var subtreeHeights: [UUID: CGFloat] = [:]
     var columnWidths: [CGFloat] = []

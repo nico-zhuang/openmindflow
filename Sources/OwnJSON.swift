@@ -4,7 +4,7 @@ import Darwin
 private let ownJSONLimit = 8 * 1024 * 1024
 
 enum OwnJSONError: LocalizedError {
-    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont
+    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +15,7 @@ enum OwnJSONError: LocalizedError {
         case .invalidWidth: return "A node width must be a finite value from 60 to 1000 points."
         case .invalidLocation: return "A saved node position must be within one million points."
         case .invalidFont: return "A font name must be at most 128 bytes and a font size from 1 to 512 points."
+        case .invalidStyle: return "Alignment, line color, width or dash style is invalid."
         }
     }
 }
@@ -37,6 +38,16 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
             if let size = node.fontSize, (!size.isFinite || !(1...512).contains(size)) {
                 throw OwnJSONError.invalidFont
             }
+            if let alignment = node.textAlignment,
+               !["left", "center", "right", "justify"].contains(alignment) { throw OwnJSONError.invalidStyle }
+            if let line = node.branchStrokeWidth,
+               (!line.isFinite || !(0.5...16).contains(line)) { throw OwnJSONError.invalidStyle }
+            if let color = node.branchStrokeColor,
+               (color.count != 9 || color.first != "#" || UInt32(color.dropFirst(), radix: 16) == nil) {
+                throw OwnJSONError.invalidStyle
+            }
+            if let style = node.strokeStyle,
+               style != "solid" && style != "dashed" { throw OwnJSONError.invalidStyle }
             if let point = node.location {
                 guard point.x.isFinite, point.y.isFinite,
                       abs(point.x) <= 1_000_000, abs(point.y) <= 1_000_000 else {
