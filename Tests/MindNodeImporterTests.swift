@@ -121,6 +121,15 @@ enum MindNodeImporterTests {
         assert(special[0].title == "中文 & emoji 🧭\nnext line")
         assert(special[0].children.count == 1)
 
+        var blankChild = child
+        blankChild["title"] = ["text": ""]
+        var blankRoot = root
+        blankRoot["subnodes"] = [blankChild]
+        try write([blankRoot])
+        let importedBlank = try MindNodeImporter.load(package)
+        assert(importedBlank[0].children[0].title == "" && importedBlank[0].children[0].id == childID,
+               "MindNode v9 permits a real empty title.text on a child node")
+
         try write([])
         let empty = try MindNodeImporter.load(package)
         assert(empty.isEmpty)

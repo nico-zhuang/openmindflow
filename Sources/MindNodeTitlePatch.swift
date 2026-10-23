@@ -17,31 +17,55 @@ enum MindNodeTitlePatch {
               original.count == edited.count else { throw PatchError.unsupported }
         var changed = false
         var addedBytes = 0
+        var originals: [UUID: (MapNode, [String: Any])] = [:]
+        func collect(_ raw: [String: Any], _ before: MapNode, depth: Int) throws {
+            guard depth <= 200, originals.count < 10_000,
+                  let id = raw["nodeID"] as? String, UUID(uuidString: id) == before.id,
+                  originals[before.id] == nil,
+                  let fold = raw["hasFoldedSubnodes"] as? NSNumber,
+                  CFGetTypeID(fold) == CFBooleanGetTypeID(), fold.boolValue == before.folded,
+                  let xml = (raw["title"] as? [String: Any])?["text"] as? String,
+                  let children = raw["subnodes"] as? [[String: Any]],
+                  try MindNodeImporter.plainTitle(xml) == before.title else { throw PatchError.unsupported }
+            guard children.count == before.children.count else { throw PatchError.unsupported }
+            originals[before.id] = (before, raw)
+            for (child, model) in zip(children, before.children) { try collect(child, model, depth: depth + 1) }
+        }
+        for (map, before) in zip(maps, original) {
+            guard let raw = map["mainNode"] as? [String: Any] else { throw PatchError.unsupported }
+            try collect(raw, before, depth: 0)
+        }
         var seen = Set<UUID>()
-        var count = 0
         func update(_ raw: inout [String: Any], _ before: MapNode, _ after: MapNode, depth: Int) throws {
-            guard depth <= 200, count < 10_000, seen.insert(before.id).inserted else { throw PatchError.unsupported }
-            count += 1
+            guard depth <= 200, seen.count < 10_000, seen.insert(before.id).inserted,
+                  before.width == after.width else { throw PatchError.unsupported }
             guard before.id == after.id, let id = raw["nodeID"] as? String,
                   UUID(uuidString: id) == before.id,
                   let fold = raw["hasFoldedSubnodes"] as? NSNumber,
                   CFGetTypeID(fold) == CFBooleanGetTypeID(), fold.boolValue == before.folded,
                   var title = raw["title"] as? [String: Any],
                   let xml = title["text"] as? String,
-                  var children = raw["subnodes"] as? [[String: Any]],
-                  children.count == before.children.count,
-                  before.children.count == after.children.count else { throw PatchError.unsupported }
+                  raw["subnodes"] is [[String: Any]],
+                  before.id == after.id else { throw PatchError.unsupported }
             guard try MindNodeImporter.plainTitle(xml) == before.title else { throw PatchError.unsupported }
             if after.title != before.title {
-                guard xml.range(of: "^<p>[^<]*</p>$", options: .regularExpression) != nil,
-                      (try? XMLElement(xmlString: xml).stringValue) == before.title,
-                      after.title.unicodeScalars.allSatisfy({ scalar in
+                let paragraph: XMLElement
+                if xml.isEmpty {
+                    paragraph = XMLElement(name: "p")
+                } else {
+                    guard let existing = try? XMLElement(xmlString: xml), existing.name == "p",
+                          (existing.children ?? []).allSatisfy({ $0.kind == .text }),
+                          existing.stringValue == before.title else { throw PatchError.unsupported }
+                    paragraph = existing // Retain paragraph attributes such as real MindNode font styling.
+                }
+                guard after.title.unicodeScalars.allSatisfy({ scalar in
                           let value = scalar.value
                           return value == 9 || value == 10 ||
                               (0x20...0xD7FF).contains(value) || (0xE000...0xFFFD).contains(value) ||
                               (0x10000...0x10FFFF).contains(value)
                       }) else { throw PatchError.unsupported }
-                let replacement = XMLElement(name: "p", stringValue: after.title).xmlString(options: [])
+                paragraph.stringValue = after.title
+                let replacement = after.title.isEmpty ? "" : paragraph.xmlString(options: [])
                 let bytes = replacement.utf8.count
                 guard bytes <= 65_536 else { throw PatchError.unsupported }
                 let increase = max(0, bytes - xml.utf8.count)
@@ -55,9 +79,14 @@ enum MindNodeTitlePatch {
                 raw["hasFoldedSubnodes"] = after.folded
                 changed = true
             }
-            for index in children.indices {
-                try update(&children[index], before.children[index], after.children[index], depth: depth + 1)
+            var children: [[String: Any]] = []
+            for child in after.children {
+                guard let (old, stored) = originals[child.id] else { throw PatchError.unsupported }
+                var rawChild = stored
+                try update(&rawChild, old, child, depth: depth + 1)
+                children.append(rawChild)
             }
+            if before.children.map(\.id) != after.children.map(\.id) { changed = true }
             raw["subnodes"] = children
         }
         for index in maps.indices {
@@ -65,6 +94,7 @@ enum MindNodeTitlePatch {
             try update(&node, original[index], edited[index], depth: 0)
             maps[index]["mainNode"] = node
         }
+        guard seen.count == originals.count else { throw PatchError.unsupported }
         guard changed else { return data }
         canvas["mindMaps"] = maps
         document["canvas"] = canvas

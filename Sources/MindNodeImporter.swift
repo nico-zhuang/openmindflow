@@ -77,6 +77,7 @@ enum MindNodeImporter {
     }
 
     static func plainTitle(_ rich: String) throws -> String {
+        if rich.isEmpty { return "" } // Real v9 packages use an empty string for untitled nodes.
         // ponytail: text/tree/fold only; add style and attachment decoding after verified format samples.
         guard rich.utf8.count <= 65_536,
               rich.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,

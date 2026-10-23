@@ -3,17 +3,28 @@ import Darwin
 
 enum MindNodePackage {
     enum CopyError: Error { case unsupported }
+    typealias Snapshot = (paths: Set<String>, files: [String: Data])
 
-    static func copyUnmodified(from source: URL, to destination: URL) throws {
-        try copy(from: source, to: destination, editedRoots: nil)
+    static func snapshot(_ source: URL) throws -> Snapshot {
+        var info = stat()
+        guard source.isFileURL, source.pathExtension.lowercased() == "mindnode",
+              lstat(source.path, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { throw CopyError.unsupported }
+        return try manifest(source.standardizedFileURL)
     }
 
-    static func copyUpdatingExistingNodes(from source: URL, to destination: URL, editedRoots: [MapNode]) throws {
-        try copy(from: source, to: destination, editedRoots: editedRoots)
+    static func copyUnmodified(from source: URL, to destination: URL) throws {
+        try copy(from: source, to: destination, editedRoots: nil, expected: nil)
+    }
+
+    static func copyUpdatingExistingNodes(from source: URL, to destination: URL, editedRoots: [MapNode],
+                                          expected: Snapshot? = nil) throws {
+        try copy(from: source, to: destination, editedRoots: editedRoots, expected: expected)
     }
 
     // ponytail: path-based copy assumes a stable trusted sibling directory; use dirfd/openat traversal before exposing writes for concurrently mutable user packages.
-    private static func copy(from source: URL, to destination: URL, editedRoots: [MapNode]?) throws {
+    private static func copy(from source: URL, to destination: URL, editedRoots: [MapNode]?,
+                             expected: Snapshot?) throws {
         let fm = FileManager.default
         let source = source.standardizedFileURL, destination = destination.standardizedFileURL
         let parent = source.deletingLastPathComponent()
@@ -35,6 +46,9 @@ enum MindNodePackage {
               errno == ENOENT else { throw CopyError.unsupported }
         let originalRoots = try MindNodeImporter.load(source)
         let original = try manifest(source)
+        if let expected {
+            guard original.0 == expected.paths, original.1 == expected.files else { throw CopyError.unsupported }
+        }
 
         var pattern = (parent.path + "/.mindmap-copy-XXXXXX").utf8CString
         let stagePath = try pattern.withUnsafeMutableBufferPointer { bytes -> String in

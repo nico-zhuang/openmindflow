@@ -31,12 +31,62 @@ enum MindNodeTitlePatchTests {
         let untouched = (changed["subnodes"] as! [[String: Any]])[0]
         assert((untouched["title"] as! [String: Any])["text"] as? String == "<p>Untouched <b>bold</b></p>")
         assert(untouched["link"] as? String == "untouched")
+        var styledRoot = root
+        styledRoot["title"] = ["text": "<p style=\"font-size: 14pt\">Old &amp; safe</p>"]
+        var styledPlist = plist
+        styledPlist["canvas"] = ["mindMaps": [["mainNode": styledRoot]]]
+        let styledData = try PropertyListSerialization.data(fromPropertyList: styledPlist, format: .binary, options: 0)
+        let styledResult = try MindNodeTitlePatch.apply(to: styledData, original: [old], edited: [edited])
+        let styledDecoded = try PropertyListSerialization.propertyList(from: styledResult, options: [], format: nil) as! [String: Any]
+        let styledMaps = (styledDecoded["canvas"] as! [String: Any])["mindMaps"] as! [[String: Any]]
+        let styledRaw = styledMaps[0]["mainNode"] as! [String: Any]
+        let styledXML = (styledRaw["title"] as! [String: Any])["text"] as! String
+        let styledPlain = try MindNodeImporter.plainTitle(styledXML)
+        assert(styledXML.contains("style=\"font-size: 14pt\"") && styledPlain == edited.title,
+               "Edited title must preserve a real v9 paragraph's formatting attribute")
+        var untitledRoot = root
+        untitledRoot["title"] = ["text": ""]
+        var untitledPlist = plist
+        untitledPlist["canvas"] = ["mindMaps": [["mainNode": untitledRoot]]]
+        let untitledData = try PropertyListSerialization.data(fromPropertyList: untitledPlist, format: .binary, options: 0)
+        var untitled = old
+        untitled.title = ""
+        var renamed = untitled
+        renamed.title = "Edited empty title"
+        let blankResult = try MindNodeTitlePatch.apply(to: untitledData, original: [untitled], edited: [renamed])
+        let blankDecoded = try PropertyListSerialization.propertyList(from: blankResult, options: [], format: nil) as! [String: Any]
+        let blankMaps = (blankDecoded["canvas"] as! [String: Any])["mindMaps"] as! [[String: Any]]
+        let blankRaw = blankMaps[0]["mainNode"] as! [String: Any]
+        assert((blankRaw["title"] as! [String: Any])["text"] as? String == "<p>Edited empty title</p>")
         func rejects(_ action: () throws -> Data) -> Bool {
             do { _ = try action(); return false } catch { return true }
         }
         var moved = edited
         moved.children = []
         assert(rejects { try MindNodeTitlePatch.apply(to: originalData, original: [old], edited: [moved]) })
+        let secondID = UUID()
+        let second: [String: Any] = ["nodeID": secondID.uuidString,
+            "title": ["text": "<p style=\"font-size: 14pt\">Second</p>"],
+            "subnodes": [], "hasFoldedSubnodes": false, "unknown": "keep-with-node"]
+        var twoRaw = root
+        twoRaw["subnodes"] = [child, second]
+        var twoDocument = plist
+        twoDocument["canvas"] = ["mindMaps": [["mainNode": twoRaw]]]
+        let twoData = try PropertyListSerialization.data(fromPropertyList: twoDocument, format: .binary, options: 0)
+        let secondNode = MapNode(id: secondID, title: "Second", children: [], folded: false)
+        var twoOriginal = old
+        twoOriginal.children.append(secondNode)
+        var reordered = twoOriginal
+        reordered.children.swapAt(0, 1)
+        let reorderedData = try MindNodeTitlePatch.apply(to: twoData, original: [twoOriginal], edited: [reordered])
+        let reorderedDocument = try PropertyListSerialization.propertyList(from: reorderedData, options: [], format: nil) as! [String: Any]
+        let reorderedMap = (reorderedDocument["canvas"] as! [String: Any])["mindMaps"] as! [[String: Any]]
+        let reorderedRoot = reorderedMap[0]["mainNode"] as! [String: Any]
+        let reorderedRaw = reorderedRoot["subnodes"] as! [[String: Any]]
+        assert((reorderedRaw[0]["unknown"] as? String) == "keep-with-node" &&
+               (reorderedRaw[1]["link"] as? String) == "untouched" &&
+               reorderedRaw.compactMap { UUID(uuidString: $0["nodeID"] as? String ?? "") } == [secondID, childID],
+               "Moving existing nodes must carry their unknown metadata and preserve original IDs")
         var styled = old
         styled.children[0].title = "Rewritten"
         assert(rejects { try MindNodeTitlePatch.apply(to: originalData, original: [old], edited: [styled]) })

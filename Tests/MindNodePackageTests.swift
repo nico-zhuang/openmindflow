@@ -93,6 +93,16 @@ enum MindNodePackageTests {
         }
         try verify(updatedFormat == .binary && updatedPlist["unknownRootField"] as? [Int] == [1, 2, 3])
         try verify((updatedRoot["unknownNodeField"] as? [String: Any])?["color"] as? String == "preserve")
+        let snapshot = try MindNodePackage.snapshot(source)
+        let staleTarget = scratch.appendingPathComponent("source-changed.mindnode", isDirectory: true)
+        try Data([7, 8, 9]).write(to: source.appendingPathComponent("assets/icon.bin"))
+        var rejectedStale = false
+        do {
+            try MindNodePackage.copyUpdatingExistingNodes(from: source, to: staleTarget,
+                                                             editedRoots: [edited], expected: snapshot)
+        } catch { rejectedStale = true }
+        try verify(rejectedStale && !fm.fileExists(atPath: staleTarget.path))
+        try resource.write(to: source.appendingPathComponent("assets/icon.bin"))
         if keepFixture {
             guard try MindNodeImporter.load(source) == [MapNode(id: rootID, title: "合成节点", children: [], folded: false)],
                   try MindNodeImporter.load(updatedOutput) == [edited] else {
