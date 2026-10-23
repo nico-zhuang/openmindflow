@@ -38,6 +38,16 @@ enum MindNodeImporterTests {
             _ = close(scratchFD)
             _ = close(baseFD)
         }
+        do {
+            _ = try MindNodeImporter.load(package)
+            fputs("An empty MindNode package must not import\n", stderr); exit(1)
+        } catch ImportError.missingContents {
+            guard ImportError.missingContents.localizedDescription.contains("contents.xml") else {
+                fputs("Missing package payload diagnostic must name contents.xml\n", stderr); exit(1)
+            }
+        } catch {
+            fputs("A package missing contents.xml needs its own importer error\n", stderr); exit(1)
+        }
         let rootID = UUID(), childID = UUID()
         let child: [String: Any] = ["nodeID": childID.uuidString, "title": ["text": "<p>Hello &amp; world</p>"], "subnodes": [], "hasFoldedSubnodes": true]
         let root: [String: Any] = ["nodeID": rootID.uuidString, "title": ["text": "<p>Root</p>"], "subnodes": [child], "hasFoldedSubnodes": false]
@@ -131,7 +141,16 @@ enum MindNodeImporterTests {
         var bad = root
         bad["title"] = ["text": "<p>broken"]
         try write([bad])
-        assert(rejects())
+        do {
+            _ = try MindNodeImporter.load(package)
+            fputs("Invalid title data must not import\n", stderr); exit(1)
+        } catch ImportError.invalid {
+            guard ImportError.invalid.localizedDescription.contains("structure this v9 importer cannot read") else {
+                fputs("Invalid v9 data must not imply the user's file itself is corrupt\n", stderr); exit(1)
+            }
+        } catch {
+            fputs("A malformed known-v9 title needs the v9 structure diagnostic\n", stderr); exit(1)
+        }
         bad["title"] = ["text": "<!DOCTYPE p [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><p>&xxe;</p>"]
         try write([bad])
         assert(rejects())

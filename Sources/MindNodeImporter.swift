@@ -2,13 +2,14 @@ import Foundation
 import CoreFoundation
 
 enum ImportError: LocalizedError {
-    case unsupported, zipArchive, invalid, tooLarge
+    case unsupported, zipArchive, missingContents, invalid, tooLarge
 
     var errorDescription: String? {
         switch self {
         case .unsupported: "Only MindNode v9 binary-plist files or directory packages can be imported read-only; newer or unknown formats are unsupported."
         case .zipArchive: "ZIP-archived MindNode files are unsupported; no archive is extracted."
-        case .invalid: "The MindNode document is missing or malformed."
+        case .missingContents: "This MindNode package needs a readable, regular contents.xml file. The source was not changed."
+        case .invalid: "The MindNode document has missing data or uses a structure this v9 importer cannot read. The source was not changed."
         case .tooLarge: "The MindNode document exceeds the 8 MiB import limit."
         }
     }
@@ -29,7 +30,7 @@ enum MindNodeImporter {
         }
         guard let attrs = try? fm.attributesOfItem(atPath: contents.path),
               attrs[.type] as? FileAttributeType == .typeRegular else {
-            throw ImportError.invalid
+            throw kind == .typeDirectory ? ImportError.missingContents : .invalid
         }
         let limit = 8 * 1024 * 1024
         guard let size = attrs[.size] as? NSNumber, size.uint64Value <= UInt64(limit) else {
