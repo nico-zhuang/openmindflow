@@ -324,6 +324,98 @@ enum MapModelTests {
         assert(!leaf.undo()) // Rejected fold must not create an undo entry.
         assert(leaf.roots[0].title == "Leaf")
         assert(!leaf.toggleFold() && !leaf.roots[0].folded)
+
+        let groupRoot = UUID(), left = UUID(), nested = UUID(), right = UUID(), target = UUID()
+        let groupTree = MapNode(id: groupRoot, title: "Root", children: [
+            MapNode(id: left, title: "Left", children: [MapNode(id: nested, title: "Nested", children: [], folded: false,
+                location: SIMD2(120, 90))], folded: false, location: SIMD2(100, 70)),
+            MapNode(id: right, title: "Right", children: [], folded: false, location: SIMD2(180, 70)),
+            MapNode(id: target, title: "Target", children: [], folded: false, location: SIMD2(320, 70))
+        ], folded: false)
+        let group = MapModel(roots: [groupTree], selected: left)
+        assert(group.selectedIDs == [left])
+        assert(group.toggleSelection(right) && group.selectedIDs == [left, right] && group.selected == right)
+        assert(group.setWidth(240))
+        assert(group.roots[0].children[0].width == 240 && group.roots[0].children[1].width == 240)
+        assert(group.undo() && group.roots == [groupTree] && group.selectedIDs == [left, right])
+        assert(group.redo() && group.roots[0].children[1].width == 240)
+        assert(group.setFont(family: "Helvetica", size: 22))
+        assert(group.roots[0].children[0].fontSize == 22 && group.roots[0].children[1].fontSize == 22)
+        assert(group.setAlignment("center") && group.setBranchStroke(width: 3, color: "#112233FF", style: "dashed"))
+        assert(group.roots[0].children[0].strokeStyle == "dashed")
+        assert(group.resizeSelected(by: 20, visibleWidths: [left: 240, right: 260]))
+        assert(group.roots[0].children[0].width == 260 && group.roots[0].children[1].width == 280)
+        assert(group.roots[0].children[0].location == SIMD2(110, 70) &&
+               group.roots[0].children[1].location == SIMD2(190, 70))
+        assert(group.undo() && group.roots[0].children[0].width == 240)
+        assert(group.redo() && group.roots[0].children[1].width == 280)
+        assert(group.roots[0].children[0].textAlignment == "center" && group.roots[0].children[1].branchStrokeWidth == 3)
+        assert(group.setFont(size: 26) && group.roots[0].children.allSatisfy {
+            $0.id == target || ($0.fontSize == 26 && $0.fontFamily == "Helvetica")
+        })
+        assert(group.setBranchStroke(color: "#aabbccff") &&
+               group.roots[0].children[0].branchStrokeColor == "#AABBCCFF" &&
+               group.roots[0].children[1].strokeStyle == "dashed")
+        assert(!group.setBranchStroke(width: .nan, color: "#112233FF", style: "solid") &&
+               !group.setBranchStroke(width: 2, color: "bad", style: "solid") &&
+               !group.setBranchStroke(width: 2, color: "#112233FF", style: "dotted") &&
+               !group.setAlignment("diagonal"))
+        let beforeInvalid = group.roots
+        assert(!group.moveSelectedNodes(to: nested, at: 0))
+        assert(!group.moveSelectedNodes(to: groupRoot, at: 0), "Identity group move cannot unfold or add history")
+        assert(!group.moveSelectedNodes(to: target, at: 0, locations: [left: CGPoint(x: .nan, y: 0),
+                                                                      right: CGPoint(x: 480, y: 200)]))
+        assert(group.roots == beforeInvalid)
+        assert(group.moveSelectedNodes(to: target, at: 0, locations: [left: CGPoint(x: 400, y: 200),
+                                                                    right: CGPoint(x: 480, y: 200)]))
+        assert(group.roots[0].children.map(\.id) == [target])
+        assert(group.roots[0].children[0].children.map(\.id) == [left, right])
+        assert(group.roots[0].children[0].children[0].children[0].location == SIMD2(410, 220))
+        assert(group.undo() && group.roots == beforeInvalid && group.selectedIDs == [left, right])
+        assert(group.redo() && group.roots[0].children[0].children.map(\.id) == [left, right])
+        group.selected = left
+        assert(group.selectedIDs == [left], "Legacy direct primary selection resets to single selection")
+        assert(group.selectRange(to: right) && group.selectedIDs == [left, right])
+        assert(group.toggleSelection(nested) && group.selectedIDs.contains(nested))
+        assert(!group.moveSelectedNodes(to: nested, at: 0))
+        assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(group.roots)) == group.roots)
+        let ranged = MapModel(roots: [groupTree], selected: left)
+        assert(ranged.selectRange(to: right) && ranged.selectRange(to: target))
+        assert(ranged.selectedIDs == [left, right, target], "Repeated Shift extends from original anchor")
+        let ancestorGroup = MapModel(roots: [groupTree], selected: left)
+        assert(ancestorGroup.toggleSelection(nested))
+        assert(ancestorGroup.moveSelectedNodes(to: target, at: 0))
+        assert(ancestorGroup.roots[0].children[1].children.map(\.id) == [left])
+        assert(ancestorGroup.roots[0].children[1].children[0].children.map(\.id) == [nested])
+        assert(ancestorGroup.undo() && ancestorGroup.roots == [groupTree])
+        let edge = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Near edge", children: [], folded: false, location: SIMD2(999_990, 0)),
+            MapNode(id: UUID(), title: "Safe", children: [], folded: false, location: SIMD2(100, 0))
+        ], folded: false)], selected: UUID())
+        let edgeIDs = edge.roots[0].children.map(\.id)
+        edge.selected = edgeIDs[0]
+        assert(edge.toggleSelection(edgeIDs[1]))
+        let edgeBefore = edge.roots
+        assert(!edge.setWidth(1000, anchoredFrom: 60))
+        assert(!edge.resizeSelected(by: 940, visibleWidths: [edgeIDs[0]: 60, edgeIDs[1]: 60]))
+        assert(edge.roots == edgeBefore && !edge.undo(), "One invalid center rejects the whole batch")
+
+        let initial = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [], folded: false)], selected: UUID())
+        initial.selected = initial.roots[0].id
+        initial.addChild()
+        let newID = initial.selected
+        initial.rename("First title", initialWidth: 210)
+        assert(initial.roots[0].children[0].width == 210 && initial.roots[0].children[0].title == "First title")
+        assert(initial.undo() && initial.roots[0].children[0].width == nil)
+        initial.rename("Alternate first", initialWidth: 180)
+        assert(initial.roots[0].children[0].width == 180, "Undo restores the first-title width marker")
+        assert(initial.undo() && initial.redo() && initial.roots[0].children[0].width == 180)
+        initial.rename("Later", initialWidth: 350)
+        assert(initial.roots[0].children[0].width == 180 && initial.selected == newID)
+        let imported = MapModel(roots: [MapNode(id: UUID(), title: "", children: [], folded: false)], selected: UUID())
+        imported.selected = imported.roots[0].id
+        imported.rename("Imported", initialWidth: 200)
+        assert(imported.roots[0].width == nil, "Legacy blank nodes keep content-sized width")
         print("model tests passed")
     }
 }

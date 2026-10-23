@@ -11,19 +11,68 @@ struct MapNode: Codable, Equatable {
     var location: SIMD2<Double>? = nil // Saved world center; stdlib vector stays Codable/Equatable without AppKit.
     var fontFamily: String? = nil
     var fontSize: Double? = nil
+    var textAlignment: String? = nil
+    var branchStrokeWidth: CGFloat? = nil
+    var branchStrokeColor: String? = nil
+    var strokeStyle: String? = nil
 }
 
 final class MapModel {
     var roots: [MapNode]
-    var selected: UUID
+    var selected: UUID { didSet { selectedIDs = [selected]; selectionAnchor = selected } }
+    private(set) var selectedIDs: Set<UUID>
+    private var selectionAnchor: UUID
+    private var pendingInitialWidth: Set<UUID> = []
 
-    private typealias Snapshot = (roots: [MapNode], selected: UUID)
+    private typealias Snapshot = (roots: [MapNode], selected: UUID, selectedIDs: Set<UUID>, anchor: UUID, pending: Set<UUID>)
     private var past: [Snapshot] = []
     private var future: [Snapshot] = []
 
     init(roots: [MapNode], selected: UUID) {
         self.roots = roots
         self.selected = selected
+        selectedIDs = [selected]
+        selectionAnchor = selected
+    }
+
+    @discardableResult
+    func selectOnly(_ id: UUID) -> Bool {
+        guard Self.path(to: id, in: roots) != nil else { return false }
+        let changed = selectedIDs != [id]
+        selected = id
+        return changed
+    }
+
+    @discardableResult
+    func toggleSelection(_ id: UUID) -> Bool {
+        guard Self.path(to: id, in: roots) != nil else { return false }
+        if selectedIDs.contains(id) {
+            guard selectedIDs.count > 1 else { return false }
+            let remaining = selectedIDs.subtracting([id])
+            guard let next = selectedPaths().map({ Self.node(at: $0[...], in: roots).id })
+                .first(where: { remaining.contains($0) }) else { return false }
+            selected = next
+            selectedIDs = remaining
+        } else {
+            let union = selectedIDs.union([id])
+            selected = id
+            selectedIDs = union
+        }
+        return true
+    }
+
+    @discardableResult
+    func selectRange(to id: UUID) -> Bool {
+        guard let from = Self.path(to: selectionAnchor, in: roots), let to = Self.path(to: id, in: roots),
+              from.dropLast().elementsEqual(to.dropLast()), let start = from.last, let end = to.last else { return false }
+        let siblings = from.count == 1 ? roots : Self.node(at: from.dropLast(), in: roots).children
+        let range = Set(siblings[min(start, end)...max(start, end)].map(\.id))
+        let changed = selectedIDs != range || selected != id
+        let anchor = selectionAnchor
+        selected = id
+        selectedIDs = range
+        selectionAnchor = anchor
+        return changed
     }
 
     func addChild() {
@@ -32,6 +81,7 @@ final class MapModel {
             let root = MapNode(id: UUID(), title: "", children: [], folded: false)
             roots = [root]
             selected = root.id
+            pendingInitialWidth.insert(root.id)
             return
         }
         guard let path = Self.path(to: selected, in: roots) else { return }
@@ -42,6 +92,7 @@ final class MapModel {
             nodes[index].children.append(child)
         }
         selected = child.id
+        pendingInitialWidth.insert(child.id)
     }
 
     func addSibling(before: Bool = false) {
@@ -53,6 +104,7 @@ final class MapModel {
             nodes.insert(sibling, at: index + (before ? 0 : 1))
         }
         selected = sibling.id
+        pendingInitialWidth.insert(sibling.id)
     }
 
     func addParent() {
@@ -62,6 +114,7 @@ final class MapModel {
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in nodes[index] = parent }
         selected = parent.id
+        pendingInitialWidth.insert(parent.id)
     }
 
     func addMainNode() {
@@ -70,6 +123,7 @@ final class MapModel {
         save()
         roots.insert(main, at: index)
         selected = main.id
+        pendingInitialWidth.insert(main.id)
     }
 
     @discardableResult
@@ -130,6 +184,57 @@ final class MapModel {
     }
 
     @discardableResult
+    func moveSelectedNodes(to parentID: UUID, at index: Int, locations: [UUID: CGPoint]? = nil) -> Bool {
+        let selected = selectedPaths()
+        // ponytail: small selections scan ancestor paths; index them if large group drags become slow.
+        let paths = selected.filter { path in
+            !selected.contains { $0.count < path.count && path.starts(with: $0) }
+        }
+        guard !paths.isEmpty, paths.allSatisfy({ $0.count > 1 }),
+              let targetPath = Self.path(to: parentID, in: roots),
+              !paths.contains(where: { targetPath.starts(with: $0) }),
+              (0...Self.node(at: targetPath[...], in: roots).children.count).contains(index),
+              locations.map({ Set($0.keys) == Set(paths.map { Self.node(at: $0[...], in: roots).id }) }) ?? true
+        else { return false }
+        var moving = paths.map { Self.node(at: $0[...], in: roots) }
+        if let locations {
+            for position in moving.indices {
+                let point = locations[moving[position].id]!
+                guard point.x.isFinite, point.y.isFinite,
+                      abs(point.x) <= 1_000_000, abs(point.y) <= 1_000_000 else { return false }
+                if let old = moving[position].location {
+                    let dx = Double(point.x) - old.x, dy = Double(point.y) - old.y
+                    func shift(_ node: inout MapNode) -> Bool {
+                        if let old = node.location {
+                            let next = SIMD2(old.x + dx, old.y + dy)
+                            guard next.x.isFinite, next.y.isFinite,
+                                  abs(next.x) <= 1_000_000, abs(next.y) <= 1_000_000 else { return false }
+                            node.location = next
+                        }
+                        for child in node.children.indices where !shift(&node.children[child]) { return false }
+                        return true
+                    }
+                    guard shift(&moving[position]) else { return false }
+                } else { moving[position].location = SIMD2(Double(point.x), Double(point.y)) }
+            }
+        }
+        var updated = roots
+        for path in paths.reversed() {
+            Self.edit(&updated, at: path[...]) { nodes, at in nodes.remove(at: at) }
+        }
+        let preceding = paths.filter { $0.dropLast().elementsEqual(targetPath) && $0.last! < index }.count
+        guard let destination = Self.path(to: parentID, in: updated) else { return false }
+        Self.edit(&updated, at: destination[...]) { nodes, at in
+            nodes[at].children.insert(contentsOf: moving, at: index - preceding)
+        }
+        guard updated != roots else { return false }
+        Self.edit(&updated, at: destination[...]) { nodes, at in nodes[at].folded = false }
+        save()
+        roots = updated
+        return true
+    }
+
+    @discardableResult
     func detachSelected() -> Bool {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
         let moving = Self.node(at: path[...], in: roots)
@@ -141,45 +246,91 @@ final class MapModel {
 
     @discardableResult
     func setWidth(_ width: CGFloat?, anchoredFrom oldWidth: CGFloat? = nil) -> Bool {
-        guard width.map(MapNode.validWidth) ?? true,
-              oldWidth.map(MapNode.validWidth) ?? true,
-              let path = Self.path(to: selected, in: roots) else { return false }
-        let current = Self.node(at: path[...], in: roots)
-        guard current.width != width else { return false }
-        let centerX = current.location.flatMap { point -> Double? in
-            guard let width, let oldWidth else { return nil }
-            return point.x + Double(width - oldWidth) / 2
+        guard width.map(MapNode.validWidth) ?? true, oldWidth.map(MapNode.validWidth) ?? true,
+              selectedPaths().allSatisfy({ path in
+                  let node = Self.node(at: path[...], in: roots)
+                  guard node.width != width, let width, let oldWidth, let point = node.location else { return true }
+                  let center = point.x + Double(width - oldWidth) / 2
+                  return center.isFinite && abs(center) <= 1_000_000
+              }) else { return false }
+        return editSelected { node in
+            guard node.width != width else { return }
+            if let width, let oldWidth, let point = node.location {
+                node.location?.x = point.x + Double(width - oldWidth) / 2
+            }
+            node.width = width
         }
-        guard centerX.map({ $0.isFinite && abs($0) <= 1_000_000 }) ?? true else { return false }
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
-            nodes[index].width = width
-            if let centerX { nodes[index].location?.x = centerX }
-        }
-        return true
     }
 
     @discardableResult
-    func setFont(family: String, size: Double) -> Bool {
-        guard !family.isEmpty, family.utf8.count <= 128, size.isFinite, (6...240).contains(size),
-              let path = Self.path(to: selected, in: roots) else { return false }
-        let current = Self.node(at: path[...], in: roots)
-        guard current.fontFamily != family || current.fontSize != size else { return false }
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
-            nodes[index].fontFamily = family
-            nodes[index].fontSize = size
+    func resizeSelected(by delta: CGFloat, visibleWidths: [UUID: CGFloat]) -> Bool {
+        guard delta.isFinite, !visibleWidths.isEmpty else { return false }
+        let paths = selectedPaths()
+        guard !paths.isEmpty, paths.allSatisfy({ path in
+            let node = Self.node(at: path[...], in: roots)
+            guard let old = visibleWidths[node.id], MapNode.validWidth(old) else { return false }
+            let width = min(1000, max(60, old + delta))
+            guard width.isFinite else { return false }
+            guard node.width != width, let point = node.location else { return true }
+            let center = point.x + Double(width - old) / 2
+            return center.isFinite && abs(center) <= 1_000_000
+        }) else { return false }
+        return editSelected { node in
+            let old = visibleWidths[node.id]!
+            let width = min(1000, max(60, old + delta))
+            guard node.width != width else { return }
+            if let point = node.location { node.location?.x = point.x + Double(width - old) / 2 }
+            node.width = width
         }
-        return true
     }
 
-    func rename(_ title: String) {
+    @discardableResult
+    func setFont(family: String? = nil, size: Double? = nil) -> Bool {
+        guard family != nil || size != nil,
+              family.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
+              size.map({ $0.isFinite && (6...240).contains($0) }) ?? true else { return false }
+        return editSelected { node in
+            if let family { node.fontFamily = family }
+            if let size { node.fontSize = size }
+        }
+    }
+
+    @discardableResult
+    func setAlignment(_ value: String?) -> Bool {
+        guard value.map({ ["left", "center", "right", "justify"].contains($0) }) ?? true else { return false }
+        return editSelected { $0.textAlignment = value }
+    }
+
+    @discardableResult
+    func setBranchStroke(width: CGFloat? = nil, color: String? = nil, style: String? = nil) -> Bool {
+        guard width != nil || color != nil || style != nil,
+              width.map({ $0.isFinite && (0.5...16).contains($0) }) ?? true,
+              color.map({ value in
+                  let bytes = Array(value.utf8)
+                  return bytes.count == 9 && bytes[0] == 35 && bytes.dropFirst().allSatisfy {
+                      (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+                  }
+              }) ?? true,
+              style.map({ $0 == "solid" || $0 == "dashed" }) ?? true else { return false }
+        return editSelected { node in
+            if let width { node.branchStrokeWidth = width }
+            if let color { node.branchStrokeColor = color.uppercased() }
+            if let style { node.strokeStyle = style }
+        }
+    }
+
+    func rename(_ title: String, initialWidth: CGFloat? = nil) {
         guard let path = Self.path(to: selected, in: roots),
               Self.node(at: path[...], in: roots).title != title else { return }
+        let firstWidth = pendingInitialWidth.contains(selected) && !title.isEmpty &&
+            Self.node(at: path[...], in: roots).width == nil &&
+            (initialWidth.map(MapNode.validWidth) ?? false) ? initialWidth : nil
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in
             nodes[index].title = title
+            if let firstWidth { nodes[index].width = firstWidth }
         }
+        if !title.isEmpty { pendingInitialWidth.remove(selected) }
     }
 
     @discardableResult
@@ -215,21 +366,39 @@ final class MapModel {
     @discardableResult
     func undo() -> Bool {
         guard let previous = past.popLast() else { return false }
-        future.append((roots, selected))
-        (roots, selected) = previous
+        future.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = previous
         return true
     }
 
     @discardableResult
     func redo() -> Bool {
         guard let next = future.popLast() else { return false }
-        past.append((roots, selected))
-        (roots, selected) = next
+        past.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = next
+        return true
+    }
+
+    private func selectedPaths() -> [[Int]] {
+        selectedIDs.compactMap { Self.path(to: $0, in: roots) }
+            .sorted { $0.lexicographicallyPrecedes($1) }
+    }
+
+    private func editSelected(_ change: (inout MapNode) -> Void) -> Bool {
+        let paths = selectedPaths()
+        guard !paths.isEmpty else { return false }
+        var updated = roots
+        for path in paths {
+            Self.edit(&updated, at: path[...]) { nodes, index in change(&nodes[index]) }
+        }
+        guard updated != roots else { return false }
+        save()
+        roots = updated
         return true
     }
 
     private func save() {
-        past.append((roots, selected))
+        past.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
         future.removeAll()
     }
 
