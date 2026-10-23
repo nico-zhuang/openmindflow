@@ -39,9 +39,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
     private var dragSource: UUID?
-    private var dragPoint: CGPoint?
+    private var dragPoint: CGPoint? { didSet { previewCache = nil } }
     private var dragOrigin: CGPoint?
     private var dragGrab = CGPoint.zero
+    private var draggedIDs = Set<UUID>()
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
     private var previewCache: (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?)?
     private var springPositions: [UUID: (point: CGPoint, velocity: CGPoint)] = [:]
@@ -51,6 +52,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var springTick = false
     // ponytail: drag-only spring; release/Escape snap until Gate B owns settling and interruption.
     private let springResponse: CGFloat = 0.26, springDamping: CGFloat = 0.95
+    private let childOverlapThreshold: CGFloat = 0.65, collisionGap: CGFloat = 8
     private var announcedSelection: UUID
 
     init(model: MapModel) {
@@ -151,8 +153,21 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
         if let target = nodes.last(where: { $0.node.id != source && screen($0.frame).contains(point) }) {
             let siblings = nodes.filter { $0.parent == target.parent }
-            guard let place = dropPlacement(at: local, over: target, siblings: siblings),
-                  model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
+            guard var place = dropPlacement(at: local, over: target, siblings: siblings) else { return nil }
+            if place.parent == target.node.id, let sourceBox = nodes.first(where: { $0.node.id == source })?.frame {
+                let dragged = CGRect(x: (point.x - dragGrab.x - offset.x) / zoom,
+                                     y: (point.y - dragGrab.y - offset.y) / zoom,
+                                     width: sourceBox.width, height: sourceBox.height)
+                let overlap = dragged.intersection(target.frame)
+                let fraction = overlap.isNull ? 0 : overlap.width * overlap.height /
+                    min(dragged.width * dragged.height, target.frame.width * target.frame.height)
+                if fraction < childOverlapThreshold {
+                    guard let parent = target.parent,
+                          let index = siblings.firstIndex(where: { $0.node.id == target.node.id }) else { return nil }
+                    place = (parent, index + (dragged.midY >= target.frame.midY ? 1 : 0))
+                }
+            }
+            guard model.canMoveNode(source, to: place.parent, at: place.index) else { return nil }
             return (target, place.parent, place.index)
         }
         // ponytail: visible sibling gaps only; arbitrary XY needs persisted coordinates and collision layout.
@@ -167,6 +182,67 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return (beforeDistance < afterDistance ? before : after, after.parent!, index)
         }
         return nil
+    }
+    private func repelNearby(_ nodes: [LaidOutNode], moving: Set<UUID>, childTarget: UUID?) -> [LaidOutNode] {
+        guard !moving.isEmpty else { return nodes }
+        var frames = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame) })
+        let dragged = nodes.filter { moving.contains($0.node.id) }.map(\.frame)
+        var groups = [Set<UUID>]()
+        func subtree(_ node: MapNode) -> Set<UUID> {
+            var ids: Set<UUID> = [node.id]
+            if !node.folded { node.children.forEach { ids.formUnion(subtree($0)) } }
+            return ids
+        }
+        func group(_ node: MapNode) {
+            let ids = subtree(node).intersection(frames.keys)
+            if ids.isDisjoint(with: moving) { groups.append(ids) }
+            else if !node.folded { node.children.forEach(group) }
+        }
+        for root in nodes where root.parent == nil && !root.node.folded {
+            root.node.children.forEach(group) // Roots stay anchored; each other visible branch moves only as a unit.
+        }
+        func shift(_ ids: Set<UUID>, _ dy: CGFloat) {
+            guard dy != 0 else { return }
+            for id in ids { frames[id] = frames[id]!.offsetBy(dx: 0, dy: dy) }
+        }
+        func separation(_ upper: Set<UUID>, _ lower: Set<UUID>) -> CGFloat {
+            var needed: CGFloat = 0
+            for a in upper { for b in lower {
+                let first = frames[a]!, second = frames[b]!
+                if first.minX < second.maxX && first.maxX > second.minX {
+                    needed = max(needed, first.maxY + collisionGap - second.minY)
+                }
+            } }
+            return needed
+        }
+        let movingMidY = dragged.reduce(CGRect.null) { $0.union($1) }.midY
+        for ids in groups {
+            if let childTarget, ids.contains(childTarget) { continue } // Deliberate large-overlap child hover.
+            let box = ids.reduce(CGRect.null) { $0.union(frames[$1]!) }
+            let below = box.midY >= movingMidY
+            var dy: CGFloat = 0
+            for id in ids { for source in dragged {
+                let item = frames[id]!
+                guard item.minX < source.maxX, item.maxX > source.minX else { continue }
+                if below { dy = max(dy, source.maxY + collisionGap - item.minY) }
+                else { dy = min(dy, source.minY - collisionGap - item.maxY) }
+            } }
+            shift(ids, dy)
+        }
+        // ponytail: bounded pair sweeps can be cubic in branch count; use a spatial index if large maps stutter.
+        for _ in 0..<groups.count {
+            var changed = false
+            for i in groups.indices { for j in groups.indices where j > i {
+                let dy = separation(groups[i], groups[j])
+                guard dy > 0 else { continue }
+                let later = groups[j].reduce(CGRect.null) { $0.union(frames[$1]!) }
+                if later.midY < movingMidY { shift(groups[i], -dy) }
+                else { shift(groups[j], dy) }
+                changed = true
+            } }
+            if !changed { break }
+        }
+        return nodes.map { LaidOutNode(node: $0.node, frame: frames[$0.node.id]!, parent: $0.parent) }
     }
     private func pauseSpring() {
         springTimer?.invalidate()
@@ -209,6 +285,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return LaidOutNode(node: item.node,
                 frame: CGRect(origin: point, size: item.frame.size), parent: item.parent)
         }
+        let child = cached.drop.flatMap { $0.parent == $0.target.node.id ? $0.parent : nil }
+        cached.nodes = repelNearby(cached.nodes, moving: draggedIDs, childTarget: child)
         previewCache = cached
         if springPositions.allSatisfy({ id, motion in motion.point == springTargets[id] }) { pauseSpring() }
         springTick = true; needsDisplay = true; springTick = false
@@ -217,7 +295,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if let previewCache { return previewCache }
         var nodes = visibleNodes()
         let committed = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame.origin) })
-        var draggedIDs = Set<UUID>()
+        draggedIDs.removeAll()
         let drop = dragSource.flatMap { source in
             dragPoint.flatMap { validDrop(at: $0, source: source, nodes: nodes) }
         }
@@ -268,6 +346,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 springTimer = timer
             }
         } else { stopSpring() }
+        let child = drop.flatMap { $0.parent == $0.target.node.id ? $0.parent : nil }
+        nodes = repelNearby(nodes, moving: draggedIDs, childTarget: child)
         previewCache = (nodes, drop)
         return (nodes, drop)
     }
@@ -293,7 +373,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         for item in nodes {
-            if dragPoint != nil && item.node.id == dragSource { continue } // No cross-parent line until release.
             guard let parent = nodes.first(where: { $0.node.id == item.parent }) else { continue }
             let start = screen(parent.frame), end = screen(item.frame)
             let line = NSBezierPath()

@@ -225,6 +225,116 @@ enum CanvasCommandTests {
         let droppedTree = dragging.roots
         assert(dragging.undo() && dragging.roots == originalTree)
         assert(dragging.redo() && dragging.roots == droppedTree)
+        let repelSource = MapNode(id: UUID(), title: "Repel source", children: [], folded: false)
+        let repelTarget = MapNode(id: UUID(), title: "Repel target", children: [], folded: false)
+        let repelModel = MapModel(roots: [MapNode(id: UUID(), title: "Repel root",
+            children: [repelSource, repelTarget], folded: false)], selected: repelSource.id)
+        let repelCanvas = MapCanvas(model: repelModel)
+        repelCanvas.frame = dragCanvas.frame
+        let repelRows = mapLayout(repelModel.roots)
+        let sourceBox = repelRows.first { $0.node.id == repelSource.id }!.frame
+        let targetBox = repelRows.first { $0.node.id == repelTarget.id }!.frame
+        let repelStart = CGPoint(x: sourceBox.midX + 80, y: repelCanvas.bounds.height - sourceBox.midY - 90)
+        let nearTarget = CGPoint(x: targetBox.midX + 80, y: repelCanvas.bounds.height - targetBox.minY + 1 - 90)
+        repelCanvas.mouseDown(with: mouse(.leftMouseDown, repelStart))
+        repelCanvas.mouseDragged(with: mouse(.leftMouseDragged, nearTarget))
+        guard let movingNear = repelCanvas.frameForAccessibility(repelSource.id),
+              let targetNear = repelCanvas.frameForAccessibility(repelTarget.id),
+              !movingNear.intersects(targetNear), repelModel.roots[0].children.count == 2 else {
+            fputs("Nearby sibling cards must repel without overlap or early reparenting\n", stderr); exit(1)
+        }
+        repelCanvas.mouseUp(with: mouse(.leftMouseUp, nearTarget))
+        let edgeStart = CGPoint(x: sourceBox.maxX - 5 + 80, y: repelStart.y)
+        let slightOverlap = CGPoint(x: targetBox.minX + 5 + 80, y: repelCanvas.bounds.height - targetBox.midY - 90)
+        repelCanvas.mouseDown(with: mouse(.leftMouseDown, edgeStart))
+        repelCanvas.mouseDragged(with: mouse(.leftMouseDragged, slightOverlap))
+        repelCanvas.mouseUp(with: mouse(.leftMouseUp, slightOverlap))
+        if repelModel.roots[0].children.count != 2 {
+            fputs("Cursor inside target must not reparent without large dragged-card overlap\n", stderr); exit(1)
+        }
+        let childLeaf = MapNode(id: UUID(), title: "Dragged leaf", children: [], folded: false)
+        let childSource = MapNode(id: UUID(), title: "Dragged parent", children: [childLeaf,
+            MapNode(id: UUID(), title: "Other A", children: [], folded: false),
+            MapNode(id: UUID(), title: "Other B", children: [], folded: false)], folded: false)
+        let targetLeaf = MapNode(id: UUID(), title: "Target leaf", children: [], folded: false)
+        let targetMiddle = MapNode(id: UUID(), title: "Unrelated target leaf", children: [], folded: false)
+        let childParent = MapNode(id: UUID(), title: "Target parent", children: [targetLeaf, targetMiddle], folded: false)
+        let childModel = MapModel(roots: [MapNode(id: UUID(), title: "Root",
+            children: [childSource, childParent], folded: false)], selected: childSource.id)
+        let childCanvas = MapCanvas(model: childModel)
+        let childWindow = NSWindow(contentRect: dragCanvas.frame, styleMask: [.titled],
+            backing: .buffered, defer: false)
+        childWindow.contentView = childCanvas // Attached, never shown or activated.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        let childRows = mapLayout(childModel.roots)
+        let childStartBox = childRows.first { $0.node.id == childSource.id }!.frame
+        let childTargetBox = childRows.first { $0.node.id == childParent.id }!.frame
+        let childStart = CGPoint(x: childStartBox.midX + 80,
+                                 y: childCanvas.bounds.height - childStartBox.midY - 90)
+        let childHover = CGPoint(x: childTargetBox.midX + 80,
+                                 y: childCanvas.bounds.height - childTargetBox.midY - 90 + 10)
+        childCanvas.mouseDown(with: mouse(.leftMouseDown, childStart))
+        childCanvas.mouseDragged(with: mouse(.leftMouseDragged, childHover))
+        let childFrames = childSource.children.compactMap { childCanvas.frameForAccessibility($0.id) }
+        let targetFrames = childParent.children.compactMap { childCanvas.frameForAccessibility($0.id) }
+        if childFrames.contains(where: { moved in targetFrames.contains(where: moved.intersects) }) {
+            fputs("Child-hover may overlap its target card, not an unrelated descendant\n", stderr); exit(1)
+        }
+        childCanvas.mouseUp(with: mouse(.leftMouseUp, childHover))
+        assert(childModel.roots[0].children.map(\.id) == [childParent.id] &&
+               childModel.roots[0].children[0].children.last?.id == childSource.id,
+               "Descendant non-overlap must be checked during a real child-drop preview")
+        childWindow.orderOut(nil)
+        let linkedLeaf = MapNode(id: UUID(), title: "Linked leaf", children: [], folded: false)
+        let linkedBranch = MapNode(id: UUID(), title: "Linked branch",
+            children: [linkedLeaf], folded: false)
+        let linkedSource = MapNode(id: UUID(), title: "Cross columns", children: [], folded: false)
+        let linkedModel = MapModel(roots: [MapNode(id: UUID(), title: "Root",
+            children: [linkedSource, linkedBranch], folded: false)], selected: linkedSource.id)
+        let linkedCanvas = MapCanvas(model: linkedModel)
+        linkedCanvas.frame = dragCanvas.frame
+        let linkedRows = mapLayout(linkedModel.roots)
+        let linkedStartBox = linkedRows.first { $0.node.id == linkedSource.id }!.frame
+        let parentBox = linkedRows.first { $0.node.id == linkedBranch.id }!.frame
+        let leafBox = linkedRows.first { $0.node.id == linkedLeaf.id }!.frame
+        let linkedStart = CGPoint(x: linkedStartBox.midX + 80,
+                                  y: linkedCanvas.bounds.height - linkedStartBox.midY - 90)
+        let acrossColumns = CGPoint(x: parentBox.maxX - 50 + linkedStartBox.width / 2 + 80,
+                                    y: linkedCanvas.bounds.height - parentBox.midY - 90)
+        linkedCanvas.mouseDown(with: mouse(.leftMouseDown, linkedStart))
+        linkedCanvas.mouseDragged(with: mouse(.leftMouseDragged, acrossColumns))
+        guard let parentDrawn = linkedCanvas.frameForAccessibility(linkedBranch.id),
+              let leafDrawn = linkedCanvas.frameForAccessibility(linkedLeaf.id),
+              abs((leafDrawn.midY - parentDrawn.midY) - (leafBox.midY - parentBox.midY)) < 0.01 else {
+            fputs("Repelling across columns must move one stationary branch only once\n", stderr); exit(1)
+        }
+        let tallA = MapNode(id: UUID(), title: "Tall A", children: (0..<3).map {
+            MapNode(id: UUID(), title: "A\($0)", children: [], folded: false)
+        }, folded: false)
+        let tallB = MapNode(id: UUID(), title: "Tall B", children: (0..<3).map {
+            MapNode(id: UUID(), title: "B\($0)", children: [], folded: false)
+        }, folded: false)
+        let cascadeSource = MapNode(id: UUID(), title: "Drag", children: [], folded: false)
+        let cascadeModel = MapModel(roots: [MapNode(id: UUID(), title: "Root",
+            children: [cascadeSource, tallA, tallB], folded: false)], selected: cascadeSource.id)
+        let cascadeCanvas = MapCanvas(model: cascadeModel)
+        cascadeCanvas.frame = dragCanvas.frame
+        let cascadeRows = mapLayout(cascadeModel.roots)
+        let sourceStart = cascadeRows.first { $0.node.id == cascadeSource.id }!.frame
+        let firstBranch = cascadeRows.first { $0.node.id == tallA.id }!.frame
+        let cascadeStart = CGPoint(x: sourceStart.midX + 80, y: cascadeCanvas.bounds.height - sourceStart.midY - 90)
+        let cascadeHover = CGPoint(x: firstBranch.midX + 80,
+                                   y: cascadeCanvas.bounds.height - firstBranch.minY - 6 - 90)
+        cascadeCanvas.mouseDown(with: mouse(.leftMouseDown, cascadeStart))
+        cascadeCanvas.mouseDragged(with: mouse(.leftMouseDragged, cascadeHover))
+        guard let bottomA = cascadeCanvas.frameForAccessibility(tallA.children.last!.id),
+              let topB = cascadeCanvas.frameForAccessibility(tallB.children.first!.id),
+              !bottomA.intersects(topB) else {
+            fputs("Repelling a tall branch must not push its descendants into the next branch\n", stderr); exit(1)
+        }
+        cascadeCanvas.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
         let siblingIDs = (0..<3).map { _ in UUID() }
         let reordered = MapModel(roots: [MapNode(id: UUID(), title: "Root", children:
             siblingIDs.enumerated().map { MapNode(id: $0.element, title: "\($0.offset)", children: [], folded: false) },
@@ -479,8 +589,15 @@ enum CanvasCommandTests {
             springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
             springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
             _ = springCanvas.frameForAccessibility(leftChild.id)
-            let blank = CGPoint(x: 900, y: 40)
-            springCanvas.mouseDragged(with: mouse(.leftMouseDragged, blank))
+            let blank = CGPoint(x: 1300, y: 40) // Outside every painted sibling; a nearby miss now intentionally repels.
+            let blankEvent = mouse(.leftMouseDragged, blank)
+            let blankLocal = springCanvas.convert(blankEvent.locationInWindow, from: nil)
+            let beforeBlank = springCanvas.frameForAccessibility(crossSource.id)!
+            springCanvas.mouseDragged(with: blankEvent)
+            let blankDelta = blankLocal.x - springCanvas.convert(springGap, from: nil).x
+            if abs(springCanvas.frameForAccessibility(crossSource.id)!.minX - beforeBlank.minX - blankDelta) > 0.01 {
+                fputs("Every attached drag event must invalidate spring preview and keep the source 1:1\n", stderr); exit(1)
+            }
             if springCanvas.frameForAccessibility(leftChild.id)! != origin {
                 fputs("Invalid attached drag must immediately restore sibling geometry\n", stderr); exit(1)
             }
@@ -751,6 +868,17 @@ enum CanvasCommandTests {
         assert(image(visualCanvas) == pressed, "Under 9pt must still be a click, not a drag")
         let whitespacePoint = CGPoint(x: 800, y: 380)
         visualCanvas.mouseDragged(with: mouse(.leftMouseDragged, whitespacePoint))
+        let rootBox = mapLayout(visualModel.roots).first!.frame
+        let draggedBox = visualCanvas.frameForAccessibility(visualRoot.children[0].id)!
+        let connectorMid = CGPoint(x: (rootBox.maxX + 80 + draggedBox.minX) / 2,
+                                   y: (rootBox.midY + 90 + draggedBox.midY) / 2)
+        let draggedBitmap = NSBitmapImageRep(data: image(visualCanvas))!
+        let background = draggedBitmap.colorAt(x: 1, y: 1)!
+        if !(-2...2).contains(where: { dy in (-2...2).contains(where: { dx in
+            draggedBitmap.colorAt(x: Int(connectorMid.x) + dx, y: Int(connectorMid.y) + dy) != background
+        }) }) {
+            fputs("First-level dragged child must retain its parent connector through whitespace\n", stderr); exit(1)
+        }
         assert(image(visualCanvas) != pressed, "Dragging into whitespace must visibly move a source ghost")
         assert(visualModel.roots == [visualRoot] && visualChanges == 0,
                "A drag must not edit the tree before release")
