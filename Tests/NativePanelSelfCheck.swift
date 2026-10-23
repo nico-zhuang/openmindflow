@@ -21,6 +21,7 @@ enum NativePanelSelfCheck {
         let opening = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "open-cancel"
         let failing = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure"
         let toolbarMode = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "toolbar-new-child"
+        let importerMode = ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "import"
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let document = AppDelegate()
@@ -33,7 +34,7 @@ enum NativePanelSelfCheck {
             catch { fputs("REPORT_WRITE_FAILED\n", stderr); exit(1) }
             exit(ok ? 0 : 1)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (toolbarMode ? 22 : 15)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (importerMode ? 60 : (toolbarMode ? 22 : 15))) {
             finish("FAIL \(toolbarMode ? "native toolbar" : "native panel") timeout", ok: false)
         }
         var focusChecks = 0
@@ -55,6 +56,47 @@ enum NativePanelSelfCheck {
                 views += view.subviews
             }
             guard let canvas else { finish("FAIL native canvas missing", ok: false); return }
+            if importerMode {
+                let panelReady = directory.appendingPathComponent("import-panel-ready")
+                let done = directory.appendingPathComponent("import-done")
+                guard !FileManager.default.fileExists(atPath: panelReady.path),
+                      !FileManager.default.fileExists(atPath: done.path) else {
+                    finish("FAIL importer marker already exists", ok: false); return
+                }
+                do { try "ready\n".write(to: ready, atomically: true, encoding: .utf8) }
+                catch { finish("FAIL importer app ready marker", ok: false); return }
+                let timer = Timer(timeInterval: 0.1, repeats: true) { timer in
+                    guard let panel = app.modalWindow as? NSOpenPanel else { return }
+                    guard panel.directoryURL?.resolvingSymlinksInPath() == directory else {
+                        timer.invalidate()
+                        DispatchQueue.main.async { finish("FAIL importer panel escaped owned fixture", ok: false) }
+                        return
+                    }
+                    do { try "1\n".write(to: panelReady, atomically: true, encoding: .utf8) }
+                    catch {
+                        timer.invalidate()
+                        DispatchQueue.main.async { finish("FAIL importer panel ready marker", ok: false) }
+                        return
+                    }
+                    timer.invalidate()
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+                var checks = 0
+                func awaitCompletion() {
+                    checks += 1
+                    if (try? String(contentsOf: done, encoding: .utf8)) == "direct-v9-pass\n" {
+                        timer.invalidate()
+                        finish("nativeDirectV9Panel=true ownedSourceOnly=true", ok: true)
+                    } else if checks < 550 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: awaitCompletion)
+                    } else {
+                        timer.invalidate()
+                        finish("FAIL importer external validation did not finish", ok: false)
+                    }
+                }
+                awaitCompletion()
+                return
+            }
             if toolbarMode {
                 guard window.isVisible, window.isKeyWindow,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),

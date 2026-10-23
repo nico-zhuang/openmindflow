@@ -27,12 +27,17 @@ enum NativeWindowSelfCheck {
         let root = MapNode(id: UUID(), title: "Synthetic root", children: [first, second, third], folded: false)
         let model = MapModel(roots: [root], selected: root.id)
         let canvas = MapCanvas(model: model)
-        let delegate = AppDelegate()
+        let suiteName = "local.mindmap.native-gui-test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let delegate = AppDelegate(defaults: defaults)
+        let originalAppearance = app.appearance
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 700),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "MindMap Synthetic Self Check"
         window.minSize = NSSize(width: 640, height: 400)
         window.contentViewController = delegate.makeWorkbench(canvas: canvas)
+        window.toolbar = delegate.makeToolbar()
+        delegate.installMenu()
         window.setContentSize(NSSize(width: 1000, height: 700))
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -50,6 +55,8 @@ enum NativeWindowSelfCheck {
                 exit(1)
             }
             window.orderOut(nil)
+            defaults.removePersistentDomain(forName: suiteName)
+            app.appearance = originalAppearance
             exit(passed ? 0 : 1) // No assert or SIGTRAP: never produce a crash dialog.
         }
         func capture(_ suffix: String) -> Bool {
@@ -158,6 +165,29 @@ enum NativeWindowSelfCheck {
                   lightData != darkData else {
                 finish("FAIL editor light/dark synthetic images missing or identical", passed: false); return
             }
+            guard let appearance = app.mainMenu?.item(withTitle: "View")?.submenu?
+                    .item(withTitle: "Appearance")?.submenu,
+                  let darkItem = appearance.item(withTitle: "Dark"), let darkAction = darkItem.action,
+                  app.sendAction(darkAction, to: darkItem.target, from: darkItem),
+                  app.appearance?.name == .darkAqua,
+                  defaults.string(forKey: "appearance") == "dark",
+                  appearance.items.filter({ $0.state == .on }).map(\.title) == ["Dark"] else {
+                finish("FAIL native View Appearance Dark action or state", passed: false); return
+            }
+            delegate.installMenu() // Read persisted preference into a fresh native menu.
+            guard let restored = app.mainMenu?.item(withTitle: "View")?.submenu?
+                    .item(withTitle: "Appearance")?.submenu,
+                  restored.item(withTitle: "Dark")?.state == .on,
+                  let lightItem = restored.item(withTitle: "Light"), let lightAction = lightItem.action,
+                  app.sendAction(lightAction, to: lightItem.target, from: lightItem),
+                  app.appearance?.name == .aqua, defaults.string(forKey: "appearance") == "light",
+                  restored.items.filter({ $0.state == .on }).map(\.title) == ["Light"],
+                  let systemItem = restored.item(withTitle: "System"), let systemAction = systemItem.action,
+                  app.sendAction(systemAction, to: systemItem.target, from: systemItem),
+                  app.appearance == nil, defaults.string(forKey: "appearance") == "system",
+                  restored.items.filter({ $0.state == .on }).map(\.title) == ["System"] else {
+                finish("FAIL native Appearance persistence, Light or System action", passed: false); return
+            }
             canvas.commitEditing()
             guard model.roots[0].children[0].title == "中文编辑" else {
                 finish("FAIL native marked text was not saved into model", passed: false); return
@@ -195,7 +225,8 @@ enum NativeWindowSelfCheck {
                 finish("FAIL synthetic invalid drop events", passed: false); return
             }
             let invalidPreserved = model.roots == beforeInvalid
-            let source = MapNode(id: UUID(), title: "Move into gap", children: [], folded: false)
+            let movingChild = MapNode(id: UUID(), title: "Moving child", children: [], folded: false)
+            let source = MapNode(id: UUID(), title: "Move into gap", children: [movingChild], folded: false)
             let before = MapNode(id: UUID(), title: "Before", children: [], folded: false)
             let after = MapNode(id: UUID(), title: "After", children: [], folded: false)
             let destination = MapNode(id: UUID(), title: "Destination", children: [before, after], folded: false)
@@ -215,8 +246,30 @@ enum NativeWindowSelfCheck {
             let afterBox = crossNodes.first { $0.node.id == after.id }!.frame
             let crossStart = crossPoint(CGPoint(x: sourceBox.midX, y: sourceBox.midY))
             let crossGap = crossPoint(CGPoint(x: beforeBox.midX, y: (beforeBox.maxY + afterBox.minY) / 2))
-            guard send(.leftMouseDown, crossStart), send(.leftMouseDragged, crossGap),
-                  send(.leftMouseUp, crossGap),
+            let axNodes = (canvas.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+            guard let sourceAX = axNodes.first(where: { $0.accessibilityLabel() == source.title }),
+                  let movingAX = axNodes.first(where: { $0.accessibilityLabel() == movingChild.title }),
+                  let beforeAX = axNodes.first(where: { $0.accessibilityLabel() == before.title }) else {
+                finish("FAIL native moving subtree AX nodes unavailable", passed: false); return
+            }
+            let sourceInitial = sourceAX.accessibilityFrame(), childInitial = movingAX.accessibilityFrame()
+            let siblingInitial = beforeAX.accessibilityFrame()
+            let preview = MapModel(roots: crossModel.roots, selected: crossModel.selected)
+            guard preview.moveNode(source.id, to: destination.id, at: 1),
+                  let previewSibling = mapLayout(preview.roots).first(where: { $0.node.id == before.id })?.frame else {
+                finish("FAIL native preview sibling geometry unavailable", passed: false); return
+            }
+            let siblingScreenShift = -(previewSibling.minY - beforeBox.minY) * crossScale
+            guard abs(siblingScreenShift) > 1,
+                  send(.leftMouseDown, crossStart), send(.leftMouseDragged, crossGap),
+                  crossModel.roots[0].children.map(\.id) == [source.id, destination.id],
+                  abs(sourceAX.accessibilityFrame().minX - sourceInitial.minX - (crossGap.x - crossStart.x)) < 1,
+                  abs(movingAX.accessibilityFrame().minX - childInitial.minX - (crossGap.x - crossStart.x)) < 1,
+                  abs(beforeAX.accessibilityFrame().minY - siblingInitial.minY - siblingScreenShift) < 1,
+                  capture("live.png") else {
+                finish("FAIL native preview source/child pointer coupling or sibling live reflow", passed: false); return
+            }
+            guard send(.leftMouseUp, crossGap),
                   crossModel.roots[0].children.last?.children.map(\.id) == [before.id, source.id, after.id],
                   crossModel.undo(), crossModel.roots[0].children.map(\.id) == [source.id, destination.id] else {
                 finish("FAIL native cross-branch child-gap drop or undo", passed: false); return
@@ -360,7 +413,7 @@ enum NativeWindowSelfCheck {
                   window.firstResponder is NSTextView else {
                 finish("FAIL native outline Return did not focus canvas field editor", passed: false); return
             }
-            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true threeRoundDrag=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true outlineReturn=true",
+            finish("key=true hit=MapCanvas doubleClickEditor=true fieldEditor=\(hasFieldEditor) responder=\(responder) secondEdit=true markedText=true lightDarkImages=true appearanceMenu=true liveSubtreeAX=true gapReorder=\(reordered) undo=\(undone) reparentUndo=\(reparentUndo) invalidPreserved=\(invalidPreserved) crossBranchGap=true threeRoundDrag=true narrowEditor=true foldAX=true longTitle=true thirtyNodeFocus=true outlineReturn=true",
                    passed: hasFieldEditor && renamed && reordered && undone && reparentUndo && invalidPreserved)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: exercise)

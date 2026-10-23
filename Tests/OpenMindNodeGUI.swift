@@ -31,15 +31,36 @@ guard NSWorkspace.shared.frontmostApplication?.processIdentifier == running.proc
 }
 let app = AXUIElementCreateApplication(running.processIdentifier)
 let fm = FileManager.default
-let scratch = fm.temporaryDirectory.appendingPathComponent("mindmap-gui-\(UUID().uuidString)", isDirectory: true)
-try fm.createDirectory(at: scratch, withIntermediateDirectories: false)
+let base = fm.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+let prestarted = ProcessInfo.processInfo.environment["MINDMAP_GUI_FIXTURE_DIR"].map { URL(fileURLWithPath: $0).standardizedFileURL }
+let scratch = prestarted ?? base.appendingPathComponent("mindmap-gui-\(UUID().uuidString)", isDirectory: true)
+if prestarted == nil {
+    try fm.createDirectory(at: scratch, withIntermediateDirectories: false,
+                           attributes: [.posixPermissions: 0o700])
+}
+let scratchAttributes = try fm.attributesOfItem(atPath: scratch.path)
+let scratchInode = scratchAttributes[.systemFileNumber] as? NSNumber
+guard scratchInode != nil, scratch.deletingLastPathComponent() == base,
+      (prestarted == nil || (scratch.lastPathComponent.hasPrefix("mindmap-native-panel-") &&
+       (try? String(contentsOf: scratch.appendingPathComponent(".owner"), encoding: .utf8)) == "mindmap-owned-native-panel\n")),
+      scratch.resolvingSymlinksInPath().standardizedFileURL == scratch.standardizedFileURL,
+      scratchAttributes[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()),
+      (scratchAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700 else {
+    fputs("GUI gate unavailable: synthetic fixture is not a canonical owned 0700 directory\n", stderr)
+    exit(2)
+}
 let marker = scratch.appendingPathComponent(".test-owner")
 let owner = UUID().uuidString
-try owner.write(to: marker, atomically: true, encoding: .utf8)
+if prestarted == nil { try owner.write(to: marker, atomically: true, encoding: .utf8) }
 func cleanupFixture() {
-    // Never remove a different directory if the temporary path is replaced during the check.
+    // Externally owned fixtures are never removed by this AX runner.
+    guard prestarted == nil else { return }
+    let current = try? fm.attributesOfItem(atPath: scratch.path)
     if scratch.resolvingSymlinksInPath().standardizedFileURL == scratch.standardizedFileURL,
-       scratch.deletingLastPathComponent() == fm.temporaryDirectory.standardizedFileURL,
+       scratch.deletingLastPathComponent() == base,
+       current?[.systemFileNumber] as? NSNumber == scratchInode,
+       current?[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()),
+       (current?[.posixPermissions] as? NSNumber)?.intValue == 0o700,
        (try? String(contentsOf: marker, encoding: .utf8)) == owner {
         try? fm.removeItem(at: scratch)
     }
@@ -54,12 +75,32 @@ func ensure(_ condition: @autoclosure () -> Bool, _ description: String = "GUI c
     if !condition() { fail(description) }
 }
 let package = scratch.appendingPathComponent("fixture.mindnode", isDirectory: true)
-try fm.createDirectory(at: package, withIntermediateDirectories: false)
+if prestarted == nil { try fm.createDirectory(at: package, withIntermediateDirectories: false) }
 let title = "Synthetic GUI root"
 let root: [String: Any] = ["nodeID": UUID().uuidString, "title": ["text": "<p>\(title)</p>"], "subnodes": [], "hasFoldedSubnodes": false]
 let plist: [String: Any] = ["version": 9, "canvas": ["mindMaps": [["mainNode": root]]]]
-try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
-    .write(to: package.appendingPathComponent("contents.xml"))
+if prestarted == nil {
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
+        .write(to: package.appendingPathComponent("contents.xml"))
+}
+let directTitle = "Synthetic direct v9 root"
+let directRoot: [String: Any] = ["nodeID": UUID().uuidString, "title": ["text": "<p>\(directTitle)</p>"],
+                                 "subnodes": [], "hasFoldedSubnodes": false]
+let directPlist: [String: Any] = ["version": 9, "canvas": ["mindMaps": [["mainNode": directRoot]]]]
+let single = scratch.appendingPathComponent("single.mindnode")
+if prestarted != nil { ensure(!fm.fileExists(atPath: single.path), "Refusing to overwrite prestarted fixture file") }
+try PropertyListSerialization.data(fromPropertyList: directPlist, format: .binary, options: 0)
+    .write(to: single, options: .atomic)
+let singleAttributes = try fm.attributesOfItem(atPath: single.path)
+ensure(single.resolvingSymlinksInPath().standardizedFileURL == single.standardizedFileURL &&
+       single.deletingLastPathComponent() == scratch &&
+       singleAttributes[.type] as? FileAttributeType == .typeRegular &&
+       singleAttributes[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()),
+       "Direct v9 source must be a regular file inside the exact owned scratch path")
+func fileHash(_ url: URL) throws -> String {
+    SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+}
+let singleHash = try fileHash(single)
 func hashes(_ url: URL) throws -> [String: String] {
     let files = try fm.subpathsOfDirectory(atPath: url.path).sorted().filter {
         var isDirectory: ObjCBool = false
@@ -70,15 +111,17 @@ func hashes(_ url: URL) throws -> [String: String] {
         return (path, SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
     })
 }
-let before = try hashes(package)
-ensure(!before.isEmpty)
-let previous = scratch.appendingPathComponent("previous.mindmap.json")
+let before = prestarted == nil ? try hashes(package) : [:]
+if prestarted == nil { ensure(!before.isEmpty) }
+let previous = scratch.appendingPathComponent(prestarted == nil ? "previous.mindmap.json" : "Untitled.mindmap.json")
 let oldTitle = "Synthetic previous JSON"
 let oldRoot: [String: Any] = ["id": UUID().uuidString, "title": oldTitle, "children": [], "folded": false]
-try JSONSerialization.data(withJSONObject: [oldRoot]).write(to: previous)
 let malformed = scratch.appendingPathComponent("malformed.mindnode", isDirectory: true)
-try fm.createDirectory(at: malformed, withIntermediateDirectories: false)
-try Data([0x01, 0x02]).write(to: malformed.appendingPathComponent("contents.xml"))
+if prestarted == nil {
+    try JSONSerialization.data(withJSONObject: [oldRoot]).write(to: previous)
+    try fm.createDirectory(at: malformed, withIntermediateDirectories: false)
+    try Data([0x01, 0x02]).write(to: malformed.appendingPathComponent("contents.xml"))
+}
 func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var result: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
@@ -169,6 +212,52 @@ func navigate(to url: URL) {
     key(36) // Confirm the user-selected path inside the native panel.
 }
 
+let warningDetail = "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package."
+if prestarted != nil {
+    let startup = scratch.appendingPathComponent("panel-ready")
+    let panelReady = scratch.appendingPathComponent("import-panel-ready")
+    let done = scratch.appendingPathComponent("import-done")
+    ensure(!fm.fileExists(atPath: panelReady.path) && !fm.fileExists(atPath: done.path),
+           "Refusing stale importer panel or completion markers")
+    for _ in 0..<60 where (try? String(contentsOf: startup, encoding: .utf8)) != "ready\n" {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    ensure((try? String(contentsOf: startup, encoding: .utf8)) == "ready\n", "Owned importer app not ready")
+    menu("Open MindNode (Read-only)…")
+    var approvedPanel = false
+    for _ in 0..<60 {
+        let attributes = try? fm.attributesOfItem(atPath: panelReady.path)
+        approvedPanel = panelReady.resolvingSymlinksInPath().standardizedFileURL == panelReady.standardizedFileURL &&
+            attributes?[.type] as? FileAttributeType == .typeRegular &&
+            attributes?[.ownerAccountID] as? NSNumber == NSNumber(value: getuid()) &&
+            (try? String(contentsOf: panelReady, encoding: .utf8)) == "1\n"
+        if approvedPanel { break }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    ensure(approvedPanel, "Owned app did not certify current Open panel directory")
+    let knownFile = wait("exact direct v9 file row") { listingItem(single.lastPathComponent) }
+    ensure(value(knownFile, kAXEnabledAttribute) as? Bool == true, "Owned direct v9 file row disabled")
+    ensure(AXUIElementSetAttributeValue(knownFile, kAXSelectedAttribute as CFString, kCFBooleanTrue) == .success &&
+           value(knownFile, kAXSelectedAttribute) as? Bool == true,
+           "Cannot select exact direct v9 file row without navigation")
+    _ = AXUIElementPerformAction(wait("direct v9 Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
+    let directWarning = wait("direct import read-only warning") { windows().first { find($0, title: "MindNode imported read-only") != nil } }
+    ensure(find(directWarning, title: warningDetail) != nil, "Direct import loss warning missing")
+    press(wait("direct warning OK") { find(directWarning, title: "OK") }, "direct warning OK")
+    let directNode = wait("direct imported node") { windows().lazy.compactMap { find($0, title: directTitle) }.first }
+    ensure(value(directNode, kAXSelectedAttribute) as? Bool == true, "Direct v9 root must be selected")
+    ensure((try? fileHash(single)) == singleHash, "Direct import modified synthetic source file")
+    menu("Save")
+    let directSave = wait("direct import fresh Save panel") { windows().first { find($0, title: "Save") != nil && find($0, title: "Cancel") != nil } }
+    ensure(find(directSave, title: "Untitled.mindmap.json") != nil ||
+           axElement(value(app, kAXFocusedUIElementAttribute)).flatMap { value($0, kAXValueAttribute) as? String }?.hasSuffix(".mindmap.json") == true,
+           "Direct import Save must propose new .mindmap.json destination")
+    press(wait("direct Save Cancel") { find(directSave, title: "Cancel") }, "direct Save Cancel")
+    ensure((try? fileHash(single)) == singleHash, "Direct source changed after Save cancellation")
+    try "direct-v9-pass\n".write(to: done, atomically: true, encoding: .utf8)
+    print("own-app direct-v9 import, certified native panel, read-only source and fresh Save destination passed")
+    exit(0)
+}
 menu("Open Own JSON…")
 navigate(to: previous)
 _ = AXUIElementPerformAction(wait("JSON Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
@@ -190,7 +279,7 @@ ensure(value(listedPackage, kAXEnabledAttribute) as? Bool == true, "Directory pa
 navigate(to: package)
 _ = AXUIElementPerformAction(wait("Open button") { find(panel(), title: "Open") }, kAXPressAction as CFString) // A modal alert can return cannotComplete after accepting the action.
 let warning = wait("import loss warning") { windows().first { find($0, title: "MindNode imported read-only") != nil } }
-ensure(find(warning, title: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.") != nil,
+ensure(find(warning, title: warningDetail) != nil,
              "Import loss warning missing")
 press(wait("warning OK") { find(warning, title: "OK") }, "warning OK")
 let node = wait("imported node") { windows().lazy.compactMap { find($0, title: title) }.first }
@@ -205,4 +294,27 @@ ensure(find(savePanel, title: "Untitled.mindmap.json") != nil ||
 press(wait("Save Cancel") { find(savePanel, title: "Cancel") }, "Save Cancel")
 let finalHashes = try hashes(package)
 ensure(finalHashes == before, "Source package changed after Save cancellation")
-print("own-app synthetic package import, prior JSON retention, picker file filtering, selected node, loss warning, fresh Save panel and SHA-256 passed")
+menu("Open MindNode (Read-only)…")
+navigate(to: scratch)
+let listedSingle = wait("direct v9 file in picker") { listingItem(single.lastPathComponent) }
+ensure(value(listedSingle, kAXEnabledAttribute) as? Bool == true, "Direct v9 file must be selectable")
+navigate(to: single)
+_ = AXUIElementPerformAction(wait("direct v9 Open") { find(panel(), title: "Open") }, kAXPressAction as CFString)
+let directWarning = wait("direct import read-only warning") { windows().first { find($0, title: "MindNode imported read-only") != nil } }
+ensure(find(directWarning, title: warningDetail) != nil, "Direct import loss warning missing")
+press(wait("direct warning OK") { find(directWarning, title: "OK") }, "direct warning OK")
+let directNode = wait("direct imported node") { windows().lazy.compactMap { find($0, title: directTitle) }.first }
+ensure(value(directNode, kAXSelectedAttribute) as? Bool == true, "Direct v9 root must be selected")
+let importedSingleHash = try fileHash(single)
+ensure(importedSingleHash == singleHash, "Direct import modified synthetic source file")
+menu("Save")
+let directSave = wait("direct import fresh Save panel") { windows().first { find($0, title: "Save") != nil && find($0, title: "Cancel") != nil } }
+ensure(find(directSave, title: "Untitled.mindmap.json") != nil ||
+       axElement(value(app, kAXFocusedUIElementAttribute)).flatMap { value($0, kAXValueAttribute) as? String }?.hasSuffix(".mindmap.json") == true,
+       "Direct import Save must propose new .mindmap.json destination")
+press(wait("direct Save Cancel") { find(directSave, title: "Cancel") }, "direct Save Cancel")
+let finalSingleHash = try fileHash(single)
+let finalPackageHashes = try hashes(package)
+ensure(finalSingleHash == singleHash && finalPackageHashes == before,
+       "Synthetic source file or package changed after Save cancellation")
+print("own-app synthetic directory and direct-v9 import, prior JSON retention, picker filtering, selected nodes, warnings, fresh Save panels and source SHA-256 passed")
