@@ -4,7 +4,7 @@ import Darwin
 private let ownJSONLimit = 8 * 1024 * 1024
 
 enum OwnJSONError: LocalizedError {
-    case invalidPath, invalidFile, tooLarge, duplicateID
+    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +12,7 @@ enum OwnJSONError: LocalizedError {
         case .invalidFile: return "The document must be a regular file."
         case .tooLarge: return "The document exceeds the 8 MiB limit."
         case .duplicateID: return "The document contains duplicate node IDs."
+        case .invalidWidth: return "A node width must be 170, 240, 320 or 480 points."
         }
     }
 }
@@ -20,11 +21,14 @@ private func checkOwnJSONPath(_ url: URL) throws {
     guard url.isFileURL, url.lastPathComponent.hasSuffix(".mindmap.json") else { throw OwnJSONError.invalidPath }
 }
 
-private func checkOwnJSONIDs(_ roots: [MapNode]) throws {
+private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
     var ids = Set<UUID>()
     func visit(_ nodes: [MapNode]) throws {
         for node in nodes {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
+            if let width = node.width {
+                guard MapNode.widthPresets.contains(width) else { throw OwnJSONError.invalidWidth }
+            }
             try visit(node.children)
         }
     }
@@ -46,13 +50,13 @@ func readOwnJSON(_ url: URL) throws -> [MapNode] {
         if data.count > ownJSONLimit { throw OwnJSONError.tooLarge }
     }
     let roots = try JSONDecoder().decode([MapNode].self, from: data)
-    try checkOwnJSONIDs(roots)
+    try checkOwnJSONNodes(roots)
     return roots
 }
 
 func writeOwnJSON(_ roots: [MapNode], to url: URL) throws {
     try checkOwnJSONPath(url)
-    try checkOwnJSONIDs(roots)
+    try checkOwnJSONNodes(roots)
     let data = try JSONEncoder().encode(roots)
     guard data.count <= ownJSONLimit else { throw OwnJSONError.tooLarge }
     var info = stat()

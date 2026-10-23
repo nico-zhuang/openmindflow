@@ -1,6 +1,12 @@
 import AppKit
 
-private final class KeyboardOutlineView: NSOutlineView {
+final class KeyboardOutlineView: NSOutlineView {
+    var contextMenuForRow: ((Int) -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenuForRow?(row(at: convert(event.locationInWindow, from: nil)))
+    }
+
     override func keyDown(with event: NSEvent) {
         if [UInt16(36), 76].contains(event.keyCode), selectedRow >= 0,
            event.modifierFlags.intersection([.shift, .option, .command, .control]).isEmpty,
@@ -24,7 +30,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         }
     }
 
-    let outlineView: NSOutlineView = KeyboardOutlineView()
+    let outlineView = KeyboardOutlineView()
     private let canvas: MapCanvas
     private var roots: [Row] = []
     private var reloading = false
@@ -44,6 +50,14 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         outlineView.delegate = self
         outlineView.target = self
         outlineView.doubleAction = #selector(editSelectedNode(_:))
+        outlineView.contextMenuForRow = { [weak self] row in
+            guard let self else { return nil }
+            guard row >= 0, let item = self.outlineView.item(atRow: row) as? Row else {
+                return self.canvas.contextMenu(for: nil)
+            }
+            self.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            return self.canvas.contextMenu(for: item.id)
+        }
         outlineView.setAccessibilityLabel("Map outline")
         documentView = outlineView
         hasVerticalScroller = true

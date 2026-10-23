@@ -100,6 +100,29 @@ enum OutlineWorkbenchTests {
         outline.outlineView.collapseItem(outline.outlineView.item(atRow: 2)!)
         assert(outlineChanges == beforeLeaf && outline.outlineView.numberOfRows == 4)
 
+        let rightA = MapNode(id: UUID(), title: "A", children: [], folded: false)
+        let rightB = MapNode(id: UUID(), title: "B", children: [], folded: false)
+        let rightRoot = MapNode(id: UUID(), title: "Root", children: [rightA, rightB], folded: false)
+        let rightModel = MapModel(roots: [rightRoot], selected: rightA.id)
+        let rightCanvas = MapCanvas(model: rightModel)
+        let rightOutline = MapOutlineView(canvas: rightCanvas)
+        let rightWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 350),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        rightWindow.contentView = rightOutline // Attached but never shown or activated.
+        rightWindow.contentView?.layoutSubtreeIfNeeded()
+        let rowBox = rightOutline.outlineView.rect(ofRow: 2)
+        let rowPoint = rightOutline.outlineView.convert(CGPoint(x: rowBox.midX, y: rowBox.midY), to: nil)
+        let rightEvent = NSEvent.mouseEvent(with: .rightMouseDown, location: rowPoint,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1)!
+        guard let context = rightOutline.outlineView.menu(for: rightEvent),
+              rightModel.selected == rightB.id,
+              context.item(withTitle: "Edit Title")?.target as AnyObject? === rightCanvas else {
+            fputs("Right-clicking an outline row must select it and offer its canvas node commands\n", stderr)
+            exit(1)
+        }
+        rightWindow.orderOut(nil)
+
         let many = MapNode(id: UUID(), title: "Thirty", children: (0..<29).map { index in
             MapNode(id: UUID(), title: "Node \(index)", children: [], folded: false)
         }, folded: false)
@@ -117,9 +140,26 @@ enum OutlineWorkbenchTests {
         assert(sidebar.viewController.view is MapOutlineView)
         assert(workbench.splitViewItems[1].viewController.view === manyCanvas,
                "The outline and workspace must share the original canvas")
+        let sideWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+        sideWindow.contentViewController = workbench // Never shown or activated.
+        sideWindow.contentView?.layoutSubtreeIfNeeded()
+        let attachedOutline = sidebar.viewController.view as! MapOutlineView
+        assert(sideWindow.makeFirstResponder(attachedOutline.outlineView))
+        delegate.installMenu()
+        let item = NSApp.mainMenu!.item(withTitle: "View")!.submenu!.item(withTitle: "Show/Hide Outline")!
         let unchanged = manyCanvas.model.roots
-        workbench.toggleSidebar(nil)
-        assert(manyCanvas.model.roots == unchanged, "Toggling sidebar cannot mutate the map")
+        let hideSent = NSApp.sendAction(item.action!, to: item.target, from: item)
+        guard hideSent, sidebar.isCollapsed, sideWindow.firstResponder === manyCanvas else {
+            fputs("Hiding outline must collapse and focus canvas (sent=\(hideSent), collapsed=\(sidebar.isCollapsed), responder=\(String(describing: sideWindow.firstResponder)))\n", stderr)
+            exit(1)
+        }
+        guard NSApp.sendAction(item.action!, to: item.target, from: item), !sidebar.isCollapsed,
+              manyCanvas.model.roots == unchanged else {
+            fputs("Showing outline must restore its sidebar without changing the map\n", stderr)
+            exit(1)
+        }
+        sideWindow.orderOut(nil)
 
         let deepest = UUID()
         let narrowRoot = MapNode(id: UUID(), title: "Root", children: [

@@ -476,7 +476,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return true
         }
         if selector == #selector(NSResponder.insertNewline(_:)) {
-            if modifiers.contains(.shift) { addMainNode() }
+            if modifiers.intersection([.shift, .option, .command, .control]).isEmpty { commitEditing() }
+            else if modifiers.contains(.shift) { addMainNode() }
             else { addSibling(before: modifiers.contains(.option)) }
             return true
         }
@@ -485,8 +486,59 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     func controlTextDidEndEditing(_ obj: Notification) { commitEditing() }
 
+    func contextMenu(for id: UUID?) -> NSMenu {
+        if let id { selectNode(id) } else { commitEditing() }
+        let menu = NSMenu()
+        func add(_ title: String, _ tag: Int) {
+            let item = menu.addItem(withTitle: title, action: #selector(contextCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = tag
+        }
+        if let node = visibleNodes().first(where: { $0.node.id == id }) {
+            add("Edit Title", 0)
+            add("New Child", 1)
+            if node.parent != nil { add("New Sibling", 2) }
+            add("New Main Node", 3)
+            if !node.node.children.isEmpty { add("Fold/Unfold", 4) }
+            let widthMenu = NSMenu()
+            for (index, choice) in ["Auto", "Narrow (170 pt)", "Medium (240 pt)",
+                                    "Wide (320 pt)", "Extra Wide (480 pt)"].enumerated() {
+                let item = widthMenu.addItem(withTitle: choice, action: #selector(contextCommand(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = 10 + index
+                let width: CGFloat? = index == 0 ? nil : MapNode.widthPresets[index - 1]
+                item.state = node.node.width == width ? .on : .off
+            }
+            menu.addItem(withTitle: "Node Width", action: nil, keyEquivalent: "").submenu = widthMenu
+            if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
+        } else { add("New Main Node", 3) }
+        return menu
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let id = previewGeometry().nodes.last(where: { screen($0.frame).contains(point) })?.node.id
+        return contextMenu(for: id)
+    }
+    @objc private func contextCommand(_ item: NSMenuItem) {
+        switch item.tag {
+        case 0: beginEditing()
+        case 1: addChild()
+        case 2: addSibling()
+        case 3: addMainNode()
+        case 4: toggleFold()
+        case 5: commitEditing(); if model.remove() { changed() }
+        case 10...14:
+            commitEditing()
+            let width: CGFloat? = item.tag == 10 ? nil : MapNode.widthPresets[item.tag - 11]
+            if model.setWidth(width) { changed() }
+        default: break
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
+            if event.modifierFlags.intersection([.shift, .option, .control]).isEmpty,
+               event.charactersIgnoringModifiers?.lowercased() == "n" { addMainNode(); return }
             if !event.modifierFlags.contains(.shift),
                !event.modifierFlags.contains(.option),
                !event.modifierFlags.contains(.control),
@@ -827,8 +879,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
     @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
     @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
+    @objc private func toggleOutline(_ sender: Any?) {
+        splitController.toggleSidebar(sender)
+        if splitController.splitViewItems[0].isCollapsed {
+            splitController.view.window?.makeFirstResponder(canvas)
+        }
+    }
 
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
+        self.canvas = canvas
         let split = NSSplitViewController()
         let sidebarController = NSViewController()
         outline = MapOutlineView(canvas: canvas)
@@ -852,8 +911,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         return toolbar
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
-         .flexibleSpace, .init("undo"), .init("redo")]
+        [.init("new-main"), .init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
+         .init("outline"), .flexibleSpace, .init("undo"), .init("redo")]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -862,10 +921,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let details: (String, String, Selector)
         switch identifier.rawValue {
+        case "new-main": details = ("New Main Node", "plus.square.on.square", #selector(newMainNode(_:)))
         case "new-child": details = ("New Child", "plus", #selector(newChild(_:)))
         case "new-sibling": details = ("New Sibling", "arrow.turn.down.right", #selector(newSibling(_:)))
         case "fold-node": details = ("Fold/Unfold", "chevron.right", #selector(foldNode(_:)))
         case "fit-map": details = ("Fit Map", "arrow.up.left.and.arrow.down.right", #selector(fitMap(_:)))
+        case "outline": details = ("Show/Hide Outline", "sidebar.left", #selector(toggleOutline(_:)))
         case "undo": details = ("Undo", "arrow.uturn.backward", #selector(undoEdit(_:)))
         case "redo": details = ("Redo", "arrow.uturn.forward", #selector(redoEdit(_:)))
         default: return nil
@@ -924,9 +985,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let view = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
         let viewMenu = NSMenu(title: "View")
         let outlineItem = viewMenu.addItem(withTitle: "Show/Hide Outline",
-            action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
+            action: #selector(toggleOutline(_:)), keyEquivalent: "s")
         outlineItem.keyEquivalentModifierMask = [.option, .command]
-        outlineItem.target = splitController
+        outlineItem.target = self
         let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let appearanceMenu = NSMenu(title: "Appearance")
         for title in ["System", "Light", "Dark"] {
@@ -940,10 +1001,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let nodeMenu = NSMenu(title: "Node")
         let entries: [(String, Selector, String, NSEvent.ModifierFlags)] = [
             ("New Child", #selector(newChild(_:)), "\t", []),
-            ("New Sibling", #selector(newSibling(_:)), "\r", []),
+            ("New Sibling", #selector(newSibling(_:)), "", []),
             ("New Sibling Before", #selector(newSiblingBefore(_:)), "\r", [.option]),
             ("New Parent", #selector(newParent(_:)), "\t", [.option]),
-            ("New Main Node", #selector(newMainNode(_:)), "\r", [.shift]),
+            ("New Main Node", #selector(newMainNode(_:)), "n", [.command]),
             ("Detach Node", #selector(detachNode(_:)), "D", [.command, .shift])
         ]
         for (title, action, key, modifiers) in entries {

@@ -44,8 +44,7 @@ func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
         let longestLine = text.components(separatedBy: "\n").map {
             ($0 as NSString).size(withAttributes: attributes).width
         }.max() ?? 0
-        // ponytail: 320pt maximum wraps long labels; expose a width preference if users need denser maps.
-        let width = min(320, max(170, ceil(longestLine) + 24))
+        let width = node.width ?? min(320, max(170, ceil(longestLine) + 24))
         let bounds = (text as NSString).boundingRect(
             with: CGSize(width: width - 24, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)

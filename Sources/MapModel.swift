@@ -1,10 +1,12 @@
 import Foundation
 
 struct MapNode: Codable, Equatable {
+    static let widthPresets: [CGFloat] = [170, 240, 320, 480]
     var id: UUID
     var title: String
     var children: [MapNode]
     var folded: Bool
+    var width: CGFloat? = nil // nil keeps the original content-sized node for existing JSON maps.
 }
 
 final class MapModel {
@@ -112,6 +114,16 @@ final class MapModel {
         save()
         Self.edit(&roots, at: path[...]) { nodes, index in nodes.remove(at: index) }
         roots.insert(moving, at: path[0] + 1)
+        return true
+    }
+
+    @discardableResult
+    func setWidth(_ width: CGFloat?) -> Bool {
+        guard width.map({ MapNode.widthPresets.contains($0) }) ?? true,
+              let path = Self.path(to: selected, in: roots),
+              Self.node(at: path[...], in: roots).width != width else { return false }
+        save()
+        Self.edit(&roots, at: path[...]) { nodes, index in nodes[index].width = width }
         return true
     }
 

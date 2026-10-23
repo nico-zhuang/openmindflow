@@ -53,6 +53,14 @@ enum LayoutTests {
             assert(ceil(measured.height) <= node.frame.height - 22, "Text must fit the node's vertical inset")
         }
 
+        let customJSON = try JSONSerialization.data(withJSONObject: [[
+            "id": UUID().uuidString, "title": "Short", "children": [], "folded": false, "width": 240
+        ]])
+        let custom = try JSONDecoder().decode([MapNode].self, from: customJSON)
+        assert(mapLayout(custom)[0].frame.width == 240,
+               "A node's saved width must change only that node's drawn/layout width")
+        let roundtrip = try JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(custom))
+        assert(mapLayout(roundtrip)[0].frame.width == 240, "Node width must survive own JSON roundtrip")
         let decoded = try JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(roots))
         assert(decoded.map(\.id) == roots.map(\.id))
         assert(decoded.map(\.title) == roots.map(\.title))

@@ -53,6 +53,60 @@ enum CanvasCommandTests {
         assert(model.roots[0].children[1].title == "Committed parent")
         assert(!canvas.control(control, textView: text,
             doCommandBy: NSSelectorFromString("unrecognizedCommand:")))
+        let returnRoot = MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Draft", children: [], folded: false)
+        ], folded: false)
+        let returnModel = MapModel(roots: [returnRoot], selected: returnRoot.children[0].id)
+        let returnCanvas = MapCanvas(model: returnModel)
+        returnCanvas.selectAndEdit(returnRoot.children[0].id)
+        returnCanvas.subviews.compactMap { $0 as? NSTextField }.first!.stringValue = "Committed"
+        assert(returnCanvas.control(control, textView: text,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        guard returnModel.roots[0].children.count == 1,
+              returnModel.roots[0].children[0].title == "Committed",
+              returnCanvas.subviews.compactMap({ $0 as? NSTextField }).isEmpty else {
+            fputs("First Return must commit and close editor without creating a sibling\n", stderr); exit(1)
+        }
+        let plainReturn = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+        returnCanvas.keyDown(with: plainReturn)
+        assert(returnModel.roots[0].children.count == 2 &&
+               returnCanvas.subviews.contains(where: { $0 is NSTextField }),
+               "Second Return on canvas should create and edit a sibling")
+        let rightA = MapNode(id: UUID(), title: "A", children: [], folded: false)
+        let rightB = MapNode(id: UUID(), title: "B", children: [], folded: false)
+        let rightRoot = MapNode(id: UUID(), title: "Root", children: [rightA, rightB], folded: false)
+        let rightModel = MapModel(roots: [rightRoot], selected: rightA.id)
+        let rightCanvas = MapCanvas(model: rightModel)
+        rightCanvas.frame = CGRect(x: 0, y: 0, width: 900, height: 700)
+        let rightBox = mapLayout(rightModel.roots).first { $0.node.id == rightB.id }!.frame
+        let rightPoint = CGPoint(x: rightBox.midX + 80, y: 700 - rightBox.midY - 90)
+        let rightEvent = NSEvent.mouseEvent(with: .rightMouseDown, location: rightPoint,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1)!
+        guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
+              rightMenu.items.map(\.title) == ["Edit Title", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete"] else {
+            fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
+        }
+        let editTitle = rightMenu.item(withTitle: "Edit Title")!
+        assert(NSApp.sendAction(editTitle.action!, to: editTitle.target, from: editTitle) &&
+               rightCanvas.subviews.contains(where: { $0 is NSTextField }),
+               "Context Edit Title must open the existing native editor")
+        rightCanvas.commitEditing()
+        let widthMenu = rightMenu.item(withTitle: "Node Width")!.submenu!
+        assert(widthMenu.item(withTitle: "Auto")?.state == .on)
+        let medium = widthMenu.item(withTitle: "Medium (240 pt)")!
+        assert(NSApp.sendAction(medium.action!, to: medium.target, from: medium) &&
+               rightModel.roots[0].children[1].width == 240 &&
+               mapLayout(rightModel.roots).first(where: { $0.node.id == rightB.id })!.frame.width == 240)
+        assert(rightModel.undo() && rightModel.roots[0].children[1].width == nil,
+               "Width presets must use the same undo stack as all other node edits")
+        let blankRight = NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 800, y: 40),
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 1)!
+        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node"],
+               "Blank canvas should offer new main node without pretending a node was clicked")
         let suiteName = "local.mindmap.appearance-test.\(UUID().uuidString)"
         let appearanceDefaults = UserDefaults(suiteName: suiteName)!
         let priorAppearance = NSApp.appearance
@@ -67,7 +121,7 @@ enum CanvasCommandTests {
             appearanceDefaults.removePersistentDomain(forName: suiteName)
         }
         let appDelegate = AppDelegate(defaults: appearanceDefaults)
-        let workbench = appDelegate.makeWorkbench(canvas: canvas)
+        _ = appDelegate.makeWorkbench(canvas: canvas)
         appDelegate.installMenu()
         assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "View", "Node"])
         guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else {
@@ -97,8 +151,8 @@ enum CanvasCommandTests {
         }
         assert(outlineToggle.keyEquivalent == "s")
         assert(outlineToggle.keyEquivalentModifierMask == [.option, .command])
-        assert(outlineToggle.action.map(NSStringFromSelector) == "toggleSidebar:")
-        assert(outlineToggle.target as AnyObject? === workbench)
+        assert(outlineToggle.action.map(NSStringFromSelector) == "toggleOutline:")
+        assert(outlineToggle.target as AnyObject? === appDelegate)
         let fileMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "File" }!
         guard let mindNodeOpen = fileMenu.item(withTitle: "Open MindNode (Read-only)…"),
               let ownJSONOpen = fileMenu.item(withTitle: "Open Own JSON…"),
@@ -112,23 +166,37 @@ enum CanvasCommandTests {
             exit(1)
         }
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
+        let siblingMenu = nodeMenu.item(withTitle: "New Sibling")!
+        assert(siblingMenu.keyEquivalent.isEmpty,
+               "Plain Return must not be a global menu accelerator that preempts the text editor")
         let before = nodeMenu.item(withTitle: "New Sibling Before")!
         assert(before.keyEquivalent == "\r" && before.keyEquivalentModifierMask == [.option])
         let parent = nodeMenu.item(withTitle: "New Parent")!
         assert(parent.keyEquivalent == "\t" && parent.keyEquivalentModifierMask == [.option])
         let main = nodeMenu.item(withTitle: "New Main Node")!
-        assert(main.keyEquivalent == "\r" && main.keyEquivalentModifierMask == [.shift])
+        assert(main.keyEquivalent == "n" && main.keyEquivalentModifierMask == [.command],
+               "New Main Node needs the native Command-N equivalent")
+        let shortcutRoot = MapNode(id: UUID(), title: "Root", children: [], folded: false)
+        let shortcutModel = MapModel(roots: [shortcutRoot], selected: shortcutRoot.id)
+        let shortcutCanvas = MapCanvas(model: shortcutModel)
+        let commandN = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "n",
+            charactersIgnoringModifiers: "n", isARepeat: false, keyCode: 45)!
+        shortcutCanvas.keyDown(with: commandN)
+        assert(shortcutModel.roots.count == 2 && shortcutModel.selected == shortcutModel.roots[1].id &&
+               shortcutCanvas.subviews.contains(where: { $0 is NSTextField }),
+               "Command-N should add and edit one main/root node")
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
-        assert(identifiers.map(\.rawValue) == ["new-child", "new-sibling", "fold-node", "fit-map", "undo", "redo"])
+        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "undo", "redo"])
         for (index, pair) in zip(identifiers,
-                                 ["newChild:", "newSibling:", "foldNode:", "fitMap:", "undoEdit:", "redoEdit:"]).enumerated() {
+                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "undoEdit:", "redoEdit:"]).enumerated() {
             let (identifier, action) = pair
             let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
                                            willBeInsertedIntoToolbar: true)!
             assert(item.target as AnyObject? === appDelegate)
             assert(item.action.map(NSStringFromSelector) == action)
-            assert(item.label == ["New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Undo", "Redo"][index])
+            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Undo", "Redo"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
         func selectedAppearance(_ menu: NSMenu) -> [String] {

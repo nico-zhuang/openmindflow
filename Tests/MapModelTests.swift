@@ -30,6 +30,14 @@ enum MapModelTests {
         assert(manyRoots.roots.map(\.id) == [first])
         manyRoots.undo() // Rejected removal must not create an undo entry.
         assert(manyRoots.roots.map(\.id) == [first, last] && manyRoots.selected == last)
+        let sizedID = UUID()
+        let sized = MapModel(roots: [MapNode(id: sizedID, title: "Resized", children: [], folded: false)], selected: sizedID)
+        assert(sized.setWidth(240) && sized.roots[0].width == 240)
+        assert(!sized.setWidth(240) && !sized.setWidth(100) && !sized.setWidth(200) && !sized.setWidth(.infinity),
+               "No-op and out-of-range widths must never add history")
+        assert(sized.undo() && sized.roots[0].width == nil)
+        assert(sized.redo() && sized.roots[0].width == 240)
+        assert(sized.setWidth(nil) && sized.roots[0].width == nil)
         let rootID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [], folded: false)], selected: rootID)
 

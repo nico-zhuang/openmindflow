@@ -80,6 +80,16 @@ enum OwnJSONTests {
         let duplicatesURL = scratch.appendingPathComponent("duplicates.mindmap.json")
         try JSONEncoder().encode(duplicate).write(to: duplicatesURL)
         rejects { _ = try readOwnJSON(duplicatesURL) }
+        let invalidWidthURL = scratch.appendingPathComponent("invalid-width.mindmap.json")
+        var unsafe = root
+        for width: CGFloat in [100, 200] {
+            unsafe.width = width
+            try JSONEncoder().encode([unsafe]).write(to: invalidWidthURL)
+            rejects { _ = try readOwnJSON(invalidWidthURL) }
+            rejects { try writeOwnJSON([unsafe], to: url) }
+        }
+        let afterBadWidth = try readOwnJSON(url)
+        assert(afterBadWidth == expected, "Invalid width must not replace the saved document")
         let finalSentinel = try String(contentsOf: unrelated, encoding: .utf8)
         assert(finalSentinel == "leave this alone")
         print("own JSON persistence tests passed")
