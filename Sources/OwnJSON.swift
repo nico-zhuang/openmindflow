@@ -4,7 +4,7 @@ import Darwin
 private let ownJSONLimit = 8 * 1024 * 1024
 
 enum OwnJSONError: LocalizedError {
-    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth
+    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation
 
     var errorDescription: String? {
         switch self {
@@ -12,7 +12,8 @@ enum OwnJSONError: LocalizedError {
         case .invalidFile: return "The document must be a regular file."
         case .tooLarge: return "The document exceeds the 8 MiB limit."
         case .duplicateID: return "The document contains duplicate node IDs."
-        case .invalidWidth: return "A node width must be 170, 240, 320 or 480 points."
+        case .invalidWidth: return "A node width must be a finite value from 60 to 1000 points."
+        case .invalidLocation: return "A saved node position must be within one million points."
         }
     }
 }
@@ -27,7 +28,13 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
         for node in nodes {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
             if let width = node.width {
-                guard MapNode.widthPresets.contains(width) else { throw OwnJSONError.invalidWidth }
+                guard MapNode.validWidth(width) else { throw OwnJSONError.invalidWidth }
+            }
+            if let point = node.location {
+                guard point.x.isFinite, point.y.isFinite,
+                      abs(point.x) <= 1_000_000, abs(point.y) <= 1_000_000 else {
+                    throw OwnJSONError.invalidLocation
+                }
             }
             try visit(node.children)
         }

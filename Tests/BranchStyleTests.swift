@@ -20,7 +20,7 @@ import AppKit
                                           bytesPerRow: 0, bitsPerPixel: 0)!
             let previous = NSGraphicsContext.current
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-            canvas.draw(canvas.bounds)
+            canvas.effectiveAppearance.performAsCurrentDrawingAppearance { canvas.draw(canvas.bounds) }
             NSGraphicsContext.current = previous
             return bitmap
         }
@@ -36,17 +36,20 @@ import AppKit
             canvas.appearance = NSAppearance(named: appearance)
             let bitmap = paint()
             let blank = bitmap.colorAt(x: 3, y: 3)
-            if appearance == .darkAqua,
-               !similar(blank, NSColor(srgbRed: 0.08, green: 0.07, blue: 0.08, alpha: 1)) {
-                fputs("Dark canvas should match the original app's near-black canvas, not a gray window background\n", stderr)
-                exit(1)
+            var systemBackground: NSColor = .windowBackgroundColor
+            canvas.effectiveAppearance.performAsCurrentDrawingAppearance {
+                systemBackground = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .windowBackgroundColor
+            }
+            guard similar(blank, systemBackground) else {
+                fputs("Canvas should use the system window background in both appearances\n", stderr); exit(1)
             }
             for item in nodes {
                 let x = Int(item.frame.minX + 80 + 28)
                 let top = Int(item.frame.minY + 90)
-                let unselectedTop = bitmap.colorAt(x: x, y: bitmap.pixelsHigh - top - 1)
-                guard similar(unselectedTop, blank) else {
-                    fputs("Nodes must have no enclosing top border in both appearances\n", stderr); exit(1)
+                let topPixel = bitmap.colorAt(x: x, y: bitmap.pixelsHigh - top - 1)
+                guard (item.parent == nil) != similar(topPixel, blank) else {
+                    fputs("Main/root nodes need a persistent shape; child labels alone stay borderless\n", stderr)
+                    exit(1)
                 }
             }
             let branch = nodes[1].frame

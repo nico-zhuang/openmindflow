@@ -940,7 +940,7 @@ enum CanvasCommandTests {
         let rootBox = mapLayout(visualModel.roots).first!.frame
         let draggedBox = visualCanvas.frameForAccessibility(visualRoot.children[0].id)!
         let connectorMid = CGPoint(x: (rootBox.maxX + 80 + draggedBox.minX) / 2,
-                                   y: (rootBox.maxY + 90 - 7 + draggedBox.maxY - 7) / 2)
+                                   y: (rootBox.midY + 90 + draggedBox.maxY - 7) / 2)
         let draggedBitmap = NSBitmapImageRep(data: image(visualCanvas))!
         let background = draggedBitmap.colorAt(x: 1, y: 1)!
         if !(-2...2).contains(where: { dy in (-2...2).contains(where: { dx in
@@ -1018,9 +1018,9 @@ enum CanvasCommandTests {
         let textLeft = projectedRoot.minX + 12 * fittedZoom
         let textWidth = projectedRoot.width - 24 * fittedZoom
         if abs(rootEditor.frame.minX - textLeft) >= 0.1 ||
-            abs(rootEditor.frame.maxY - (projectedRoot.maxY - 9 * fittedZoom)) >= 0.1 ||
+            abs(rootEditor.frame.midY - projectedRoot.midY) >= 0.1 ||
             rootEditor.frame.width < textWidth || rootEditor.frame.height < 22 {
-            fputs("Borderless editor must align its text with the branch baseline and preserve width\n", stderr)
+            fputs("Root editor must stay centered in its rectangle and preserve title width\n", stderr)
             exit(1)
         }
         fitCanvas.selectAndEdit(fitRoot.children[0].id)

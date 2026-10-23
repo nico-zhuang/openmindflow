@@ -33,11 +33,36 @@ enum MapModelTests {
         let sizedID = UUID()
         let sized = MapModel(roots: [MapNode(id: sizedID, title: "Resized", children: [], folded: false)], selected: sizedID)
         assert(sized.setWidth(240) && sized.roots[0].width == 240)
-        assert(!sized.setWidth(240) && !sized.setWidth(100) && !sized.setWidth(200) && !sized.setWidth(.infinity),
-               "No-op and out-of-range widths must never add history")
+        assert(!sized.setWidth(240) && !sized.setWidth(59) && !sized.setWidth(1001) && !sized.setWidth(.nan) && !sized.setWidth(.infinity) && !sized.setWidth(-.infinity),
+               "No-op, non-finite, and out-of-range widths must never add history")
         assert(sized.undo() && sized.roots[0].width == nil)
         assert(sized.redo() && sized.roots[0].width == 240)
         assert(sized.setWidth(nil) && sized.roots[0].width == nil)
+        assert(sized.setWidth(136) && sized.roots[0].width == 136)
+        assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(sized.roots))[0].width == 136)
+        assert(!sized.setWidth(136) && !sized.setWidth(.nan) && !sized.setWidth(59) && !sized.setWidth(1001))
+        assert(sized.undo() && sized.roots[0].width == nil, "Rejected widths must not push undo")
+        assert(sized.redo() && sized.roots[0].width == 136)
+        assert(sized.setWidth(316) && sized.roots[0].width == 316)
+        assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(sized.roots))[0].width == 316)
+        assert(sized.setWidth(60) && sized.setWidth(1000))
+        assert(sized.setWidth(nil) && sized.roots[0].width == nil)
+        let shiftedChild = MapNode(id: UUID(), title: "nested", children: [], folded: false,
+                                   location: SIMD2(120, 70))
+        let shifting = MapNode(id: UUID(), title: "moving", children: [shiftedChild], folded: false,
+                               location: SIMD2(100, 50))
+        let stationary = MapNode(id: UUID(), title: "target", children: [], folded: false,
+                                 location: SIMD2(300, 100))
+        let placedRoot = MapNode(id: UUID(), title: "root", children: [shifting, stationary], folded: false,
+                                 location: SIMD2(0, 0))
+        let positioned = MapModel(roots: [placedRoot], selected: shifting.id)
+        assert(positioned.moveNode(shifting.id, to: stationary.id, at: 0,
+                                   location: CGPoint(x: 400, y: 200)))
+        assert(positioned.roots[0].children[0].children[0].location == SIMD2(400, 200))
+        assert(positioned.roots[0].children[0].children[0].children[0].location == SIMD2(420, 220))
+        assert(positioned.undo() && positioned.roots == [placedRoot], "Undo restores original source locations")
+        assert(positioned.redo() && positioned.roots[0].children[0].children[0].location == SIMD2(400, 200))
+        assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(positioned.roots)) == positioned.roots)
         let rootID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [], folded: false)], selected: rootID)
 

@@ -6,6 +6,13 @@ struct LaidOutNode {
     let parent: UUID?
 }
 
+struct MapLayoutOverride {
+    let location: CGPoint?
+    let maxWidth: CGFloat?
+    let allowToShrinkWidth: Bool
+    let font: NSFont?
+}
+
 #if HEADLESS_TEST
 var mapLayoutInvocations = 0
 #endif
@@ -28,10 +35,47 @@ func mapFont(isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
     return NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
 
-func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
+func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -> [LaidOutNode] {
     #if HEADLESS_TEST
     mapLayoutInvocations += 1
     #endif
+    if !overrides.isEmpty {
+        // ponytail: two linear passes retain exact legacy deltas; combine passes if large imports become slow.
+        let original = mapLayout(roots)
+        let originalFrames = Dictionary(uniqueKeysWithValues: original.map { ($0.node.id, $0.frame) })
+        var placed: [UUID: CGRect] = [:]
+        return original.map { item in
+            let node = item.node
+            let saved = overrides[node.id]
+            let attributes: [NSAttributedString.Key: Any] = [.font: saved?.font ?? mapFont(isRoot: item.parent == nil)]
+            let title = node.title.isEmpty ? "New idea" : node.title
+            let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
+            let longestLine = text.components(separatedBy: "\n").map {
+                ($0 as NSString).size(withAttributes: attributes).width
+            }.max() ?? 0
+            let contentWidth = ceil(longestLine) + 24
+            let width: CGFloat
+            if let explicit = node.width { width = explicit }
+            else if let cap = saved?.maxWidth {
+                width = max(60, saved!.allowToShrinkWidth ? min(contentWidth, cap) : cap)
+            } else { width = min(320, max(170, contentWidth)) }
+            let bounds = (text as NSString).boundingRect(
+                with: CGSize(width: width - 24, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+            let height = max(44, ceil(bounds.height) + 22)
+            let parentShift: CGSize
+            if let parent = item.parent, let actual = placed[parent], let baseline = originalFrames[parent] {
+                parentShift = CGSize(width: actual.midX - baseline.midX, height: actual.midY - baseline.midY)
+            } else { parentShift = .zero }
+            let center = node.location.map { CGPoint(x: $0.x, y: $0.y) } ?? saved?.location
+                ?? CGPoint(x: item.frame.midX + parentShift.width,
+                                                      y: item.frame.midY + parentShift.height)
+            let frame = CGRect(x: center.x - width / 2, y: center.y - height / 2,
+                               width: width, height: height)
+            placed[node.id] = frame
+            return LaidOutNode(node: node, frame: frame, parent: item.parent)
+        }
+    }
     let gap: CGFloat = 32
     var sizes: [UUID: CGSize] = [:]
     var subtreeHeights: [UUID: CGFloat] = [:]

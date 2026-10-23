@@ -19,12 +19,17 @@ private final class MapNodeAX: NSAccessibilityElement {
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
     var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
+    var nativePresentation: [UUID: MindNodePresentation] = [:] { didSet { needsDisplay = true } }
+    var embeddedTheme: MindNodeThemeMetadata? { didSet { needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
             if springTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
             previewCache = nil
             let visibleIDs = Set(visibleNodes().map { $0.node.id })
-            if needsDisplay, window != nil { NSAccessibility.post(element: self, notification: .layoutChanged) }
+            if needsDisplay, window != nil {
+                NSAccessibility.post(element: self, notification: .layoutChanged)
+                window?.invalidateCursorRects(for: self)
+            }
             for (id, element) in accessibleNodes {
                 element.setAccessibilitySelected(id == model.selected && visibleIDs.contains(id))
             }
@@ -43,6 +48,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var dragPoint: CGPoint? { didSet { previewCache = nil } }
     private var dragOrigin: CGPoint?
     private var dragGrab = CGPoint.zero
+    private var resize: (id: UUID, startX: CGFloat, startWidth: CGFloat, currentWidth: CGFloat)?
     private var draggedIDs = Set<UUID>()
     private var accessibleNodes: [UUID: MapNodeAX] = [:]
     private var previewCache: (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?)?
@@ -117,18 +123,47 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
                width: frame.width * zoom, height: frame.height * zoom)
     }
+    private func font(for id: UUID, isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
+        guard !nativePresentation.isEmpty || embeddedTheme != nil else { return mapFont(isRoot: isRoot, zoom: zoom) }
+        let stored = nativePresentation[id]?.font
+        let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font : embeddedTheme?.baseSubnode?.font
+        let size = CGFloat(stored?.pointSize ?? inherited?.pointSize ?? (isRoot ? 20 : 16)) * zoom
+        let family = stored?.family ?? inherited?.family ?? "STSongti-SC-Regular"
+        return NSFont(name: family, size: size)
+            ?? NSFont(name: "STSongti-SC-Regular", size: size)
+            ?? NSFont.systemFont(ofSize: size)
+    }
+    private func titleColor(for id: UUID, isRoot: Bool) -> NSColor {
+        let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font?.color : embeddedTheme?.baseSubnode?.font?.color
+        guard let rgba = nativePresentation[id]?.font?.color ?? inherited, rgba.count == 4 else { return .labelColor }
+        let color = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        var background: NSColor?
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            background = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB)
+        }
+        if !isRoot, let background {
+            func lightness(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> CGFloat {
+                0.2126 * red + 0.7152 * green + 0.0722 * blue
+            }
+            let difference = abs(lightness(CGFloat(rgba[0]), CGFloat(rgba[1]), CGFloat(rgba[2])) -
+                                 lightness(background.redComponent, background.greenComponent, background.blueComponent))
+            if difference < 0.4 { return .labelColor } // Keep original dark-theme branch text legible on system Light.
+        }
+        return color
+    }
     private func editorFrame(_ node: LaidOutNode) -> CGRect {
         let box = screen(node.frame)
         let width = min(max(120, (node.frame.width - 24) * max(zoom, 0.8)),
                         bounds.width > 128 ? bounds.width - 56 : .greatestFiniteMagnitude)
-        let font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
+        let font = font(for: node.node.id, isRoot: node.parent == nil, zoom: max(zoom, 0.8))
         let textHeight = (node.node.title as NSString).boundingRect(
             with: CGSize(width: width - 8, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
         let height = min(max(22, box.height - 22 * zoom, ceil(textHeight) + 6),
                          max(22, bounds.height - 56))
         // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
-        return CGRect(x: box.minX + 12 * zoom, y: box.maxY - 9 * zoom - height,
+        return CGRect(x: box.minX + 12 * zoom,
+                      y: node.parent == nil ? box.midY - height / 2 : box.maxY - 9 * zoom - height,
                       width: width, height: height)
     }
     @discardableResult
@@ -141,13 +176,40 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                           min((bounds.width - 128) / world.width, (bounds.height - 128) / world.height)))
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
         let selected = nodes.first(where: { $0.node.id == model.selected })
-        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
+        if let selected { editor?.font = font(for: selected.node.id, isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
         editor?.frame = selected.map(editorFrame) ?? .zero
         if editor != nil { revealSelection() }
         needsDisplay = true
         return screen(world)
     }
-    private func visibleNodes() -> [LaidOutNode] { mapLayout(model.roots) }
+    private func visibleNodes(for candidate: [MapNode]? = nil) -> [LaidOutNode] {
+        // ponytail: copy the tiny tree only during width drag; index nodes if very large maps make resizing lag.
+        func preview(_ nodes: [MapNode]) -> [MapNode] {
+            nodes.map { item in
+                var copy = item
+                if let resize, item.id == resize.id { copy.width = resize.currentWidth }
+                copy.children = preview(item.children)
+                return copy
+            }
+        }
+        let source = candidate ?? model.roots
+        let roots = resize == nil || candidate != nil ? source : preview(source)
+        guard !nativePresentation.isEmpty else { return mapLayout(roots) }
+        var overrides: [UUID: MapLayoutOverride] = [:]
+        func add(_ node: MapNode, isRoot: Bool) {
+            let saved = nativePresentation[node.id]
+            let width: CGFloat? = saved?.maxWidth.flatMap { value in
+                let points = CGFloat(value)
+                return MapNode.validWidth(points) ? points : nil
+            }
+            overrides[node.id] = MapLayoutOverride(location: saved?.location, maxWidth: width,
+                allowToShrinkWidth: saved?.allowToShrinkWidth ?? true,
+                font: font(for: node.id, isRoot: isRoot))
+            for child in node.children { add(child, isRoot: false) }
+        }
+        for root in roots { add(root, isRoot: true) }
+        return mapLayout(roots, overrides: overrides)
+    }
     private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
     private func validDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
         -> (target: LaidOutNode, parent: UUID, index: Int)? {
@@ -318,7 +380,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if let drop {
                 // ponytail: O(n) tree copy/layout per drag frame; cache candidate placement or affected branches if large maps stutter.
                 let preview = MapModel(roots: model.roots, selected: model.selected)
-                if preview.moveNode(source, to: drop.parent, at: drop.index) { nodes = mapLayout(preview.roots) }
+                if preview.moveNode(source, to: drop.parent, at: drop.index) { nodes = visibleNodes(for: preview.roots) }
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
@@ -364,8 +426,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        (dark ? NSColor(srgbRed: 0.08, green: 0.07, blue: 0.08, alpha: 1) : .windowBackgroundColor).setFill()
+        NSColor.windowBackgroundColor.setFill()
         bounds.fill()
         let (nodes, drop) = previewGeometry()
         if nodes.isEmpty {
@@ -406,9 +467,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard let parent = nodes.first(where: { $0.node.id == item.parent }) else { continue }
             let start = screen(parent.frame), end = screen(item.frame)
             let line = NSBezierPath()
-            line.move(to: CGPoint(x: start.maxX, y: baseline(start)))
+            let startY = parent.parent == nil ? start.midY : baseline(start)
+            line.move(to: CGPoint(x: start.maxX, y: startY))
             line.curve(to: CGPoint(x: end.minX, y: baseline(end)),
-                       controlPoint1: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(start)),
+                       controlPoint1: CGPoint(x: (start.maxX + end.minX) / 2, y: startY),
                        controlPoint2: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(end)))
             line.lineWidth = strokeWidth(item)
             (color[item.node.id] ?? .systemTeal).setStroke()
@@ -418,33 +480,67 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let box = screen(item.frame)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
             let active = item.node.id == model.selected || hovered
-            let path = NSBezierPath()
-            path.move(to: CGPoint(x: box.minX, y: baseline(box)))
-            let lineEnd = item.node.id == model.selected ? max(box.maxX, editor?.frame.maxX ?? box.maxX) : box.maxX
-            path.line(to: CGPoint(x: lineEnd, y: baseline(box)))
-            path.lineWidth = strokeWidth(item) + (active ? 1 : 0)
-            (active ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
-            path.stroke()
-            if hovered {
-                let dot = NSBezierPath(ovalIn: CGRect(x: box.minX - 4 * zoom,
-                    y: baseline(box) - 4 * zoom, width: 8 * zoom, height: 8 * zoom))
-                NSColor.controlAccentColor.setFill()
-                dot.fill()
+            if item.parent == nil {
+                let shape = NSBezierPath(roundedRect: box, xRadius: 9 * zoom, yRadius: 9 * zoom)
+                if let rgba = nativePresentation[item.node.id]?.fillColor ?? embeddedTheme?.mainNodes.first?.fillColor,
+                   rgba.count == 4 {
+                    NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3]).setFill()
+                } else { NSColor.controlBackgroundColor.setFill() }
+                shape.fill()
+                (active ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+                shape.lineWidth = active ? max(2, 2 * zoom) : max(1, zoom)
+                shape.stroke()
+            } else {
+                let path = NSBezierPath()
+                path.move(to: CGPoint(x: box.minX, y: baseline(box)))
+                let lineEnd = item.node.id == model.selected ? max(box.maxX, editor?.frame.maxX ?? box.maxX) : box.maxX
+                path.line(to: CGPoint(x: lineEnd, y: baseline(box)))
+                path.lineWidth = strokeWidth(item) + (active ? 1 : 0)
+                (active ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
+                path.stroke()
+                if hovered {
+                    let dot = NSBezierPath(ovalIn: CGRect(x: box.minX - 4 * zoom,
+                        y: baseline(box) - 4 * zoom, width: 8 * zoom, height: 8 * zoom))
+                    NSColor.controlAccentColor.setFill()
+                    dot.fill()
+                }
             }
             if editor != nil && item.node.id == model.selected { continue }
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = nativePresentation[item.node.id]?.font?.alignment == "center" ? .center : .left
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: mapFont(isRoot: item.parent == nil, zoom: zoom),
-                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
+                .font: font(for: item.node.id, isRoot: item.parent == nil, zoom: zoom),
+                .paragraphStyle: paragraph,
+                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : titleColor(for: item.node.id, isRoot: item.parent == nil)
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
             let height = ceil((label as NSString).boundingRect(
                 with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height)
-            (label as NSString).draw(in: CGRect(x: box.minX + 12 * zoom,
-                y: baseline(box) - height - 3 * zoom,
-                width: box.width - 24 * zoom, height: height + 2 * zoom), withAttributes: attrs)
+            let textRect = item.parent == nil
+                ? CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
+                         width: box.width - 24 * zoom, height: height + 2 * zoom)
+                : CGRect(x: box.minX + 12 * zoom, y: baseline(box) - height - 3 * zoom,
+                         width: box.width - 24 * zoom, height: height + 2 * zoom)
+            (label as NSString).draw(in: textRect, withAttributes: attrs)
+            if item.node.id == model.selected {
+                let handleY = item.parent == nil ? box.midY : baseline(box)
+                let handle = NSBezierPath(ovalIn: CGRect(x: box.maxX - 3, y: handleY - 3,
+                    width: 6, height: 6))
+                NSColor.controlAccentColor.setFill()
+                handle.fill()
+            }
         }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let item = visibleNodes().first(where: { $0.node.id == model.selected }) else { return }
+        let box = screen(item.frame)
+        let handleY = item.parent == nil ? box.midY : box.maxY - 7 * zoom
+        addCursorRect(CGRect(x: box.maxX - 9, y: handleY - 9,
+            width: 18, height: 18), cursor: .resizeLeftRight)
     }
 
     private func beginEditing() {
@@ -458,8 +554,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         let field = NSTextField(frame: editorFrame(node))
         field.stringValue = node.node.title
-        field.font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
-        field.textColor = .labelColor
+        field.font = font(for: node.node.id, isRoot: node.parent == nil, zoom: max(zoom, 0.8))
+        field.textColor = titleColor(for: node.node.id, isRoot: node.parent == nil)
+        field.alignment = nativePresentation[node.node.id]?.font?.alignment == "center" ? .center : .left
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -539,6 +636,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 let width: CGFloat? = index == 0 ? nil : MapNode.widthPresets[index - 1]
                 item.state = node.node.width == width ? .on : .off
             }
+            let custom = widthMenu.addItem(withTitle: "Custom Width…", action: #selector(contextCommand(_:)), keyEquivalent: "")
+            custom.target = self
+            custom.tag = 15
             menu.addItem(withTitle: "Node Width", action: nil, keyEquivalent: "").submenu = widthMenu
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
         } else { add("New Main Node", 3) }
@@ -561,6 +661,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             commitEditing()
             let width: CGFloat? = item.tag == 10 ? nil : MapNode.widthPresets[item.tag - 11]
             if model.setWidth(width) { changed() }
+        case 15:
+            commitEditing()
+            let dialog = NSAlert()
+            dialog.messageText = "Custom Node Width"
+            dialog.informativeText = "Enter a width from 60 to 1000 points."
+            let field = NSTextField(string: String(Int(selectedNode()?.frame.width ?? 170)))
+            field.frame = CGRect(x: 0, y: 0, width: 180, height: 24)
+            field.setAccessibilityLabel("Width in points")
+            dialog.accessoryView = field
+            dialog.addButton(withTitle: "Apply")
+            dialog.addButton(withTitle: "Cancel")
+            if dialog.runModal() == .alertFirstButtonReturn,
+               let value = Double(field.stringValue), model.setWidth(CGFloat(value)) { changed() }
         default: break
         }
     }
@@ -638,9 +751,20 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         stopSpring()
         dragSource = nil
         dragPoint = nil
+        resize = nil
         if wasPresented { needsDisplay = true } // A no-hit click must not leave stale spring paint or AX.
         let point = convert(event.locationInWindow, from: nil)
         dragOrigin = point
+        if event.clickCount == 1,
+           let selected = hitNodes.first(where: { $0.node.id == model.selected }) {
+            let box = screen(selected.frame)
+            let handleY = selected.parent == nil ? box.midY : box.maxY - 7 * zoom
+            if abs(point.x - box.maxX) <= 9, abs(point.y - handleY) <= 9 {
+                resize = (selected.node.id, point.x, selected.frame.width, selected.frame.width)
+                needsDisplay = true
+                return
+            }
+        }
         if let node = hitNodes.last(where: { screen($0.frame).contains(point) }) {
             model.selected = node.node.id
             dragSource = event.clickCount == 1 && node.parent != nil ? node.node.id : nil
@@ -653,6 +777,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if var resize {
+            resize.currentWidth = min(1000, max(60, resize.startWidth + (point.x - resize.startX) / zoom))
+            self.resize = resize
+            needsDisplay = true
+            return
+        }
         if dragSource != nil {
             if dragPoint == nil, let origin = dragOrigin,
                hypot(point.x - origin.x, point.y - origin.y) < 9 { return }
@@ -669,11 +799,25 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true }
+        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; needsDisplay = true }
+        if let handle = resize {
+            if abs(handle.currentWidth - handle.startWidth) > 0.5,
+               model.setWidth(handle.currentWidth) { resize = nil; changed() }
+            return
+        }
         guard let source = dragSource, dragPoint != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
-        if let placement = validDrop(at: point, source: source, nodes: visibleNodes()),
-           model.moveNode(source, to: placement.parent, at: placement.index) { changed() }
+        let nodes = visibleNodes()
+        guard let placement = validDrop(at: point, source: source, nodes: nodes) else { return }
+        let worldCenter: CGPoint? = nativePresentation.isEmpty ? nil : nodes.first(where: { $0.node.id == source }).map { item in
+            if placement.parent == placement.target.node.id {
+                return CGPoint(x: placement.target.frame.maxX + item.frame.width / 2 + 60,
+                               y: placement.target.frame.midY)
+            }
+            return CGPoint(x: (point.x - dragGrab.x - offset.x) / zoom + item.frame.width / 2,
+                           y: (point.y - dragGrab.y - offset.y) / zoom + item.frame.height / 2)
+        }
+        if model.moveNode(source, to: placement.parent, at: placement.index, location: worldCenter) { changed() }
     }
     private func zoom(at point: CGPoint, by factor: CGFloat) {
         let next = min(3, max(editor == nil ? 0.35 : 0.8, zoom * factor))
@@ -681,7 +825,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         offset.y = point.y - (point.y - offset.y) * next / zoom
         zoom = next
         let selected = selectedNode()
-        if let selected { editor?.font = mapFont(isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
+        if let selected { editor?.font = font(for: selected.node.id, isRoot: selected.parent == nil, zoom: max(zoom, 0.8)) }
         editor?.frame = selected.map(editorFrame) ?? .zero
         needsDisplay = true
     }
@@ -811,6 +955,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             let roots = try readOwnJSON(url)
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
             canvas.branchStyles = [:]
+            canvas.nativePresentation = [:]
+            canvas.embeddedTheme = nil
             outline.reloadMap()
             fileURL = url
             savedRoots = roots
@@ -837,10 +983,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
               url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
         do {
-            let imported = try MindNodeImporter.loadWithStyles(url)
+            let imported = try MindNodeImporter.loadDetailed(url)
             guard confirmDiscardOrSave() else { return }
             canvas.model = MapModel(roots: imported.roots, selected: imported.roots.first?.id ?? UUID())
             canvas.branchStyles = imported.styles
+            canvas.embeddedTheme = imported.theme
+            canvas.nativePresentation = imported.presentation
             outline.reloadMap()
             fileURL = nil // Never save into the source package.
             savedRoots = imported.roots
@@ -848,7 +996,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             updateTitle()
             canvas.fitMapInView()
             window.makeFirstResponder(canvas)
-            alert("MindNode imported read-only", detail: "Text, tree, fold state and visible branch colors/widths were imported. Notes, attachments and styling are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
+            alert("MindNode imported read-only", detail: "The saved node positions, title widths and fonts, embedded theme colors and branch strokes are shown. Cross-connections and attachments are not displayed; styling is not round-tripped. Save creates a new .mindmap.json file and never overwrites the MindNode package.")
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {

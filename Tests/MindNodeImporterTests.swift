@@ -29,6 +29,9 @@ enum MindNodeImporterTests {
                inode != nil, current == inode, stored == owner {
                 // Nonrecursive, descriptor-relative cleanup: another directory's contents cannot be removed.
                 _ = unlinkat(packageFD, "contents.xml", 0)
+                _ = unlinkat(packageFD, "style.mindnodestyle/contents.xml", 0)
+                _ = unlinkat(packageFD, "style.mindnodestyle/metadata.plist", 0)
+                _ = unlinkat(packageFD, "style.mindnodestyle", AT_REMOVEDIR)
                 _ = unlinkat(scratchFD, "single.mindnode", 0)
                 _ = unlinkat(scratchFD, ".test-owner", 0)
                 _ = unlinkat(scratchFD, "fixture.mindnode", AT_REMOVEDIR)
@@ -69,6 +72,64 @@ enum MindNodeImporterTests {
         assert(styledImport.styles[childID]?.rgba == [0.1, 0.2, 0.3, 1] &&
                styledImport.styles[childID]?.width == 5,
                "Valid v9 branch RGBA and depth stroke width should survive read-only import")
+        var richChild = styledChild
+        richChild["location"] = "{ -120.5, 42 }"
+        richChild["styleChangedByUser"] = true
+        richChild["shapeStyle"] = ["fillColor": "{0.4, 0.5, 0.6, 1}"]
+        richChild["title"] = ["text": "<p style='font: 18px \"Songti SC\"; color: rgba(12, 34, 56, 0.5); text-align: center; -cocoa-font-postscriptname: ignored;'>Hello</p>", "maxWidth": 260.0, "allowToShrinkWidth": false]
+        styledRoot["subnodes"] = [richChild]
+        try write([styledRoot])
+        let themeDirectory = package.appendingPathComponent("style.mindnodestyle", isDirectory: true)
+        try fm.createDirectory(at: themeDirectory, withIntermediateDirectories: false)
+        let theme: [String: Any] = [
+            "backgroundColor": "{0.9, 0.8, 0.7, 1}", "allowNodeStrokeColorVariation": true,
+            "baseSubnode": ["titleStyle": ["fontName": "Avenir Next", "fontSize": 14.0, "color": "{0, 0, 0, 1}", "alignment": 1, "bold": false, "italic": false],
+                            "shapeStyle": ["fillColor": "{1, 1, 1, 1}"],
+                            "strokeStyle": ["color": "{0.2, 0.3, 0.4, 1}", "width": 2.0]],
+            "mainNodes": [["titleStyle": ["fontName": "Helvetica", "fontSize": 22.0, "color": "{1, 1, 1, 1}"]]],
+            "subnodeLevels": []]
+        let themeURL = themeDirectory.appendingPathComponent("contents.xml")
+        try PropertyListSerialization.data(fromPropertyList: theme, format: .binary, options: 0).write(to: themeURL)
+        let themeID = UUID()
+        let themeIdentity = ["id": themeID.uuidString, "title": "Fixture", "author": "Fixture", "version": 1] as [String: Any]
+        try PropertyListSerialization.data(fromPropertyList: themeIdentity, format: .xml, options: 0)
+            .write(to: themeDirectory.appendingPathComponent("metadata.plist"))
+        let detailed = try MindNodeImporter.loadDetailed(package)
+        assert(detailed.roots[0].children[0].title == "Hello" && detailed.styles[childID]?.width == 5)
+        assert(detailed.presentation[childID]?.location?.x == -120.5 && detailed.presentation[childID]?.location?.y == 42)
+        assert(detailed.roots[0].children[0].location == SIMD2(-120.5, 42),
+               "Original world centers enter undoable JSON-persisted model, not just transient canvas metadata")
+        assert(detailed.presentation[childID]?.maxWidth == 260 && detailed.presentation[childID]?.allowToShrinkWidth == false)
+        assert(detailed.roots[0].children[0].width == 260, "A fixed original title width must survive editing and JSON Save")
+        assert(detailed.presentation[childID]?.font?.family == "Songti SC" && detailed.presentation[childID]?.font?.pointSize == 18)
+        assert(detailed.presentation[childID]?.font?.color == [12.0 / 255, 34.0 / 255, 56.0 / 255, 0.5] && detailed.presentation[childID]?.font?.alignment == "center")
+        assert(detailed.presentation[childID]?.styleChangedByUser == true && detailed.presentation[childID]?.fillColor == [0.4, 0.5, 0.6, 1])
+        assert(detailed.theme?.backgroundColor == [0.9, 0.8, 0.7, 1] && detailed.theme?.allowNodeStrokeColorVariation == true)
+        assert(detailed.theme?.baseSubnode?.font?.family == "Avenir Next" && detailed.theme?.baseSubnode?.stroke?.width == 2)
+        assert(detailed.theme?.baseSubnode?.font?.alignmentCode == 1 && detailed.theme?.baseSubnode?.font?.alignment == nil)
+        assert(detailed.theme?.mainNodes.first?.font?.pointSize == 22)
+        assert(detailed.theme?.identifier == themeID, "Theme identity comes from this document's embedded metadata")
+        var unsafe = richChild
+        unsafe["location"] = "{nan, 10}"
+        unsafe["title"] = ["text": "<p style='font: 19px url(evil); color: expression(evil); text-align: unsafe;'>Hello</p>", "maxWidth": Double.infinity, "allowToShrinkWidth": 1]
+        styledRoot["subnodes"] = [unsafe]
+        try write([styledRoot])
+        let sanitized = try MindNodeImporter.loadDetailed(package)
+        assert(sanitized.roots[0].children[0].title == "Hello" && sanitized.presentation[childID]?.location == nil)
+        assert(sanitized.presentation[childID]?.font == nil && sanitized.presentation[childID]?.maxWidth == nil && sanitized.presentation[childID]?.allowToShrinkWidth == nil)
+        try Data([0, 1, 2]).write(to: themeURL, options: .atomic)
+        let malformedTheme = try MindNodeImporter.loadDetailed(package)
+        assert(malformedTheme.theme == nil)
+        _ = unlinkat(packageFD, "style.mindnodestyle/contents.xml", 0)
+        assert(symlinkat("../contents.xml", packageFD, "style.mindnodestyle/contents.xml") == 0)
+        assert((try? MindNodeImporter.loadDetailed(package))?.theme == nil)
+        _ = unlinkat(packageFD, "style.mindnodestyle/contents.xml", 0)
+        try write([root])
+        let plainDetailed = try MindNodeImporter.loadDetailed(package)
+        assert(plainDetailed.presentation[rootID] != nil)
+        _ = unlinkat(packageFD, "style.mindnodestyle/contents.xml", 0)
+        _ = unlinkat(packageFD, "style.mindnodestyle/metadata.plist", 0)
+        _ = unlinkat(packageFD, "style.mindnodestyle", AT_REMOVEDIR)
         styledChild["pathStyle"] = ["strokeStyle": ["color": "not a color", "width": -5.0]]
         styledRoot["subnodes"] = [styledChild]
         try write([styledRoot])
@@ -88,6 +149,8 @@ enum MindNodeImporterTests {
         guard (try? MindNodeImporter.load(single)) == nodes else {
             fputs("A direct .mindnode v9 binary plist must import exactly like contents.xml\n", stderr); exit(1)
         }
+        let directDetailed = try MindNodeImporter.loadDetailed(single)
+        assert(directDetailed.roots == nodes && directDetailed.theme == nil && directDetailed.presentation[rootID] != nil)
         assert(nodes.count == 1 && nodes[0].id == rootID && nodes[0].title == "Root")
         assert(nodes[0].children.count == 1 && nodes[0].children[0].id == childID)
         assert(nodes[0].children[0].title == "Hello & world" && nodes[0].children[0].folded)

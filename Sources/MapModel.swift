@@ -2,11 +2,13 @@ import Foundation
 
 struct MapNode: Codable, Equatable {
     static let widthPresets: [CGFloat] = [170, 240, 320, 480]
+    static func validWidth(_ width: CGFloat) -> Bool { width.isFinite && (60...1000).contains(width) }
     var id: UUID
     var title: String
     var children: [MapNode]
     var folded: Bool
     var width: CGFloat? = nil // nil keeps the original content-sized node for existing JSON maps.
+    var location: SIMD2<Double>? = nil // Saved world center; stdlib vector stays Codable/Equatable without AppKit.
 }
 
 final class MapModel {
@@ -90,13 +92,31 @@ final class MapModel {
         return !sameParent || destination != source.last!
     }
 
-    func moveNode(_ id: UUID, to parentID: UUID, at index: Int) -> Bool {
-        guard canMoveNode(id, to: parentID, at: index) else { return false }
+    func moveNode(_ id: UUID, to parentID: UUID, at index: Int, location: CGPoint? = nil) -> Bool {
+        guard canMoveNode(id, to: parentID, at: index),
+              location.map({ $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 1_000_000 && abs($0.y) <= 1_000_000 }) ?? true
+              else { return false }
         let sourcePath = Self.path(to: id, in: roots)!
         let targetPath = Self.path(to: parentID, in: roots)!
         let sameParent = sourcePath.dropLast().elementsEqual(targetPath)
         let destinationIndex = index - (sameParent && sourcePath.last! < index ? 1 : 0)
-        let moving = Self.node(at: sourcePath[...], in: roots)
+        var moving = Self.node(at: sourcePath[...], in: roots)
+        if let location {
+            if let old = moving.location {
+                let dx = Double(location.x) - old.x, dy = Double(location.y) - old.y
+                func shift(_ node: inout MapNode) -> Bool {
+                    if let point = node.location {
+                        let next = SIMD2<Double>(point.x + dx, point.y + dy)
+                        guard next.x.isFinite, next.y.isFinite,
+                              abs(next.x) <= 1_000_000, abs(next.y) <= 1_000_000 else { return false }
+                        node.location = next
+                    }
+                    for index in node.children.indices where !shift(&node.children[index]) { return false }
+                    return true
+                }
+                guard shift(&moving) else { return false }
+            } else { moving.location = SIMD2(Double(location.x), Double(location.y)) }
+        }
         save()
         Self.edit(&roots, at: sourcePath[...]) { nodes, position in nodes.remove(at: position) }
         let updatedParentPath = Self.path(to: parentID, in: roots)!
@@ -119,7 +139,7 @@ final class MapModel {
 
     @discardableResult
     func setWidth(_ width: CGFloat?) -> Bool {
-        guard width.map({ MapNode.widthPresets.contains($0) }) ?? true,
+        guard width.map(MapNode.validWidth) ?? true,
               let path = Self.path(to: selected, in: roots),
               Self.node(at: path[...], in: roots).width != width else { return false }
         save()

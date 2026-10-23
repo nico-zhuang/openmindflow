@@ -77,6 +77,69 @@ enum LayoutTests {
         let child = dropPlacement(at: CGPoint(x: upper.frame.midX, y: upper.frame.midY), over: upper, siblings: siblingFrames)
         assert(child?.parent == upper.node.id && child?.index == 0)
         assert(dropPlacement(at: first[0].frame.origin, over: first[0], siblings: []) == nil)
+        let nativeRoot = MapNode(id: UUID(), title: "Native root", children: [
+            MapNode(id: UUID(), title: "New child", children: [], folded: false),
+            MapNode(id: UUID(), title: String(repeating: "wide content ", count: 20), children: [], folded: false),
+            MapNode(id: UUID(), title: "Explicit width", children: [], folded: false, width: 136)
+        ], folded: false, width: 316)
+        let distantRoot = MapNode(id: UUID(), title: "Distant", children: [], folded: false)
+        let nativeRoots = [nativeRoot, distantRoot]
+        let defaults = Dictionary(uniqueKeysWithValues: mapLayout(nativeRoots).map { ($0.node.id, $0.frame) })
+        let overrides: [UUID: MapLayoutOverride] = [
+            nativeRoot.id: MapLayoutOverride(location: CGPoint(x: -900, y: 1200), maxWidth: 240,
+                                             allowToShrinkWidth: false, font: .systemFont(ofSize: 36)),
+            nativeRoot.children[1].id: MapLayoutOverride(location: nil, maxWidth: 180,
+                                                          allowToShrinkWidth: true, font: .systemFont(ofSize: 24)),
+            nativeRoot.children[2].id: MapLayoutOverride(location: nil, maxWidth: 80,
+                                                          allowToShrinkWidth: false, font: nil),
+            distantRoot.id: MapLayoutOverride(location: CGPoint(x: 1500, y: -750), maxWidth: 136,
+                                               allowToShrinkWidth: false, font: nil)
+        ]
+        let native = Dictionary(uniqueKeysWithValues: mapLayout(nativeRoots, overrides: overrides).map { ($0.node.id, $0.frame) })
+        let rootFrame = native[nativeRoot.id]!
+        let distantFrame = native[distantRoot.id]!
+        assert(rootFrame.width == 316 && rootFrame.midX == -900 && rootFrame.midY == 1200)
+        assert(distantFrame.width == 136 && distantFrame.midX == 1500 && distantFrame.midY == -750)
+        assert(native[nativeRoot.children[1].id]!.width == 180, "Auto width must cap at native maxWidth")
+        assert(native[nativeRoot.children[2].id]!.width == 136, "Explicit node.width wins")
+        for child in nativeRoot.children {
+            let actual = native[child.id]!, original = defaults[child.id]!, originalParent = defaults[nativeRoot.id]!
+            assert(actual.midX - rootFrame.midX == original.midX - originalParent.midX)
+            assert(actual.midY - rootFrame.midY == original.midY - originalParent.midY)
+        }
+        let rootText = (nativeRoot.title as NSString).boundingRect(
+            with: CGSize(width: rootFrame.width - 24, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 36)])
+        assert(rootFrame.height == max(44, ceil(rootText.height) + 22))
+        let capped = native[nativeRoot.children[1].id]!
+        let cappedText = (nativeRoot.children[1].title as NSString).boundingRect(
+            with: CGSize(width: capped.width - 24, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 24)])
+        assert(capped.height == max(44, ceil(cappedText.height) + 22))
+        assert(nativeRoot.children.allSatisfy { dropPlacement(at: CGPoint(x: native[$0.id]!.midX, y: native[$0.id]!.midY), over: LaidOutNode(node: $0, frame: native[$0.id]!, parent: nativeRoot.id), siblings: [])?.parent == $0.id })
+        let nested = MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Pinned child", children: [
+                MapNode(id: UUID(), title: "New grandchild", children: [], folded: false)
+            ], folded: false),
+            MapNode(id: UUID(), title: "Tiny", children: [], folded: false)
+        ], folded: false)
+        let nestedDefault = Dictionary(uniqueKeysWithValues: mapLayout([nested]).map { ($0.node.id, $0.frame) })
+        let nestedOverrides: [UUID: MapLayoutOverride] = [
+            nested.id: MapLayoutOverride(location: CGPoint(x: -100, y: 80), maxWidth: nil,
+                                         allowToShrinkWidth: true, font: nil),
+            nested.children[0].id: MapLayoutOverride(location: CGPoint(x: 300, y: 900), maxWidth: nil,
+                                                     allowToShrinkWidth: false, font: nil),
+            nested.children[1].id: MapLayoutOverride(location: nil, maxWidth: 20,
+                                                     allowToShrinkWidth: true, font: nil)
+        ]
+        let nestedFrames = Dictionary(uniqueKeysWithValues: mapLayout([nested], overrides: nestedOverrides).map { ($0.node.id, $0.frame) })
+        let pinned = nestedFrames[nested.children[0].id]!, grandchild = nestedFrames[nested.children[0].children[0].id]!
+        assert(pinned.midX == 300 && pinned.midY == 900)
+        assert(grandchild.midX - pinned.midX == nestedDefault[nested.children[0].children[0].id]!.midX - nestedDefault[nested.children[0].id]!.midX)
+        assert(grandchild.midY - pinned.midY == nestedDefault[nested.children[0].children[0].id]!.midY - nestedDefault[nested.children[0].id]!.midY)
+        assert(nestedFrames[nested.children[1].id]!.width == 60)
         print("layout and JSON roundtrip tests passed")
     }
 }

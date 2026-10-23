@@ -80,9 +80,15 @@ enum OwnJSONTests {
         let duplicatesURL = scratch.appendingPathComponent("duplicates.mindmap.json")
         try JSONEncoder().encode(duplicate).write(to: duplicatesURL)
         rejects { _ = try readOwnJSON(duplicatesURL) }
+        let customWidthURL = scratch.appendingPathComponent("custom-width.mindmap.json")
+        var resized = root
+        resized.width = 136
+        try writeOwnJSON([resized], to: customWidthURL)
+        let reopenedCustomWidth = try readOwnJSON(customWidthURL)
+        assert(reopenedCustomWidth == [resized], "Original-style widths survive Save/Open")
         let invalidWidthURL = scratch.appendingPathComponent("invalid-width.mindmap.json")
         var unsafe = root
-        for width: CGFloat in [100, 200] {
+        for width: CGFloat in [0, 59, 1001] {
             unsafe.width = width
             try JSONEncoder().encode([unsafe]).write(to: invalidWidthURL)
             rejects { _ = try readOwnJSON(invalidWidthURL) }
@@ -90,6 +96,14 @@ enum OwnJSONTests {
         }
         let afterBadWidth = try readOwnJSON(url)
         assert(afterBadWidth == expected, "Invalid width must not replace the saved document")
+        let invalidLocationURL = scratch.appendingPathComponent("invalid-location.mindmap.json")
+        var placedTooFar = root
+        placedTooFar.location = SIMD2(2_000_000, 0)
+        try JSONEncoder().encode([placedTooFar]).write(to: invalidLocationURL)
+        rejects { _ = try readOwnJSON(invalidLocationURL) }
+        rejects { try writeOwnJSON([placedTooFar], to: url) }
+        let afterBadLocation = try readOwnJSON(url)
+        assert(afterBadLocation == expected, "Invalid source positions cannot replace saved JSON")
         let finalSentinel = try String(contentsOf: unrelated, encoding: .utf8)
         assert(finalSentinel == "leave this alone")
         print("own JSON persistence tests passed")
