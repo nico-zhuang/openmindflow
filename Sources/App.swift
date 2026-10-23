@@ -18,6 +18,7 @@ private final class MapNodeAX: NSAccessibilityElement {
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
+    var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
             if springTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
@@ -127,7 +128,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let height = min(max(22, box.height - 22 * zoom, ceil(textHeight) + 6),
                          max(22, bounds.height - 56))
         // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
-        return CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
+        return CGRect(x: box.minX + 12 * zoom, y: box.maxY - 9 * zoom - height,
                       width: width, height: height)
     }
     @discardableResult
@@ -363,7 +364,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        (dark ? NSColor(srgbRed: 0.08, green: 0.07, blue: 0.08, alpha: 1) : .windowBackgroundColor).setFill()
         bounds.fill()
         let (nodes, drop) = previewGeometry()
         if nodes.isEmpty {
@@ -372,31 +374,63 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             (message as NSString).draw(at: CGPoint(x: 48, y: 60), withAttributes: attrs)
             return
         }
+        // ponytail: fallback palette for own JSON/new nodes; imported v9 nodes use their original pathStyle.
+        let palette: [NSColor] = [
+            NSColor(srgbRed: 0.945, green: 0.596, blue: 0.290, alpha: 1),
+            NSColor(srgbRed: 0.949, green: 0.424, blue: 0.298, alpha: 1),
+            NSColor(srgbRed: 0.078, green: 0.620, blue: 0.757, alpha: 1),
+            NSColor(srgbRed: 0.063, green: 0.553, blue: 0.545, alpha: 1),
+            NSColor(srgbRed: 0.949, green: 0.812, blue: 0.400, alpha: 1)
+        ]
+        var depth: [UUID: Int] = [:], color: [UUID: NSColor] = [:]
+        var branches = 0
+        for item in nodes {
+            let parentDepth = item.parent.flatMap { depth[$0] } ?? -1
+            let level = parentDepth + 1
+            depth[item.node.id] = level
+            if level == 0 { color[item.node.id] = .secondaryLabelColor }
+            else if level == 1 {
+                color[item.node.id] = palette[branches % palette.count]
+                branches += 1
+            } else { color[item.node.id] = item.parent.flatMap { color[$0] } ?? .systemTeal }
+            if let rgba = branchStyles[item.node.id]?.rgba, rgba.count == 4 {
+                color[item.node.id] = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+            }
+        }
+        func strokeWidth(_ item: LaidOutNode) -> CGFloat {
+            let fallback: CGFloat = item.parent == nil ? 4 : CGFloat(max(2, 7 - (depth[item.node.id] ?? 1)))
+            return max(0.75, (branchStyles[item.node.id]?.width ?? fallback) * zoom)
+        }
+        func baseline(_ box: CGRect) -> CGFloat { box.maxY - 7 * zoom }
         for item in nodes {
             guard let parent = nodes.first(where: { $0.node.id == item.parent }) else { continue }
             let start = screen(parent.frame), end = screen(item.frame)
             let line = NSBezierPath()
-            line.move(to: CGPoint(x: start.maxX, y: start.midY))
-            line.curve(to: CGPoint(x: end.minX, y: end.midY),
-                       controlPoint1: CGPoint(x: (start.maxX + end.minX) / 2, y: start.midY),
-                       controlPoint2: CGPoint(x: (start.maxX + end.minX) / 2, y: end.midY))
-            line.lineWidth = max(1, 1.5 * zoom)
-            NSColor.systemTeal.withAlphaComponent(0.7).setStroke()
+            line.move(to: CGPoint(x: start.maxX, y: baseline(start)))
+            line.curve(to: CGPoint(x: end.minX, y: baseline(end)),
+                       controlPoint1: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(start)),
+                       controlPoint2: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(end)))
+            line.lineWidth = strokeWidth(item)
+            (color[item.node.id] ?? .systemTeal).setStroke()
             line.stroke()
         }
         for item in nodes {
             let box = screen(item.frame)
-            var paintedBox = box
-            if item.node.id == model.selected, let editor {
-                paintedBox = box.union(editor.frame.insetBy(dx: -5, dy: -5))
-            }
-            let shape = NSBezierPath(roundedRect: paintedBox, xRadius: 11 * zoom, yRadius: 11 * zoom)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
-            (item.node.id == model.selected || hovered ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
-            NSColor.controlBackgroundColor.setFill()
-            shape.fill()
-            shape.lineWidth = item.node.id == model.selected || hovered ? 3 : 1
-            shape.stroke()
+            let active = item.node.id == model.selected || hovered
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: box.minX, y: baseline(box)))
+            let lineEnd = item.node.id == model.selected ? max(box.maxX, editor?.frame.maxX ?? box.maxX) : box.maxX
+            path.line(to: CGPoint(x: lineEnd, y: baseline(box)))
+            path.lineWidth = strokeWidth(item) + (active ? 1 : 0)
+            (active ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
+            path.stroke()
+            if hovered {
+                let dot = NSBezierPath(ovalIn: CGRect(x: box.minX - 4 * zoom,
+                    y: baseline(box) - 4 * zoom, width: 8 * zoom, height: 8 * zoom))
+                NSColor.controlAccentColor.setFill()
+                dot.fill()
+            }
             if editor != nil && item.node.id == model.selected { continue }
             let title = item.node.title.isEmpty ? "New idea" : item.node.title
             let attrs: [NSAttributedString.Key: Any] = [
@@ -404,15 +438,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : NSColor.labelColor
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
-            (label as NSString).draw(in: box.insetBy(dx: 12 * zoom, dy: 11 * zoom), withAttributes: attrs)
-        }
-        if let drop, drop.parent == drop.target.node.id,
-           let parent = nodes.first(where: { $0.node.id == drop.parent }) {
-            let ring = NSBezierPath(roundedRect: screen(parent.frame).insetBy(dx: -5, dy: -5),
-                                    xRadius: 14 * zoom, yRadius: 14 * zoom)
-            ring.lineWidth = max(2, 3 * zoom)
-            NSColor.controlAccentColor.setStroke()
-            ring.stroke()
+            let height = ceil((label as NSString).boundingRect(
+                with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height)
+            (label as NSString).draw(in: CGRect(x: box.minX + 12 * zoom,
+                y: baseline(box) - height - 3 * zoom,
+                width: box.width - 24 * zoom, height: height + 2 * zoom), withAttributes: attrs)
         }
     }
 
@@ -429,10 +460,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         field.stringValue = node.node.title
         field.font = mapFont(isRoot: node.parent == nil, zoom: max(zoom, 0.8))
         field.textColor = .labelColor
-        field.isBordered = true
-        field.drawsBackground = true
-        field.backgroundColor = .textBackgroundColor
-        field.focusRingType = .default
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
         field.delegate = self
         addSubview(field)
         editor = field
@@ -780,6 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             // Saving may have changed this same path; never install the pre-save tree.
             let roots = try readOwnJSON(url)
             canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            canvas.branchStyles = [:]
             outline.reloadMap()
             fileURL = url
             savedRoots = roots
@@ -806,17 +837,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
               url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
         do {
-            let roots = try MindNodeImporter.load(url)
+            let imported = try MindNodeImporter.loadWithStyles(url)
             guard confirmDiscardOrSave() else { return }
-            canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            canvas.model = MapModel(roots: imported.roots, selected: imported.roots.first?.id ?? UUID())
+            canvas.branchStyles = imported.styles
             outline.reloadMap()
             fileURL = nil // Never save into the source package.
-            savedRoots = roots
+            savedRoots = imported.roots
             dirty = false
             updateTitle()
             canvas.fitMapInView()
             window.makeFirstResponder(canvas)
-            alert("MindNode imported read-only", detail: "Only text, tree structure and fold state were copied. Styles, notes and attachments are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
+            alert("MindNode imported read-only", detail: "Text, tree, fold state and visible branch colors/widths were imported. Notes, attachments and styling are not round-tripped. Save creates a new .mindmap.json file; it never overwrites the MindNode package.")
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {

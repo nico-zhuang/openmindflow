@@ -35,8 +35,8 @@ enum CanvasCommandTests {
         let text = NSTextView()
         canvas.selectAndEdit(childID)
         let field = canvas.subviews.compactMap { $0 as? NSTextField }.first!
-        if !field.isBordered || !field.drawsBackground {
-            fputs("Inline re-edit must show a visible native text field, not an invisible overlay\n", stderr)
+        if field.isBordered || field.drawsBackground || field.stringValue != "Existing" {
+            fputs("Inline re-edit must use a readable native text field without restoring a card box\n", stderr)
             exit(1)
         }
         field.stringValue = "Committed child"
@@ -713,21 +713,22 @@ enum CanvasCommandTests {
         let centerStart = CGPoint(x: centerSourceFrame.midX + 80,
                                   y: centerCanvas.bounds.height - centerSourceFrame.midY - 90)
         let centerTarget = CGPoint(x: parentFrame.midX + 80, y: centerCanvas.bounds.height - parentFrame.midY - 90)
-        func outerBorderPixel(_ data: Data) -> NSColor? {
-            NSBitmapImageRep(data: data)?.colorAt(x: Int(parentFrame.minX + 80 + 20),
-                y: Int(parentFrame.minY + 90 - 5))
+        func parentLinePixel(_ data: Data) -> NSColor? {
+            let baseline = Int(parentFrame.maxY + 90 - 7)
+            return NSBitmapImageRep(data: data)?.colorAt(x: Int(parentFrame.minX + 80 + 28),
+                y: baseline)
         }
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             centerCanvas.appearance = NSAppearance(named: appearance)
             centerCanvas.mouseDown(with: mouse(.leftMouseDown, centerStart))
             let noParentHover = image(centerCanvas)
             centerCanvas.mouseDragged(with: mouse(.leftMouseDragged, centerTarget))
-            guard let before = outerBorderPixel(noParentHover), let active = outerBorderPixel(image(centerCanvas)),
+            guard let before = parentLinePixel(noParentHover), let active = parentLinePixel(image(centerCanvas)),
                   before != active, centerModel.roots[0].children == [centerParent, centerSource] else {
-                fputs("Center-parent drop needs an unobscured accent rim in light and dark\n", stderr); exit(1)
+                fputs("Center-parent drop needs an accent branch line in light and dark\n", stderr); exit(1)
             }
             centerCanvas.mouseUp(with: mouse(.leftMouseUp, centerStart))
-            if outerBorderPixel(image(centerCanvas)) != before || centerModel.roots[0].children != [centerParent, centerSource] {
+            if parentLinePixel(image(centerCanvas)) != before || centerModel.roots[0].children != [centerParent, centerSource] {
                 fputs("Invalid release must clear parent accent without committing\n", stderr); exit(1)
             }
         }
@@ -808,12 +809,12 @@ enum CanvasCommandTests {
               editCanvas.bounds.insetBy(dx: 28, dy: 28).contains(editField.frame) else {
             fputs("Low-zoom native editor must remain readable and inside viewport\n", stderr); exit(1)
         }
-        let borders = [CGPoint(x: editField.frame.maxX + 5, y: editField.frame.midY),
-                       CGPoint(x: editField.frame.midX, y: editField.frame.maxY + 5)]
-        guard borders.allSatisfy(editCanvas.bounds.contains) else {
-            fputs("No room to measure edit-state borders\n", stderr); exit(1)
+        let samples = [CGPoint(x: editField.frame.maxX + 5, y: editField.frame.midY),
+                       CGPoint(x: editField.frame.midX, y: editField.frame.maxY + 2)]
+        guard samples.allSatisfy(editCanvas.bounds.contains) else {
+            fputs("No room to measure edit-state line\n", stderr); exit(1)
         }
-        func paintedBorders() -> [NSColor?] {
+        func paintedEditLine() -> [NSColor?] {
             let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 420, pixelsHigh: 260,
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
@@ -822,13 +823,13 @@ enum CanvasCommandTests {
             NSGraphicsContext.current = context
             editCanvas.draw(editCanvas.bounds) // Canvas paint only; exclude the native field subview.
             NSGraphicsContext.restoreGraphicsState()
-            return borders.map { bitmap.colorAt(x: Int($0.x), y: Int(editCanvas.bounds.height - $0.y)) }
+            return samples.map { bitmap.colorAt(x: Int($0.x), y: Int(editCanvas.bounds.height - $0.y)) }
                 + [bitmap.colorAt(x: 1, y: 1)] // Untouched canvas backdrop.
         }
-        let editingColors = paintedBorders()
+        let editingColors = paintedEditLine()
         editCanvas.commitEditing()
-        if editingColors[0] == editingColors[2] || editingColors[1] == editingColors[2] {
-            fputs("Selected node paint must enclose the editor on right and bottom, not just the viewport\n", stderr)
+        if editingColors[0] != editingColors[2] || editingColors[1] == editingColors[2] {
+            fputs("Borderless native edit field needs clear surrounding canvas and a visible baseline\n", stderr)
             exit(1) // Expected RED without an assertion crash dialog.
         }
         assert(editCanvas.model.roots == [shortRoot] && editChanges == 0 && !editCanvas.model.undo(),
@@ -939,7 +940,7 @@ enum CanvasCommandTests {
         let rootBox = mapLayout(visualModel.roots).first!.frame
         let draggedBox = visualCanvas.frameForAccessibility(visualRoot.children[0].id)!
         let connectorMid = CGPoint(x: (rootBox.maxX + 80 + draggedBox.minX) / 2,
-                                   y: (rootBox.midY + 90 + draggedBox.midY) / 2)
+                                   y: (rootBox.maxY + 90 - 7 + draggedBox.maxY - 7) / 2)
         let draggedBitmap = NSBitmapImageRep(data: image(visualCanvas))!
         let background = draggedBitmap.colorAt(x: 1, y: 1)!
         if !(-2...2).contains(where: { dy in (-2...2).contains(where: { dx in
@@ -1014,11 +1015,12 @@ enum CanvasCommandTests {
         let projectedRoot = CGRect(x: refit.minX + (rootWorld.minX - fittedWorld.minX) * fittedZoom,
                                    y: refit.minY + (rootWorld.minY - fittedWorld.minY) * fittedZoom,
                                    width: rootWorld.width * fittedZoom, height: rootWorld.height * fittedZoom)
-        let textArea = projectedRoot.insetBy(dx: 12 * fittedZoom, dy: 11 * fittedZoom)
-        if abs(rootEditor.frame.minX - textArea.minX) >= 0.1 ||
-            abs(rootEditor.frame.midY - projectedRoot.midY) >= 0.1 ||
-            rootEditor.frame.width < textArea.width || rootEditor.frame.height < textArea.height {
-            fputs("Active bordered editor must contain the painted label area and remain centered\n", stderr)
+        let textLeft = projectedRoot.minX + 12 * fittedZoom
+        let textWidth = projectedRoot.width - 24 * fittedZoom
+        if abs(rootEditor.frame.minX - textLeft) >= 0.1 ||
+            abs(rootEditor.frame.maxY - (projectedRoot.maxY - 9 * fittedZoom)) >= 0.1 ||
+            rootEditor.frame.width < textWidth || rootEditor.frame.height < 22 {
+            fputs("Borderless editor must align its text with the branch baseline and preserve width\n", stderr)
             exit(1)
         }
         fitCanvas.selectAndEdit(fitRoot.children[0].id)

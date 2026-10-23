@@ -59,6 +59,23 @@ enum MindNodeImporterTests {
         func rejects() -> Bool { (try? MindNodeImporter.load(package)) == nil }
         try write([root])
         let nodes = try MindNodeImporter.load(package)
+        var styledChild = child
+        styledChild["pathStyle"] = ["strokeStyle": ["color": "{0.1, 0.2, 0.3, 1}", "width": 5.0]]
+        var styledRoot = root
+        styledRoot["subnodes"] = [styledChild]
+        try write([styledRoot])
+        let styledImport = try MindNodeImporter.loadWithStyles(package)
+        assert(styledImport.roots == nodes)
+        assert(styledImport.styles[childID]?.rgba == [0.1, 0.2, 0.3, 1] &&
+               styledImport.styles[childID]?.width == 5,
+               "Valid v9 branch RGBA and depth stroke width should survive read-only import")
+        styledChild["pathStyle"] = ["strokeStyle": ["color": "not a color", "width": -5.0]]
+        styledRoot["subnodes"] = [styledChild]
+        try write([styledRoot])
+        let invalidStyle = try MindNodeImporter.loadWithStyles(package)
+        assert(invalidStyle.roots == nodes && invalidStyle.styles[childID] == nil,
+               "Unknown styling must not make otherwise valid tree data unreadable")
+        try write([root])
         try Data(contentsOf: package.appendingPathComponent("contents.xml")).write(to: single, options: .atomic)
         #if HEADLESS_TEST
         let picker = AppDelegate()

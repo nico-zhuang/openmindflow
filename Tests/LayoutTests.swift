@@ -3,8 +3,8 @@ import AppKit
 @main
 enum LayoutTests {
     static func main() throws {
-        assert(mapFont(isRoot: true).pointSize == 16)
-        assert(mapFont(isRoot: false).pointSize == 14)
+        assert(mapFont(isRoot: true).pointSize == 20)
+        assert(mapFont(isRoot: false).pointSize == 16)
         assert(mapFont(isRoot: true) != mapFont(isRoot: false))
         let root = MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: UUID(), title: "First", children: [], folded: false),

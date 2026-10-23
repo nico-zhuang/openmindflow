@@ -15,8 +15,15 @@ enum ImportError: LocalizedError {
     }
 }
 
+struct MindNodeVisualStyle {
+    let rgba: [Double]
+    let width: CGFloat
+}
+
 enum MindNodeImporter {
-    static func load(_ url: URL) throws -> [MapNode] {
+    static func load(_ url: URL) throws -> [MapNode] { try loadWithStyles(url).roots }
+
+    static func loadWithStyles(_ url: URL) throws -> (roots: [MapNode], styles: [UUID: MindNodeVisualStyle]) {
         let fm = FileManager.default
         guard url.isFileURL, url.pathExtension.lowercased() == "mindnode",
               let kind = (try? fm.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType else {
@@ -54,6 +61,7 @@ enum MindNodeImporter {
             throw ImportError.invalid
         }
         var seen = Set<UUID>()
+        var styles: [UUID: MindNodeVisualStyle] = [:]
         var count = 0
         func parse(_ value: Any, depth: Int) throws -> MapNode {
             guard depth <= 200, count < 10_000, let node = value as? [String: Any],
@@ -66,19 +74,31 @@ enum MindNodeImporter {
                 throw ImportError.invalid
             }
             count += 1
+            if let path = node["pathStyle"] as? [String: Any],
+               let stroke = path["strokeStyle"] as? [String: Any],
+               let raw = stroke["color"] as? String,
+               let width = stroke["width"] as? NSNumber,
+               CFGetTypeID(width) == CFNumberGetTypeID(), (0.5...16).contains(width.doubleValue) {
+                let channels = raw.trimmingCharacters(in: CharacterSet(charactersIn: "{}"))
+                    .split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                if channels.count == 4, channels.allSatisfy({ $0.isFinite && (0...1).contains($0) }) {
+                    styles[id] = MindNodeVisualStyle(rgba: channels, width: CGFloat(width.doubleValue))
+                }
+            }
             let plain = try plainTitle(richText)
             let children = try subnodes.map { try parse($0, depth: depth + 1) }
             return MapNode(id: id, title: plain, children: children, folded: foldNumber.boolValue)
         }
-        return try maps.map { map in
+        let roots = try maps.map { map in
             guard let main = map["mainNode"] else { throw ImportError.invalid }
             return try parse(main, depth: 0)
         }
+        return (roots, styles)
     }
 
     static func plainTitle(_ rich: String) throws -> String {
         if rich.isEmpty { return "" } // Real v9 packages use an empty string for untitled nodes.
-        // ponytail: text/tree/fold only; add style and attachment decoding after verified format samples.
+        // ponytail: title text and path strokes only; decode full typography/attachments after verified samples.
         guard rich.utf8.count <= 65_536,
               rich.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,
               rich.range(of: "<!ENTITY", options: .caseInsensitive) == nil else {

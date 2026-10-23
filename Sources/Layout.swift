@@ -24,7 +24,8 @@ func dropPlacement(at point: CGPoint, over node: LaidOutNode,
 }
 
 func mapFont(isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
-    NSFont.systemFont(ofSize: (isRoot ? 16 : 14) * zoom, weight: isRoot ? .semibold : .medium)
+    let size: CGFloat = (isRoot ? 20 : 16) * zoom
+    return NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
 
 func mapLayout(_ roots: [MapNode]) -> [LaidOutNode] {
