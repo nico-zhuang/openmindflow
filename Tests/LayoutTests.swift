@@ -6,6 +6,12 @@ enum LayoutTests {
         assert(mapFont(isRoot: true).pointSize == 20)
         assert(mapFont(isRoot: false).pointSize == 16)
         assert(mapFont(isRoot: true) != mapFont(isRoot: false))
+        let fontRoot = MapNode(id: UUID(), title: "Preview", children: [], folded: false)
+        var largerRoot = fontRoot
+        largerRoot.fontFamily = "Helvetica"
+        largerRoot.fontSize = 80
+        assert(mapLayout([largerRoot])[0].frame.height > mapLayout([fontRoot])[0].frame.height + 40,
+               "Edited font size must affect own JSON layout even with no imported metadata")
         let root = MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: UUID(), title: "First", children: [], folded: false),
             MapNode(id: UUID(), title: "Second", children: [], folded: true)

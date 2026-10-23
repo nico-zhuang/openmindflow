@@ -102,6 +102,8 @@ enum MindNodeImporterTests {
         assert(detailed.presentation[childID]?.maxWidth == 260 && detailed.presentation[childID]?.allowToShrinkWidth == false)
         assert(detailed.roots[0].children[0].width == 260, "A fixed original title width must survive editing and JSON Save")
         assert(detailed.presentation[childID]?.font?.family == "Songti SC" && detailed.presentation[childID]?.font?.pointSize == 18)
+        assert(detailed.roots[0].children[0].fontFamily == "Songti SC" && detailed.roots[0].children[0].fontSize == 18,
+               "Original CSS font must survive a separate own-JSON save/open, not live only in transient canvas metadata")
         assert(detailed.presentation[childID]?.font?.color == [12.0 / 255, 34.0 / 255, 56.0 / 255, 0.5] && detailed.presentation[childID]?.font?.alignment == "center")
         assert(detailed.presentation[childID]?.styleChangedByUser == true && detailed.presentation[childID]?.fillColor == [0.4, 0.5, 0.6, 1])
         assert(detailed.theme?.backgroundColor == [0.9, 0.8, 0.7, 1] && detailed.theme?.allowNodeStrokeColorVariation == true)

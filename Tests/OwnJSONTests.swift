@@ -86,6 +86,24 @@ enum OwnJSONTests {
         try writeOwnJSON([resized], to: customWidthURL)
         let reopenedCustomWidth = try readOwnJSON(customWidthURL)
         assert(reopenedCustomWidth == [resized], "Original-style widths survive Save/Open")
+        resized.fontFamily = "STSongti-SC-Regular"
+        resized.fontSize = 36
+        try writeOwnJSON([resized], to: customWidthURL)
+        let reopenedStyled = try readOwnJSON(customWidthURL)
+        assert(reopenedStyled == [resized], "Edited original-style font family and size survive separate Save/Open")
+        let invalidFontURL = scratch.appendingPathComponent("invalid-font.mindmap.json")
+        var invalidFont = resized
+        for value in [0.0, 513, -2] {
+            invalidFont.fontSize = value
+            try JSONEncoder().encode([invalidFont]).write(to: invalidFontURL)
+            rejects { _ = try readOwnJSON(invalidFontURL) }
+            rejects { try writeOwnJSON([invalidFont], to: url) }
+        }
+        invalidFont.fontSize = 36
+        invalidFont.fontFamily = String(repeating: "x", count: 129)
+        try JSONEncoder().encode([invalidFont]).write(to: invalidFontURL)
+        rejects { _ = try readOwnJSON(invalidFontURL) }
+        rejects { try writeOwnJSON([invalidFont], to: url) }
         let invalidWidthURL = scratch.appendingPathComponent("invalid-width.mindmap.json")
         var unsafe = root
         for width: CGFloat in [0, 59, 1001] {

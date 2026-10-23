@@ -47,6 +47,20 @@ enum MapModelTests {
         assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(sized.roots))[0].width == 316)
         assert(sized.setWidth(60) && sized.setWidth(1000))
         assert(sized.setWidth(nil) && sized.roots[0].width == nil)
+        assert(sized.setFont(family: "STSongti-SC-Regular", size: 36))
+        assert(sized.roots[0].fontFamily == "STSongti-SC-Regular" && sized.roots[0].fontSize == 36)
+        assert(!sized.setFont(family: "", size: 36) && !sized.setFont(family: "STSongti-SC-Regular", size: 241) &&
+               !sized.setFont(family: "STSongti-SC-Regular", size: .nan) &&
+               !sized.setFont(family: "STSongti-SC-Regular", size: 36))
+        assert(sized.undo() && sized.roots[0].fontFamily == nil && sized.roots[0].fontSize == nil)
+        assert(sized.redo() && sized.roots[0].fontSize == 36)
+        assert(try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(sized.roots)) == sized.roots)
+        let alignedID = UUID()
+        let aligned = MapModel(roots: [MapNode(id: alignedID, title: "fixed left", children: [], folded: false,
+            location: SIMD2(500, 170))], selected: alignedID)
+        assert(aligned.setWidth(180, anchoredFrom: 136))
+        assert(aligned.roots[0].width == 180 && aligned.roots[0].location == SIMD2(522, 170))
+        assert(aligned.undo() && aligned.roots[0].width == nil && aligned.roots[0].location == SIMD2(500, 170))
         let shiftedChild = MapNode(id: UUID(), title: "nested", children: [], folded: false,
                                    location: SIMD2(120, 70))
         let shifting = MapNode(id: UUID(), title: "moving", children: [shiftedChild], folded: false,

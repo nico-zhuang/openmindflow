@@ -86,7 +86,7 @@ enum CanvasCommandTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
-              rightMenu.items.map(\.title) == ["Edit Title", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete"] else {
+              rightMenu.items.map(\.title) == ["Edit Title", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete"] else {
             fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
         }
         let editTitle = rightMenu.item(withTitle: "Edit Title")!
@@ -166,6 +166,9 @@ enum CanvasCommandTests {
             exit(1)
         }
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
+        let fontMenu = nodeMenu.item(withTitle: "Font…")
+        assert(fontMenu?.keyEquivalent == "t" && fontMenu?.keyEquivalentModifierMask == [.command],
+               "Per-node native font panel must also be discoverable from Node menu via standard Command-T")
         let siblingMenu = nodeMenu.item(withTitle: "New Sibling")!
         assert(siblingMenu.keyEquivalent.isEmpty,
                "Plain Return must not be a global menu accelerator that preempts the text editor")

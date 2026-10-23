@@ -128,8 +128,9 @@ enum MindNodeImporter {
             let shrink = boolean(title["allowToShrinkWidth"])
             let changed = boolean(node["styleChangedByUser"])
             let fill = color((node["shapeStyle"] as? [String: Any])?["fillColor"])
+            let titleFont = cssFont(parsed.css)
             presentation[id] = MindNodePresentation(location: location, maxWidth: maxWidth,
-                allowToShrinkWidth: shrink, font: cssFont(parsed.css),
+                allowToShrinkWidth: shrink, font: titleFont,
                 styleChangedByUser: changed, fillColor: fill)
             let children = try subnodes.map { try parse($0, depth: depth + 1) }
             let fixedWidth: CGFloat? = shrink == false ? maxWidth.flatMap { value in
@@ -138,7 +139,8 @@ enum MindNodeImporter {
             } : nil
             return MapNode(id: id, title: parsed.text, children: children,
                            folded: foldNumber.boolValue, width: fixedWidth,
-                           location: location.map { SIMD2(Double($0.x), Double($0.y)) })
+                           location: location.map { SIMD2(Double($0.x), Double($0.y)) },
+                           fontFamily: titleFont?.family, fontSize: titleFont?.pointSize)
         }
         let roots = try maps.map { map in
             guard let main = map["mainNode"] else { throw ImportError.invalid }

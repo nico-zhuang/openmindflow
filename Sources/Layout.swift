@@ -30,9 +30,10 @@ func dropPlacement(at point: CGPoint, over node: LaidOutNode,
     return (node.node.id, node.node.children.count)
 }
 
-func mapFont(isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
-    let size: CGFloat = (isRoot ? 20 : 16) * zoom
-    return NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
+func mapFont(isRoot: Bool, zoom: CGFloat = 1, node: MapNode? = nil) -> NSFont {
+    let size: CGFloat = CGFloat(node?.fontSize ?? (isRoot ? 20 : 16)) * zoom
+    return node?.fontFamily.flatMap { NSFont(name: $0, size: size) }
+        ?? NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
 
 func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -> [LaidOutNode] {
@@ -47,7 +48,7 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         return original.map { item in
             let node = item.node
             let saved = overrides[node.id]
-            let attributes: [NSAttributedString.Key: Any] = [.font: saved?.font ?? mapFont(isRoot: item.parent == nil)]
+            let attributes: [NSAttributedString.Key: Any] = [.font: saved?.font ?? mapFont(isRoot: item.parent == nil, node: node)]
             let title = node.title.isEmpty ? "New idea" : node.title
             let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
             let longestLine = text.components(separatedBy: "\n").map {
@@ -83,7 +84,7 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
 
     @discardableResult
     func measure(_ node: MapNode, depth: Int) -> CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: mapFont(isRoot: depth == 0)]
+        let attributes: [NSAttributedString.Key: Any] = [.font: mapFont(isRoot: depth == 0, node: node)]
         let title = node.title.isEmpty ? "New idea" : node.title
         let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
         let longestLine = text.components(separatedBy: "\n").map {

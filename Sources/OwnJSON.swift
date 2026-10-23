@@ -4,7 +4,7 @@ import Darwin
 private let ownJSONLimit = 8 * 1024 * 1024
 
 enum OwnJSONError: LocalizedError {
-    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation
+    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +14,7 @@ enum OwnJSONError: LocalizedError {
         case .duplicateID: return "The document contains duplicate node IDs."
         case .invalidWidth: return "A node width must be a finite value from 60 to 1000 points."
         case .invalidLocation: return "A saved node position must be within one million points."
+        case .invalidFont: return "A font name must be at most 128 bytes and a font size from 1 to 512 points."
         }
     }
 }
@@ -29,6 +30,12 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
             if let width = node.width {
                 guard MapNode.validWidth(width) else { throw OwnJSONError.invalidWidth }
+            }
+            if let family = node.fontFamily, (family.isEmpty || family.utf8.count > 128) {
+                throw OwnJSONError.invalidFont
+            }
+            if let size = node.fontSize, (!size.isFinite || !(1...512).contains(size)) {
+                throw OwnJSONError.invalidFont
             }
             if let point = node.location {
                 guard point.x.isFinite, point.y.isFinite,

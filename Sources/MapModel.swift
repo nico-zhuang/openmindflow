@@ -9,6 +9,8 @@ struct MapNode: Codable, Equatable {
     var folded: Bool
     var width: CGFloat? = nil // nil keeps the original content-sized node for existing JSON maps.
     var location: SIMD2<Double>? = nil // Saved world center; stdlib vector stays Codable/Equatable without AppKit.
+    var fontFamily: String? = nil
+    var fontSize: Double? = nil
 }
 
 final class MapModel {
@@ -138,12 +140,36 @@ final class MapModel {
     }
 
     @discardableResult
-    func setWidth(_ width: CGFloat?) -> Bool {
+    func setWidth(_ width: CGFloat?, anchoredFrom oldWidth: CGFloat? = nil) -> Bool {
         guard width.map(MapNode.validWidth) ?? true,
-              let path = Self.path(to: selected, in: roots),
-              Self.node(at: path[...], in: roots).width != width else { return false }
+              oldWidth.map(MapNode.validWidth) ?? true,
+              let path = Self.path(to: selected, in: roots) else { return false }
+        let current = Self.node(at: path[...], in: roots)
+        guard current.width != width else { return false }
+        let centerX = current.location.flatMap { point -> Double? in
+            guard let width, let oldWidth else { return nil }
+            return point.x + Double(width - oldWidth) / 2
+        }
+        guard centerX.map({ $0.isFinite && abs($0) <= 1_000_000 }) ?? true else { return false }
         save()
-        Self.edit(&roots, at: path[...]) { nodes, index in nodes[index].width = width }
+        Self.edit(&roots, at: path[...]) { nodes, index in
+            nodes[index].width = width
+            if let centerX { nodes[index].location?.x = centerX }
+        }
+        return true
+    }
+
+    @discardableResult
+    func setFont(family: String, size: Double) -> Bool {
+        guard !family.isEmpty, family.utf8.count <= 128, size.isFinite, (6...240).contains(size),
+              let path = Self.path(to: selected, in: roots) else { return false }
+        let current = Self.node(at: path[...], in: roots)
+        guard current.fontFamily != family || current.fontSize != size else { return false }
+        save()
+        Self.edit(&roots, at: path[...]) { nodes, index in
+            nodes[index].fontFamily = family
+            nodes[index].fontSize = size
+        }
         return true
     }
 

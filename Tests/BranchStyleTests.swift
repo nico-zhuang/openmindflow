@@ -98,6 +98,34 @@ import AppKit
             fputs("An imported original v9 branch must use its own color and stroke width, not the fallback palette\n", stderr)
             exit(1)
         }
+        canvas.selectNode(child.id)
+        let selectedStyle = paint()
+        let originalLine = originalStyled.colorAt(x: x, y: originalStyled.pixelsHigh - baseline - 1)
+        let selectedLine = selectedStyle.colorAt(x: x, y: selectedStyle.pixelsHigh - baseline - 1)
+        guard similar(selectedLine, originalLine, tolerance: 0.08) else {
+            fputs("Selection must not recolor the original branch underline\n", stderr); exit(1)
+        }
+        let textBoxX = Int(box.minX + 80 + 8), textBoxY = Int(box.minY + 90 + 8)
+        let unselectedBackdrop = originalStyled.colorAt(x: textBoxX, y: originalStyled.pixelsHigh - textBoxY - 1)
+        let selectedBackdrop = selectedStyle.colorAt(x: textBoxX, y: selectedStyle.pixelsHigh - textBoxY - 1)
+        guard !similar(selectedBackdrop, unselectedBackdrop) else {
+            fputs("Selected child needs a highlight box around the text, not the underline\n", stderr); exit(1)
+        }
+        let plusX = Int(box.maxX + 80 + 24), plusY = Int(box.maxY + 90 - 7)
+        let hiddenPlus = paint().colorAt(x: plusX, y: 400 - plusY - 1)
+        let hover = NSEvent.mouseEvent(with: .mouseMoved,
+            location: CGPoint(x: plusX, y: 400 - plusY), modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 1, clickCount: 0, pressure: 0)!
+        canvas.mouseMoved(with: hover)
+        let shownPlus = paint().colorAt(x: plusX, y: 400 - plusY - 1)
+        guard !similar(hiddenPlus, shownPlus) else {
+            fputs("Plus should appear only when the pointer approaches a branch endpoint\n", stderr); exit(1)
+        }
+        canvas.mouseExited(with: hover)
+        let gonePlus = paint().colorAt(x: plusX, y: 400 - plusY - 1)
+        guard similar(hiddenPlus, gonePlus) else {
+            fputs("Plus must disappear when the pointer leaves the canvas\n", stderr); exit(1)
+        }
         canvas.selectAndEdit(child.id)
         guard let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first,
               !field.isBordered && !field.drawsBackground,

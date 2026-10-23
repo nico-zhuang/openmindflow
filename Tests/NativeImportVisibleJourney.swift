@@ -39,7 +39,17 @@ import Darwin
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         guard let field = canvas.subviews.compactMap({ $0 as? NSTextField }).first,
               field.font?.pointSize == 36, field.currentEditor() != nil else { receipt("FAIL original-font-or-real-editor-focus"); exit(3) }
-        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true")
+        canvas.commitEditing()
+        guard let fontItem = canvas.contextMenu(for: root.id).item(withTitle: "Font…"),
+              app.sendAction(fontItem.action!, to: fontItem.target, from: fontItem) else {
+            receipt("FAIL native-font-menu-action"); exit(4)
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        guard NSFontManager.shared.fontPanel(false)?.isVisible == true else {
+            receipt("FAIL native-font-panel-not-visible"); exit(5)
+        }
+        NSFontManager.shared.fontPanel(false)?.orderOut(nil)
+        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true fontPanel=true")
         window.orderOut(nil)
     }
 }
