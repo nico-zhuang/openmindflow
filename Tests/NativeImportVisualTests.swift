@@ -2,6 +2,7 @@ import AppKit
 
 @main enum NativeImportVisualTests {
     static func main() {
+        UserDefaults.standard.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         let child = MapNode(id: UUID(), title: "Child", children: [], folded: false,
                             location: SIMD2(500, 170))
         let target = MapNode(id: UUID(), title: "Target", children: [], folded: false,

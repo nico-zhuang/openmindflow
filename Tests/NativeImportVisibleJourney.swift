@@ -9,6 +9,10 @@ import Darwin
                 try? message.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
             }
         }
+        let suite = "local.mindmap.synthetic-language-journey.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        assert(L10n.setLanguage("en", defaults: defaults))
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let child = MapNode(id: UUID(), title: "Synthetic branch", children: [], folded: false)
@@ -21,7 +25,7 @@ import Darwin
             fillColor: [0.32, 0.18, 0.55, 1]), child.id: MindNodePresentation(
             location: CGPoint(x: 470, y: 160), maxWidth: 136,
             allowToShrinkWidth: false, font: nil, styleChangedByUser: false, fillColor: nil)]
-        let delegate = AppDelegate()
+        let delegate = AppDelegate(defaults: defaults)
         let workbench = delegate.makeWorkbench(canvas: canvas)
         delegate.installMenu()
         let window = NSWindow(contentRect: CGRect(x: 120, y: 100, width: 1200, height: 600),
@@ -59,6 +63,8 @@ import Darwin
               let outlineAction = outlineItem.action else { receipt("FAIL missing-outline-toolbar-item"); exit(9) }
         let initialFrame = window.frame
         let initialCanvasWidth = canvas.bounds.width
+        let initialInspectorWidth = inspector.bounds.width
+        let initialMapNode = canvas.frameForAccessibility(root.id)!
         for turn in 0..<6 {
             guard app.sendAction(outlineAction, to: outlineItem.target, from: outlineItem) else {
                 receipt("FAIL outline-action"); exit(9)
@@ -67,11 +73,16 @@ import Darwin
             guard window.frame == initialFrame else {
                 receipt("FAIL sidebar-window-drift before=\(initialFrame) after=\(window.frame)"); exit(9)
             }
+            let mapNode = canvas.frameForAccessibility(root.id)!
+            guard abs(mapNode.midX - initialMapNode.midX) < 1,
+                  abs(mapNode.midY - initialMapNode.midY) < 1 else {
+                receipt("FAIL outline-toggle-moved-map-node-on-screen"); exit(11)
+            }
             if turn.isMultiple(of: 2) && canvas.bounds.width < initialCanvasWidth + 100 {
                 receipt("FAIL collapsed-outline-did-not-return-width-to-canvas"); exit(9)
             }
             if !turn.isMultiple(of: 2) && abs(canvas.bounds.width - initialCanvasWidth) > 1 {
-                receipt("FAIL reopened-outline-did-not-slide-into-left-edge"); exit(9)
+                receipt("FAIL reopened-outline-did-not-slide-into-left-edge initial=\(initialCanvasWidth) now=\(canvas.bounds.width) styleInitially=\(initialInspectorWidth) styleNow=\(inspector.bounds.width) window=\(window.frame)"); exit(9)
             }
         }
         guard let hit = canvas.frameForAccessibility(child.id), hit.width == 136,
@@ -105,7 +116,23 @@ import Darwin
             receipt("FAIL native-font-panel-not-visible"); exit(5)
         }
         NSFontManager.shared.fontPanel(false)?.orderOut(nil)
-        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true fontPanel=true styleInspector=true sizeEdit=true moreColorPanel=true sixSidebarToggles=true")
+        guard let settingsItem = app.mainMenu?.items.first?.submenu?.item(withTitle: "Settings…"),
+              app.sendAction(settingsItem.action!, to: settingsItem.target, from: settingsItem),
+              let settings = app.windows.first(where: { $0.title == "Settings" }), settings.isVisible,
+              let language = settings.contentView?.subviews.compactMap({ $0 as? NSPopUpButton }).first,
+              let chinese = language.itemArray.first(where: { ($0.representedObject as? String) == "zh-Hans" }) else {
+            receipt("FAIL native-language-settings-window-or-zh-choice"); exit(12)
+        }
+        language.select(chinese)
+        guard app.sendAction(language.action!, to: language.target, from: language),
+              app.mainMenu?.item(withTitle: "文件") != nil,
+              inspector.familyPopup.accessibilityLabel() == "字体名称",
+              canvas.model.roots[0].title == "Synthetic root", window.frame == initialFrame,
+              abs(canvas.frameForAccessibility(root.id)!.midX - initialMapNode.midX) < 1 else {
+            receipt("FAIL visible-Chinese-language-switch-changed-map-or-did-not-translate"); exit(13)
+        }
+        settings.orderOut(nil)
+        receipt("PASS visible=true key=true active=true imported-geometry=true editor=true fontPanel=true styleInspector=true sizeEdit=true moreColorPanel=true sixSidebarToggles=true stableMapPosition=true ChineseSettings=true")
         window.orderOut(nil)
     }
 }

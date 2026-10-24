@@ -2,6 +2,7 @@ import AppKit
 
 @main enum BranchStyleTests {
     static func main() {
+        UserDefaults.standard.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         guard mapFont(isRoot: false).fontName == "STSongti-SC-Regular",
               mapFont(isRoot: false).pointSize == 20,
               mapFont(isRoot: true).pointSize == 24 else {

@@ -3,6 +3,7 @@ import AppKit
 @main
 enum CanvasCommandTests {
     static func main() {
+        UserDefaults.standard.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         _ = NSApplication.shared // Initialize AppKit without creating or running a window.
         let blank = MapModel(roots: [], selected: UUID())
         let blankCanvas = MapCanvas(model: blank)

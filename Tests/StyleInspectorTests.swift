@@ -21,7 +21,10 @@ import AppKit
         let model = MapModel(roots: [root], selected: rootID)
         let canvas = MapCanvas(model: model)
         canvas.frame = CGRect(x: 0, y: 0, width: 500, height: 320)
-        let inspector = StyleInspector(canvas: canvas)
+        let suite = "local.mindmap.inspector-l10n-test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
+        let inspector = StyleInspector(canvas: canvas, defaults: defaults)
         inspector.frame = CGRect(x: 0, y: 0, width: 280, height: 550)
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
@@ -168,6 +171,46 @@ import AppKit
             fputs("Only explicit More must open the native color panel without changing model\n", stderr); exit(1)
         }
         NSColorPanel.shared.orderOut(nil)
-        print("style inspector preset menus, native More panel and mixed selection passed")
+        defaults.setVolatileDomain(["language": "zh-Hans"], forName: UserDefaults.argumentDomain)
+        let unchangedRoots = model.roots, beforeLanguageChange = changes
+        inspector.localize()
+        let labels = descendants(inspector).compactMap { ($0 as? NSTextField)?.stringValue }
+        guard ["字体", "连接线", "字号", "宽度"].allSatisfy(labels.contains),
+              inspector.familyPopup.item(at: 0)?.title == "混合",
+              inspector.fontSizeField.placeholderString == "混合",
+              inspector.alignmentControl.toolTip(forSegment: 0) == "左对齐",
+              inspector.alignmentControl.accessibilityLabel() == "段落对齐",
+              inspector.colorPopup.itemTitles.suffix(1) == ["更多…"],
+              inspector.colorPopup.item(withTitle: "蓝色")?.representedObject as? String == "Blue",
+              inspector.colorPopup.accessibilityLabel() == "连接线颜色",
+              inspector.strokeWidthPopup.item(withTitle: "粗")?.representedObject as? String == "Bold",
+              inspector.strokeStylePopup.item(withTitle: "虚线")?.representedObject as? String == "Dashed",
+              !NSColorPanel.shared.isVisible, model.roots == unchangedRoots,
+              changes == beforeLanguageChange else {
+            fputs("Chinese inspector must relabel visible rows, menus, placeholders, and AX without changing model or opening panels\n", stderr)
+            exit(1)
+        }
+        inspector.strokeWidthPopup.selectItem(withTitle: "粗")
+        inspector.changeStrokeWidth(inspector.strokeWidthPopup)
+        guard model.roots[0].branchStrokeWidth == 5, model.roots[0].children[0].branchStrokeWidth == 5,
+              changes == beforeLanguageChange + 1, model.undo(), model.roots == [root] else {
+            fputs("Localized width choice must retain atomic English-key model semantics\n", stderr); exit(1)
+        }
+        inspector.colorPopup.selectItem(withTitle: "蓝色")
+        inspector.changeColorSelection(inspector.colorPopup)
+        guard model.roots[0].branchStrokeColor == "#3478F6FF",
+              model.roots[0].children[0].branchStrokeColor == "#3478F6FF",
+              changes == beforeLanguageChange + 2, model.undo(), model.roots == [root] else {
+            fputs("Localized color choice must retain atomic model hex values\n", stderr); exit(1)
+        }
+        defaults.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
+        inspector.localize()
+        guard inspector.colorPopup.item(withTitle: "Blue") != nil,
+              inspector.strokeWidthPopup.item(withTitle: "Bold") != nil,
+              model.roots == [root] else {
+            fputs("Switching back to English must immediately restore UI labels only\n", stderr); exit(1)
+        }
+        defaults.removeVolatileDomain(forName: UserDefaults.argumentDomain)
+        print("style inspector preset menus, localized labels and mixed selection passed")
     }
 }

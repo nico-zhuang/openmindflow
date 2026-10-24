@@ -44,6 +44,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     var onChange: (() -> Void)?
     var onSelectionChange: (() -> Void)?
+    var localizationDefaults: UserDefaults = .standard
+    private func t(_ text: String) -> String { L10n.text(text, defaults: localizationDefaults) }
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
@@ -107,9 +109,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             element.nodeID = item.node.id
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
-            element.setAccessibilityLabel(item.node.title.isEmpty ? "New idea" : item.node.title)
+            element.setAccessibilityLabel(item.node.title.isEmpty ? t("New idea") : item.node.title)
             element.setAccessibilityHelp(item.node.children.isEmpty ? nil :
-                "\(item.node.folded ? "Collapsed" : "Expanded"), \(item.node.children.count) child\(item.node.children.count == 1 ? "" : "ren")")
+                "\(t(item.node.folded ? "Collapsed" : "Expanded")), \(item.node.children.count) \(t(item.node.children.count == 1 ? "child" : "children"))")
             element.setAccessibilitySelected(model.selectedIDs.contains(item.node.id))
             element.setAccessibilityFrame(window?.convertToScreen(convert(screen(item.frame), to: nil)) ?? .zero)
             return element
@@ -124,7 +126,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             button.addsChild = true
             button.setAccessibilityParent(self)
             button.setAccessibilityRole(.button)
-            button.setAccessibilityLabel("Add Child")
+            button.setAccessibilityLabel(t("Add Child"))
             button.setAccessibilityFrame(plusFrameForAccessibility(item.node.id) ?? .zero)
             children.append(button)
         }
@@ -162,6 +164,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func screen(_ frame: CGRect) -> CGRect {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
                width: frame.width * zoom, height: frame.height * zoom)
+    }
+    func shiftViewport(by delta: CGPoint) {
+        guard delta != .zero else { return }
+        offset.x += delta.x
+        offset.y += delta.y
+        if let node = selectedNode() { editor?.frame = editorFrame(node) }
+        needsDisplay = true
     }
     private func font(for node: MapNode, isRoot: Bool, zoom: CGFloat = 1) -> NSFont {
         guard !nativePresentation.isEmpty || embeddedTheme != nil else {
@@ -514,7 +523,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         bounds.fill()
         let (nodes, drop) = previewGeometry()
         if nodes.isEmpty {
-            let message = "Empty map — press Tab to create the first idea."
+            let message = t("Empty map — press Tab to create the first idea.")
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]
             (message as NSString).draw(at: CGPoint(x: 48, y: 60), withAttributes: attrs)
             return
@@ -601,7 +610,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 }
             }
             if editor != nil && item.node.id == model.selected { continue }
-            let title = item.node.title.isEmpty ? "New idea" : item.node.title
+            let title = item.node.title.isEmpty ? t("New idea") : item.node.title
             let paragraph = NSMutableParagraphStyle()
             switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? "left" {
             case "center": paragraph.alignment = .center
@@ -752,7 +761,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if let id { selectNode(id) } else { commitEditing() }
         let menu = NSMenu()
         func add(_ title: String, _ tag: Int) {
-            let item = menu.addItem(withTitle: title, action: #selector(contextCommand(_:)), keyEquivalent: "")
+            let item = menu.addItem(withTitle: t(title), action: #selector(contextCommand(_:)), keyEquivalent: "")
             item.target = self
             item.tag = tag
         }
@@ -766,16 +775,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let widthMenu = NSMenu()
             for (index, choice) in ["Auto", "Narrow (170 pt)", "Medium (240 pt)",
                                     "Wide (320 pt)", "Extra Wide (480 pt)"].enumerated() {
-                let item = widthMenu.addItem(withTitle: choice, action: #selector(contextCommand(_:)), keyEquivalent: "")
+                let item = widthMenu.addItem(withTitle: t(choice), action: #selector(contextCommand(_:)), keyEquivalent: "")
                 item.target = self
                 item.tag = 10 + index
                 let width: CGFloat? = index == 0 ? nil : MapNode.widthPresets[index - 1]
                 item.state = node.node.width == width ? .on : .off
             }
-            let custom = widthMenu.addItem(withTitle: "Custom Width…", action: #selector(contextCommand(_:)), keyEquivalent: "")
+            let custom = widthMenu.addItem(withTitle: t("Custom Width…"), action: #selector(contextCommand(_:)), keyEquivalent: "")
             custom.target = self
             custom.tag = 15
-            menu.addItem(withTitle: "Node Width", action: nil, keyEquivalent: "").submenu = widthMenu
+            menu.addItem(withTitle: t("Node Width"), action: nil, keyEquivalent: "").submenu = widthMenu
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
         } else { add("New Main Node", 3) }
         return menu
@@ -801,14 +810,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 15:
             commitEditing()
             let dialog = NSAlert()
-            dialog.messageText = "Custom Node Width"
-            dialog.informativeText = "Enter a width from 60 to 1000 points."
+            dialog.messageText = t("Custom Node Width")
+            dialog.informativeText = t("Enter a width from 60 to 1000 points.")
             let field = NSTextField(string: String(Int(selectedNode()?.frame.width ?? 170)))
             field.frame = CGRect(x: 0, y: 0, width: 180, height: 24)
-            field.setAccessibilityLabel("Width in points")
+            field.setAccessibilityLabel(t("Width in points"))
             dialog.accessoryView = field
-            dialog.addButton(withTitle: "Apply")
-            dialog.addButton(withTitle: "Cancel")
+            dialog.addButton(withTitle: t("Apply"))
+            dialog.addButton(withTitle: t("Cancel"))
             if dialog.runModal() == .alertFirstButtonReturn,
                let value = Double(field.stringValue), model.setWidth(CGFloat(value)) { changed() }
         default: break
@@ -1078,15 +1087,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var savedRoots: [MapNode] = []
     private var dirty = false
     private var closeApproved = false
+    private var settingsWindow: NSWindow?
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         super.init()
     }
+    private func t(_ english: String) -> String { L10n.text(english, defaults: defaults) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let root = MapNode(id: UUID(), title: "Central idea", children: [], folded: false)
+        let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
         canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         savedRoots = [root]
         _ = makeWorkbench(canvas: canvas)
@@ -1099,7 +1110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "Untitled — MindMap"
+        window.title = "\(t("Untitled")) — \(t("MindMap"))"
         window.delegate = self
         window.minSize = NSSize(width: 640, height: 400)
         window.contentViewController = splitController
@@ -1126,11 +1137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         dirty = canvas.model.roots != savedRoots
         updateTitle()
     }
-    private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? "Untitled")\(dirty ? " •" : "") — MindMap" }
+    private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("MindMap"))" }
     private func alert(_ message: String, detail: String) {
         let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
+        alert.messageText = t(message)
+        alert.informativeText = t(detail)
         alert.alertStyle = .warning
         alert.runModal()
     }
@@ -1138,11 +1149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         canvas.commitEditing()
         guard dirty else { return true }
         let prompt = NSAlert()
-        prompt.messageText = "Save changes to this map?"
-        prompt.informativeText = "Opening another file, closing the window, or quitting will discard unsaved changes."
-        prompt.addButton(withTitle: "Save")
-        prompt.addButton(withTitle: "Cancel")
-        prompt.addButton(withTitle: "Discard Changes")
+        prompt.messageText = t("Save changes to this map?")
+        prompt.informativeText = t("Opening another file, closing the window, or quitting will discard unsaved changes.")
+        prompt.addButton(withTitle: t("Save"))
+        prompt.addButton(withTitle: t("Cancel"))
+        prompt.addButton(withTitle: t("Discard Changes"))
         switch prompt.runModal() {
         case .alertFirstButtonReturn: return save()
         case .alertThirdButtonReturn: return true
@@ -1192,7 +1203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.delegate = self
-        panel.message = "Select a MindNode v9 binary-plist file or directory package. Import is read-only; Save creates a new .mindmap.json file."
+        panel.message = t("Select a MindNode v9 binary-plist file or directory package. Import is read-only; Save creates a new .mindmap.json file.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #if HEADLESS_TEST
         guard ["fixture.mindnode", "single.mindnode"].contains(url.lastPathComponent),
@@ -1223,7 +1234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard url.pathExtension.lowercased() == "mindnode",
               kind == .typeDirectory || kind == .typeRegular else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnsupportedSchemeError,
-                          userInfo: [NSLocalizedDescriptionKey: "Select a .mindnode v9 binary-plist file or directory package."])
+                          userInfo: [NSLocalizedDescriptionKey: t("Select a .mindnode v9 binary-plist file or directory package.")])
         }
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
@@ -1278,9 +1289,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private func togglePane(at index: Int) {
         let window = splitController.view.window
         let frame = window?.frame
+        let host = window?.contentView
+        let oldOrigin = host.map { canvas.convert(CGPoint.zero, to: $0) }
         let item = splitController.splitViewItems[index]
         item.isCollapsed.toggle()
         if let frame, window?.frame != frame { window?.setFrame(frame, display: true) }
+        host?.layoutSubtreeIfNeeded()
+        if let oldOrigin, let host {
+            let newOrigin = canvas.convert(CGPoint.zero, to: host)
+            canvas.shiftViewport(by: CGPoint(x: oldOrigin.x - newOrigin.x, y: oldOrigin.y - newOrigin.y))
+        }
         if item.isCollapsed { window?.makeFirstResponder(canvas) }
     }
     @objc private func toggleOutline(_ sender: Any?) { togglePane(at: 0) }
@@ -1288,9 +1306,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
         self.canvas = canvas
+        canvas.localizationDefaults = defaults
         let split = NSSplitViewController()
         let sidebarController = NSViewController()
-        outline = MapOutlineView(canvas: canvas)
+        outline = MapOutlineView(canvas: canvas, defaults: defaults)
         sidebarController.view = outline
         let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarController)
         sidebar.canCollapse = true
@@ -1301,12 +1320,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         canvasController.view = canvas
         split.addSplitViewItem(NSSplitViewItem(viewController: canvasController))
         let inspectorController = NSViewController()
-        inspector = StyleInspector(canvas: canvas)
+        inspector = StyleInspector(canvas: canvas, defaults: defaults)
         inspectorController.view = inspector
         let style = NSSplitViewItem(viewController: inspectorController)
         style.canCollapse = true
         style.minimumThickness = 260
         style.maximumThickness = 320
+        style.holdingPriority = .defaultHigh
         split.addSplitViewItem(style)
         split.preferredContentSize = NSSize(width: 1280, height: 700)
         splitController = split
@@ -1342,10 +1362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         default: return nil
         }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = details.0
-        item.paletteLabel = details.0
-        item.toolTip = details.0
-        item.image = NSImage(systemSymbolName: details.1, accessibilityDescription: details.0)
+        item.label = t(details.0)
+        item.paletteLabel = item.label
+        item.toolTip = item.label
+        item.image = NSImage(systemSymbolName: details.1, accessibilityDescription: item.label)
         item.target = self
         item.action = details.2
         return item
@@ -1354,65 +1374,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private func applyAppearance(_ mode: String, in menu: NSMenu) {
         let selected = ["light", "dark"].contains(mode) ? mode : "system"
         NSApp.appearance = selected == "system" ? nil : NSAppearance(named: selected == "light" ? .aqua : .darkAqua)
-        for item in menu.items { item.state = item.title.lowercased() == selected ? .on : .off }
+        for item in menu.items { item.state = (item.representedObject as? String) == selected ? .on : .off }
     }
     @objc private func chooseAppearance(_ sender: NSMenuItem) {
         guard let menu = sender.menu else { return }
-        let mode = sender.title.lowercased()
+        let mode = sender.representedObject as? String ?? ""
         guard ["system", "light", "dark"].contains(mode) else { return }
         defaults.set(mode, forKey: "appearance")
         applyAppearance(mode, in: menu)
     }
 
+    @objc private func showSettings(_ sender: Any?) {
+        if let settingsWindow {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 390, height: 120),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let label = NSTextField(labelWithString: t("Interface Language"))
+        label.frame = CGRect(x: 18, y: 56, width: 130, height: 22)
+        let popup = NSPopUpButton(frame: CGRect(x: 148, y: 52, width: 224, height: 28), pullsDown: false)
+        for (key, name) in [("system", "Follow System"), ("zh-Hans", "Simplified Chinese"), ("en", "English")] {
+            let item = popup.menu!.addItem(withTitle: t(name), action: nil, keyEquivalent: "")
+            item.representedObject = key
+        }
+        popup.select(popup.itemArray.first { ($0.representedObject as? String) == L10n.choice(defaults: defaults) }!)
+        popup.setAccessibilityLabel(t("Interface Language"))
+        popup.target = self
+        popup.action = #selector(chooseLanguage(_:))
+        panel.contentView?.addSubview(label)
+        panel.contentView?.addSubview(popup)
+        panel.title = t("Settings")
+        panel.center()
+        settingsWindow = panel
+        panel.makeKeyAndOrderFront(nil)
+    }
+    @objc private func chooseLanguage(_ sender: NSPopUpButton) {
+        guard let chosen = sender.selectedItem?.representedObject as? String,
+              L10n.setLanguage(chosen, defaults: defaults) else { return }
+        installMenu()
+        outline?.localize()
+        inspector?.localize()
+        canvas?.needsDisplay = true
+        if window != nil { updateTitle() }
+        if let toolbar = window?.toolbar {
+            for item in toolbar.items {
+                guard let translated = self.toolbar(toolbar, itemForItemIdentifier: item.itemIdentifier,
+                                                     willBeInsertedIntoToolbar: false) else { continue }
+                item.label = translated.label
+                item.paletteLabel = translated.paletteLabel
+                item.toolTip = translated.toolTip
+                item.image = translated.image
+            }
+        }
+        settingsWindow?.title = t("Settings")
+        if let label = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSTextField }).first {
+            label.stringValue = t("Interface Language")
+        }
+        sender.setAccessibilityLabel(t("Interface Language"))
+        for item in sender.itemArray {
+            switch item.representedObject as? String {
+            case "system": item.title = t("Follow System")
+            case "zh-Hans": item.title = t("Simplified Chinese")
+            case "en": item.title = t("English")
+            default: break
+            }
+        }
+    }
+
     func installMenu() {
         let main = NSMenu()
-        let app = NSMenuItem(title: "MindMap", action: nil, keyEquivalent: "")
+        let app = NSMenuItem(title: t("MindMap"), action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit MindMap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: t("Settings…"), action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: t("Quit MindMap"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
         main.addItem(app)
-        let file = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
-        let readOnlyOpen = fileMenu.addItem(withTitle: "Open MindNode (Read-only)…", action: #selector(openMindNode(_:)), keyEquivalent: "o")
+        let file = NSMenuItem(title: t("File"), action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: t("File"))
+        let readOnlyOpen = fileMenu.addItem(withTitle: t("Open MindNode (Read-only)…"), action: #selector(openMindNode(_:)), keyEquivalent: "o")
         readOnlyOpen.keyEquivalentModifierMask = [.command, .shift]
         readOnlyOpen.target = self
-        fileMenu.addItem(withTitle: "Open Own JSON…", action: #selector(openFile(_:)), keyEquivalent: "o").target = self
-        fileMenu.addItem(withTitle: "Save", action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
+        fileMenu.addItem(withTitle: t("Open Own JSON…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: t("Save"), action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         file.submenu = fileMenu
         main.addItem(file)
-        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
-        let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(withTitle: "Undo", action: #selector(undoEdit(_:)), keyEquivalent: "z").target = self
-        let redo = editMenu.addItem(withTitle: "Redo", action: #selector(redoEdit(_:)), keyEquivalent: "Z")
+        let edit = NSMenuItem(title: t("Edit"), action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: t("Edit"))
+        editMenu.addItem(withTitle: t("Undo"), action: #selector(undoEdit(_:)), keyEquivalent: "z").target = self
+        let redo = editMenu.addItem(withTitle: t("Redo"), action: #selector(redoEdit(_:)), keyEquivalent: "Z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         redo.target = self
-        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: t("Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: t("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: t("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: t("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.submenu = editMenu
         main.addItem(edit)
-        let view = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
-        let viewMenu = NSMenu(title: "View")
-        let outlineItem = viewMenu.addItem(withTitle: "Show/Hide Outline",
+        let view = NSMenuItem(title: t("View"), action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: t("View"))
+        let outlineItem = viewMenu.addItem(withTitle: t("Show/Hide Outline"),
             action: #selector(toggleOutline(_:)), keyEquivalent: "s")
         outlineItem.keyEquivalentModifierMask = [.option, .command]
         outlineItem.target = self
-        let styleItem = viewMenu.addItem(withTitle: "Show/Hide Style Inspector",
+        let styleItem = viewMenu.addItem(withTitle: t("Show/Hide Style Inspector"),
             action: #selector(toggleStyle(_:)), keyEquivalent: "i")
         styleItem.keyEquivalentModifierMask = [.option, .command]
         styleItem.target = self
-        let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
-        let appearanceMenu = NSMenu(title: "Appearance")
+        let appearanceItem = NSMenuItem(title: t("Appearance"), action: nil, keyEquivalent: "")
+        let appearanceMenu = NSMenu(title: t("Appearance"))
         for title in ["System", "Light", "Dark"] {
-            appearanceMenu.addItem(withTitle: title, action: #selector(chooseAppearance(_:)), keyEquivalent: "").target = self
+            let item = appearanceMenu.addItem(withTitle: t(title), action: #selector(chooseAppearance(_:)), keyEquivalent: "")
+            item.representedObject = title.lowercased()
+            item.target = self
         }
         appearanceItem.submenu = appearanceMenu
         viewMenu.addItem(appearanceItem)
         view.submenu = viewMenu
         main.addItem(view)
-        let node = NSMenuItem(title: "Node", action: nil, keyEquivalent: "")
-        let nodeMenu = NSMenu(title: "Node")
+        let node = NSMenuItem(title: t("Node"), action: nil, keyEquivalent: "")
+        let nodeMenu = NSMenu(title: t("Node"))
         let entries: [(String, Selector, String, NSEvent.ModifierFlags)] = [
             ("New Child", #selector(newChild(_:)), "\t", []),
             ("New Sibling", #selector(newSibling(_:)), "", []),
@@ -1422,11 +1504,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             ("Detach Node", #selector(detachNode(_:)), "D", [.command, .shift])
         ]
         for (title, action, key, modifiers) in entries {
-            let item = nodeMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            let item = nodeMenu.addItem(withTitle: t(title), action: action, keyEquivalent: key)
             item.keyEquivalentModifierMask = modifiers
             item.target = self
         }
-        nodeMenu.addItem(withTitle: "Font…", action: #selector(showNodeFont(_:)), keyEquivalent: "t").target = self
+        nodeMenu.addItem(withTitle: t("Font…"), action: #selector(showNodeFont(_:)), keyEquivalent: "t").target = self
         node.submenu = nodeMenu
         main.addItem(node)
         NSApp.mainMenu = main

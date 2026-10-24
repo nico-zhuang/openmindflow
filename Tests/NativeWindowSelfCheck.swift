@@ -19,6 +19,7 @@ enum NativeWindowSelfCheck {
               !FileManager.default.fileExists(atPath: report.path) else {
             fputs("UNSAFE_REPORT_DESTINATION\n", stderr); exit(1)
         }
+        UserDefaults.standard.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let first = MapNode(id: UUID(), title: "Synthetic first", children: [], folded: false)

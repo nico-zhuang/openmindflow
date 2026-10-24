@@ -3,6 +3,7 @@ import AppKit
 @main
 enum OutlineWorkbenchTests {
     static func main() {
+        UserDefaults.standard.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         _ = NSApplication.shared // Offscreen only; no window or event loop.
         let root = UUID(), child = UUID()
         let model = MapModel(roots: [MapNode(id: root, title: "Root", children: [
@@ -155,6 +156,8 @@ enum OutlineWorkbenchTests {
         let item = NSApp.mainMenu!.item(withTitle: "View")!.submenu!.item(withTitle: "Show/Hide Outline")!
         let unchanged = manyCanvas.model.roots
         let expandedCanvasWidth = manyCanvas.bounds.width
+        let inspectorWidth = workbench.splitViewItems[2].viewController.view.bounds.width
+        let beforeNode = manyCanvas.frameForAccessibility(many.id)!
         let hideSent = NSApp.sendAction(item.action!, to: item.target, from: item)
         sideWindow.contentView?.layoutSubtreeIfNeeded()
         guard hideSent, sidebar.isCollapsed, sideWindow.firstResponder === manyCanvas,
@@ -162,12 +165,20 @@ enum OutlineWorkbenchTests {
             fputs("Hiding outline must collapse and focus canvas (sent=\(hideSent), collapsed=\(sidebar.isCollapsed), responder=\(String(describing: sideWindow.firstResponder)))\n", stderr)
             exit(1)
         }
+        let hiddenNode = manyCanvas.frameForAccessibility(many.id)!
+        assert(abs(hiddenNode.midX - beforeNode.midX) < 1 && abs(hiddenNode.midY - beforeNode.midY) < 1,
+               "Hiding the outline must not move the map relative to the window")
         guard NSApp.sendAction(item.action!, to: item.target, from: item), !sidebar.isCollapsed,
               manyCanvas.model.roots == unchanged else {
             fputs("Showing outline must restore its sidebar without changing the map\n", stderr)
             exit(1)
         }
         sideWindow.contentView?.layoutSubtreeIfNeeded()
+        let reopenedNode = manyCanvas.frameForAccessibility(many.id)!
+        assert(abs(workbench.splitViewItems[2].viewController.view.bounds.width - inspectorWidth) < 1,
+               "Toggling outline must not resize the unrelated right inspector")
+        assert(abs(reopenedNode.midX - beforeNode.midX) < 1 && abs(reopenedNode.midY - beforeNode.midY) < 1,
+               "Reopening the outline must preserve the current map position without auto-fitting")
         let stableFrame = sideWindow.frame
         for _ in 0..<6 {
             assert(NSApp.sendAction(item.action!, to: item.target, from: item))
@@ -176,6 +187,9 @@ enum OutlineWorkbenchTests {
                 fputs("Outline shifted window: before=\(stableFrame), after=\(sideWindow.frame), collapsed=\(sidebar.isCollapsed)\n", stderr)
                 exit(1)
             }
+            let currentNode = manyCanvas.frameForAccessibility(many.id)!
+            assert(abs(currentNode.midX - beforeNode.midX) < 1 && abs(currentNode.midY - beforeNode.midY) < 1,
+                   "Repeated outline toggles must not accumulate world-to-window viewport drift")
         }
         assert(!sidebar.isCollapsed)
         let toolbar = delegate.makeToolbar()

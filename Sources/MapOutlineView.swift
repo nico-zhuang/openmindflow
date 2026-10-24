@@ -32,13 +32,15 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
 
     let outlineView = KeyboardOutlineView()
     private let canvas: MapCanvas
+    private let localizationDefaults: UserDefaults
     private var roots: [Row] = []
     private var reloading = false
     private var disclosureInProgress = false
     private var pendingReload = false
 
-    init(canvas: MapCanvas) {
+    init(canvas: MapCanvas, defaults: UserDefaults = .standard) {
         self.canvas = canvas
+        localizationDefaults = defaults
         super.init(frame: .zero)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("map-title"))
         column.resizingMask = .autoresizingMask
@@ -58,13 +60,18 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
             self.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             return self.canvas.contextMenu(for: item.id)
         }
-        outlineView.setAccessibilityLabel("Map outline")
+        outlineView.setAccessibilityLabel(L10n.text("Map outline", defaults: localizationDefaults))
         documentView = outlineView
         hasVerticalScroller = true
         reloadMap()
     }
 
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
+
+    func localize() {
+        outlineView.setAccessibilityLabel(L10n.text("Map outline", defaults: localizationDefaults))
+        reloadMap()
+    }
 
     func reloadMap() {
         if disclosureInProgress {
@@ -114,7 +121,8 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let row = item as! Row
-        let label = NSTextField(labelWithString: row.title.isEmpty ? "New idea" : row.title)
+        let label = NSTextField(labelWithString: row.title.isEmpty
+            ? L10n.text("New idea", defaults: localizationDefaults) : row.title)
         label.lineBreakMode = .byTruncatingTail
         label.toolTip = row.title
         return label
