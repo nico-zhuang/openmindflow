@@ -1,4 +1,64 @@
 import Foundation
+import ImageIO
+
+enum MapImageError: LocalizedError {
+    case tooLarge, invalidFormat, invalidData, invalidDimensions
+
+    var errorDescription: String? {
+        switch self {
+        case .tooLarge: return "An image must be 8 MiB or smaller."
+        case .invalidFormat: return "Use a PNG, JPEG, or HEIC image."
+        case .invalidData: return "The image is damaged or incomplete."
+        case .invalidDimensions: return "An image must be at most 4096 pixels per side and 16 million pixels total."
+        }
+    }
+}
+
+struct MapImage: Codable, Equatable {
+    let data: Data
+    let pixelWidth: Int
+    let pixelHeight: Int
+
+    init(data: Data) throws {
+        guard data.count <= 8 * 1024 * 1024 else { throw MapImageError.tooLarge }
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let type = CGImageSourceGetType(source) as String?,
+              ["public.png", "public.jpeg", "public.heic", "public.heif"].contains(type) else {
+            throw MapImageError.invalidFormat
+        }
+        guard CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { throw MapImageError.invalidData }
+        guard (1...4096).contains(width), (1...4096).contains(height), width * height <= 16_000_000 else {
+            throw MapImageError.invalidDimensions
+        }
+        guard CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+              CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil else {
+            throw MapImageError.invalidData
+        }
+        self.data = data
+        pixelWidth = width
+        pixelHeight = height
+    }
+
+    func displaySize(width: CGFloat? = nil) -> CGSize {
+        let ratio = CGFloat(pixelWidth) / CGFloat(pixelHeight)
+        let fitted = min(296, CGFloat(pixelWidth), 296 * ratio)
+        let actualWidth = min(width ?? fitted, 1000 * ratio)
+        return CGSize(width: actualWidth, height: actualWidth / ratio)
+    }
+
+    private enum CodingKeys: String, CodingKey { case data }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(data: container.decode(Data.self, forKey: .data))
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(data, forKey: .data)
+    }
+}
 
 struct MapNode: Codable, Equatable {
     static let widthPresets: [CGFloat] = [170, 240, 320, 480]
@@ -15,6 +75,8 @@ struct MapNode: Codable, Equatable {
     var branchStrokeWidth: CGFloat? = nil
     var branchStrokeColor: String? = nil
     var strokeStyle: String? = nil
+    var image: MapImage? = nil
+    var imageWidth: CGFloat? = nil // nil fits the picture within a 296pt square.
 }
 
 final class MapModel {
@@ -41,6 +103,19 @@ final class MapModel {
         let changed = selectedIDs != [id]
         selected = id
         return changed
+    }
+
+    @discardableResult
+    func selectNodes(_ ids: Set<UUID>) -> Bool {
+        let paths = ids.compactMap { id in Self.path(to: id, in: roots).map { (id, $0) } }
+        guard paths.count == ids.count else { return false }
+        let primary = ids.contains(selected) ? selected : paths.min {
+            $0.1.lexicographicallyPrecedes($1.1)
+        }?.0
+        guard selectedIDs != ids || (primary != nil && selected != primary) else { return false }
+        if let primary, selected != primary { selected = primary }
+        selectedIDs = ids
+        return true
     }
 
     @discardableResult
@@ -93,6 +168,22 @@ final class MapModel {
         }
         selected = child.id
         pendingInitialWidth.insert(child.id)
+    }
+
+    @discardableResult
+    func addImageChild(_ image: MapImage) -> Bool {
+        guard let path = Self.path(to: selected, in: roots) else { return false }
+        let parent = Self.node(at: path[...], in: roots)
+        let child = MapNode(id: UUID(), title: "", children: [], folded: false,
+                            fontFamily: parent.fontFamily, fontSize: parent.fontSize,
+                            textAlignment: parent.textAlignment, image: image)
+        save()
+        Self.edit(&roots, at: path[...]) { nodes, index in
+            nodes[index].folded = false
+            nodes[index].children.append(child)
+        }
+        selected = child.id
+        return true
     }
 
     func addSibling(before: Bool = false) {
@@ -235,6 +326,42 @@ final class MapModel {
     }
 
     @discardableResult
+    func translateSelectedSubtrees(by delta: CGPoint, visibleCenters: [UUID: CGPoint]) -> Bool {
+        guard delta.x.isFinite, delta.y.isFinite, delta != .zero else { return false }
+        let selected = selectedPaths()
+        let paths = selected.filter { path in
+            !selected.contains { $0.count < path.count && path.starts(with: $0) }
+        }
+        guard !paths.isEmpty else { return false }
+        var updated = roots
+        func move(_ node: inout MapNode, isRoot: Bool) -> Bool {
+            if let point = node.location {
+                let x = point.x + Double(delta.x), y = point.y + Double(delta.y)
+                guard x.isFinite, y.isFinite, abs(x) <= 1_000_000, abs(y) <= 1_000_000 else { return false }
+                node.location = SIMD2(x, y)
+            } else if isRoot {
+                guard let point = visibleCenters[node.id], point.x.isFinite, point.y.isFinite else { return false }
+                let x = Double(point.x + delta.x), y = Double(point.y + delta.y)
+                guard x.isFinite, y.isFinite, abs(x) <= 1_000_000, abs(y) <= 1_000_000 else { return false }
+                node.location = SIMD2(x, y)
+            }
+            for index in node.children.indices where !move(&node.children[index], isRoot: false) { return false }
+            return true
+        }
+        for path in paths {
+            var valid = true
+            Self.edit(&updated, at: path[...]) { nodes, index in
+                valid = move(&nodes[index], isRoot: true)
+            }
+            guard valid else { return false }
+        }
+        guard updated != roots else { return false }
+        save()
+        roots = updated
+        return true
+    }
+
+    @discardableResult
     func detachSelected() -> Bool {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
         let moving = Self.node(at: path[...], in: roots)
@@ -302,6 +429,22 @@ final class MapModel {
             shiftChildren(&node.children, by: distance)
             node.width = width
         }
+    }
+
+    @discardableResult
+    func setImage(_ image: MapImage?, displayWidth: CGFloat? = nil) -> Bool {
+        guard displayWidth.map({ image != nil && $0.isFinite && (60...1000).contains($0) }) ?? true else { return false }
+        return editSelected { node in
+            node.image = image
+            node.imageWidth = image == nil ? nil : displayWidth
+        }
+    }
+
+    @discardableResult
+    func setImageWidth(_ width: CGFloat) -> Bool {
+        guard width.isFinite, (60...1000).contains(width),
+              selectedPaths().allSatisfy({ Self.node(at: $0[...], in: roots).image != nil }) else { return false }
+        return editSelected { $0.imageWidth = width }
     }
 
     @discardableResult

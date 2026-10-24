@@ -1,21 +1,22 @@
 import Foundation
 import Darwin
 
-private let ownJSONLimit = 8 * 1024 * 1024
+private let ownJSONLimit = 32 * 1024 * 1024
 
 enum OwnJSONError: LocalizedError {
-    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle
+    case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle, invalidImageSize
 
     var errorDescription: String? {
         switch self {
         case .invalidPath: return "Choose a .mindmap.json file."
         case .invalidFile: return "The document must be a regular file."
-        case .tooLarge: return "The document exceeds the 8 MiB limit."
+        case .tooLarge: return "The document exceeds the 32 MiB limit."
         case .duplicateID: return "The document contains duplicate node IDs."
         case .invalidWidth: return "A node width must be a finite value from 60 to 1000 points."
         case .invalidLocation: return "A saved node position must be within one million points."
         case .invalidFont: return "A font name must be at most 128 bytes and a font size from 1 to 512 points."
         case .invalidStyle: return "Alignment, line color, width or dash style is invalid."
+        case .invalidImageSize: return "An image display width must be 60 to 1000 points and requires an image."
         }
     }
 }
@@ -31,6 +32,10 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
             if let width = node.width {
                 guard MapNode.validWidth(width) else { throw OwnJSONError.invalidWidth }
+            }
+            if let width = node.imageWidth,
+               (node.image == nil || !width.isFinite || !(60...1000).contains(width)) {
+                throw OwnJSONError.invalidImageSize
             }
             if let family = node.fontFamily, (family.isEmpty || family.utf8.count > 128) {
                 throw OwnJSONError.invalidFont

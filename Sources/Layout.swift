@@ -36,6 +36,30 @@ func mapFont(isRoot: Bool, zoom: CGFloat = 1, node: MapNode? = nil) -> NSFont {
         ?? NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
 
+func mapNodeSize(_ node: MapNode, font: NSFont, maxWidth: CGFloat? = nil,
+                 allowToShrinkWidth: Bool = false) -> CGSize {
+    let title = node.title.isEmpty && node.image != nil ? "" : (node.title.isEmpty ? "New idea" : node.title)
+    let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
+    let attributes: [NSAttributedString.Key: Any] = [.font: font]
+    let longestLine = text.components(separatedBy: "\n").map {
+        ($0 as NSString).size(withAttributes: attributes).width
+    }.max() ?? 0
+    let naturalWidth = max(ceil(longestLine) + 24,
+                           (node.image.map { $0.displaySize(width: node.imageWidth).width + 24 } ?? 0))
+    let width: CGFloat
+    if let explicit = node.width { width = explicit }
+    else if let maxWidth {
+        width = max(60, allowToShrinkWidth ? min(naturalWidth, maxWidth) : maxWidth)
+    } else { width = min(node.image == nil ? 320 : 1000, max(170, naturalWidth)) }
+    let textHeight: CGFloat = text.isEmpty ? 0 : ceil((text as NSString).boundingRect(
+        with: CGSize(width: max(1, width - 24), height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height)
+    let imageHeight = node.image.map {
+        ceil($0.displaySize(width: min(node.imageWidth ?? $0.displaySize().width, max(1, width - 24))).height)
+    } ?? 0
+    return CGSize(width: width, height: max(44, imageHeight + textHeight + (node.image == nil ? 22 : 22 + (text.isEmpty ? 0 : 8))))
+}
+
 func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -> [LaidOutNode] {
     #if HEADLESS_TEST
     mapLayoutInvocations += 1
@@ -48,22 +72,9 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         return original.map { item in
             let node = item.node
             let saved = overrides[node.id]
-            let attributes: [NSAttributedString.Key: Any] = [.font: saved?.font ?? mapFont(isRoot: item.parent == nil, node: node)]
-            let title = node.title.isEmpty ? "New idea" : node.title
-            let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
-            let longestLine = text.components(separatedBy: "\n").map {
-                ($0 as NSString).size(withAttributes: attributes).width
-            }.max() ?? 0
-            let contentWidth = ceil(longestLine) + 24
-            let width: CGFloat
-            if let explicit = node.width { width = explicit }
-            else if let cap = saved?.maxWidth {
-                width = max(60, saved!.allowToShrinkWidth ? min(contentWidth, cap) : cap)
-            } else { width = min(320, max(170, contentWidth)) }
-            let bounds = (text as NSString).boundingRect(
-                with: CGSize(width: width - 24, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
-            let height = max(44, ceil(bounds.height) + 22)
+            let size = mapNodeSize(node, font: saved?.font ?? mapFont(isRoot: item.parent == nil, node: node),
+                                   maxWidth: saved?.maxWidth, allowToShrinkWidth: saved?.allowToShrinkWidth ?? false)
+            let width = size.width, height = size.height
             let parentShift: CGSize
             if let parent = item.parent, let actual = placed[parent], let baseline = originalFrames[parent] {
                 parentShift = CGSize(width: actual.midX - baseline.midX, height: actual.midY - baseline.midY)
@@ -84,18 +95,9 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
 
     @discardableResult
     func measure(_ node: MapNode, depth: Int) -> CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: mapFont(isRoot: depth == 0, node: node)]
-        let title = node.title.isEmpty ? "New idea" : node.title
-        let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
-        let longestLine = text.components(separatedBy: "\n").map {
-            ($0 as NSString).size(withAttributes: attributes).width
-        }.max() ?? 0
-        let width = node.width ?? min(320, max(170, ceil(longestLine) + 24))
-        let bounds = (text as NSString).boundingRect(
-            with: CGSize(width: width - 24, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
-        let height = max(44, ceil(bounds.height) + 22)
-        sizes[node.id] = CGSize(width: width, height: height)
+        let size = mapNodeSize(node, font: mapFont(isRoot: depth == 0, node: node))
+        let width = size.width, height = size.height
+        sizes[node.id] = size
         if depth == columnWidths.count { columnWidths.append(width) }
         else { columnWidths[depth] = max(columnWidths[depth], width) }
         let children = node.folded ? [] : node.children

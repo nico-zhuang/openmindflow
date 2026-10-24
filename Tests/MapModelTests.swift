@@ -3,6 +3,34 @@ import Foundation
 @main
 enum MapModelTests {
     static func main() {
+        let root = UUID(), child = UUID(), gestureLeaf = UUID(), sibling = UUID()
+        let gesture = MapModel(roots: [MapNode(id: root, title: "root", children: [
+            MapNode(id: child, title: "child", children: [
+                MapNode(id: gestureLeaf, title: "hidden leaf", children: [], folded: false)
+            ], folded: true),
+            MapNode(id: sibling, title: "sibling", children: [], folded: false,
+                    location: SIMD2(320, 300))
+        ], folded: false)], selected: child)
+        let starting = gesture.roots
+        assert(gesture.selectNodes([root, child]) && gesture.selected == child)
+        assert(gesture.selectedIDs == [root, child])
+        let centers: [UUID: CGPoint] = [root: CGPoint(x: 100, y: 100)]
+        assert(!gesture.translateSelectedSubtrees(by: CGPoint(x: CGFloat.nan, y: 10), visibleCenters: centers))
+        assert(gesture.translateSelectedSubtrees(by: CGPoint(x: 20, y: -30), visibleCenters: centers))
+        assert(gesture.roots[0].location == SIMD2(120, 70))
+        assert(gesture.roots[0].children[0].location == nil)
+        assert(gesture.roots[0].children[0].children[0].location == nil,
+               "Folded descendants without saved locations follow shifted parent when revealed")
+        assert(gesture.roots[0].children[1].location == SIMD2(340, 270),
+               "Selected ancestor moves all descendants exactly once")
+        assert(gesture.undo() && gesture.roots == starting, "One undo restores full subtree")
+        assert(gesture.redo() && gesture.roots[0].location == SIMD2(120, 70))
+        let translatedRoots = gesture.roots
+        assert(!gesture.translateSelectedSubtrees(by: CGPoint(x: 1_000_000, y: 0), visibleCenters: centers))
+        assert(gesture.roots == translatedRoots, "Overflow rejects every descendant together")
+        assert(!gesture.selectNodes([UUID()]) && gesture.selectedIDs == [root, child])
+        assert(gesture.selectNodes([]) && gesture.selectedIDs.isEmpty && gesture.selected == child)
+        assert(!gesture.translateSelectedSubtrees(by: CGPoint(x: 1, y: 1), visibleCenters: centers))
         for before in [false, true] {
             let blank = MapModel(roots: [], selected: UUID())
             blank.addSibling(before: before)

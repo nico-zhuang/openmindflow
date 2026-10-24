@@ -56,7 +56,7 @@ enum OwnJSONTests {
         rejects { _ = try readOwnJSON(wrong) }
         assert(!fm.fileExists(atPath: wrong.path))
         let oversized = scratch.appendingPathComponent("oversized.mindmap.json")
-        try Data(count: 8 * 1024 * 1024 + 1).write(to: oversized)
+        try Data(count: 32 * 1024 * 1024 + 1).write(to: oversized)
         rejects { _ = try readOwnJSON(oversized) }
         let directory = scratch.appendingPathComponent("directory.mindmap.json", isDirectory: true)
         try fm.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -68,7 +68,7 @@ enum OwnJSONTests {
         rejects { try writeOwnJSON(expected, to: linked) }
         let unchanged = try readOwnJSON(url)
         assert(unchanged == expected)
-        let giant = [MapNode(id: UUID(), title: String(repeating: "x", count: 8 * 1024 * 1024), children: [], folded: false)]
+        let giant = [MapNode(id: UUID(), title: String(repeating: "x", count: 32 * 1024 * 1024), children: [], folded: false)]
         rejects { try writeOwnJSON(giant, to: url) }
         let afterOversizedSave = try readOwnJSON(url)
         assert(afterOversizedSave == expected)
