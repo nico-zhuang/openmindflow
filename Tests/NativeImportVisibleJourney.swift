@@ -78,11 +78,11 @@ import Darwin
                   abs(mapNode.midY - initialMapNode.midY) < 1 else {
                 receipt("FAIL outline-toggle-moved-map-node-on-screen"); exit(11)
             }
-            if turn.isMultiple(of: 2) && canvas.bounds.width < initialCanvasWidth + 100 {
-                receipt("FAIL collapsed-outline-did-not-return-width-to-canvas"); exit(9)
+            if turn.isMultiple(of: 2) && canvas.bounds.width > initialCanvasWidth - 100 {
+                receipt("FAIL opened-outline-did-not-take-canvas-width"); exit(9)
             }
             if !turn.isMultiple(of: 2) && abs(canvas.bounds.width - initialCanvasWidth) > 1 {
-                receipt("FAIL reopened-outline-did-not-slide-into-left-edge initial=\(initialCanvasWidth) now=\(canvas.bounds.width) styleInitially=\(initialInspectorWidth) styleNow=\(inspector.bounds.width) window=\(window.frame)"); exit(9)
+                receipt("FAIL closed-outline-did-not-return-width-to-canvas initial=\(initialCanvasWidth) now=\(canvas.bounds.width) styleInitially=\(initialInspectorWidth) styleNow=\(inspector.bounds.width) window=\(window.frame)"); exit(9)
             }
         }
         guard let hit = canvas.frameForAccessibility(child.id), hit.width == 136,

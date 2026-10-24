@@ -80,6 +80,30 @@ enum ImageNodeTests {
         rejects { _ = try readOwnJSON(badURL) }
         let final = try readOwnJSON(url)
         assert(final == model.roots)
+        let noise = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1280, pixelsHigh: 1280,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        arc4random_buf(noise.bitmapData!, noise.bytesPerRow * noise.pixelsHigh)
+        let largePNG = noise.representation(using: .png, properties: [:])!
+        assert((4 * 1024 * 1024...8 * 1024 * 1024).contains(largePNG.count),
+               "Noise PNG fixture was \(largePNG.count) bytes; expected to fit one 8 MiB image")
+        let largeImage = try MapImage(data: largePNG)
+        let galleryRoot = UUID()
+        let gallery = MapModel(roots: [MapNode(id: galleryRoot, title: "Gallery", children: [], folded: false)],
+                               selected: galleryRoot)
+        while true {
+            var next = gallery.roots
+            next[0].children.append(MapNode(id: UUID(), title: "", children: [], folded: false,
+                                            image: largeImage))
+            if try JSONEncoder().encode(next).count > 32 * 1024 * 1024 { break }
+            gallery.selectOnly(galleryRoot)
+            assert(gallery.addImageChild(largeImage))
+        }
+        try writeOwnJSON(gallery.roots, to: folder.appendingPathComponent("large.mindmap.json"))
+        gallery.selectOnly(galleryRoot)
+        let beforeRejected = gallery.roots
+        assert(!gallery.addImageChild(largeImage) && gallery.roots == beforeRejected,
+               "Reject the next image before making a document impossible to Save")
         print("image payload, undo, layout and bounded JSON tests passed")
     }
 }

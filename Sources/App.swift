@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 
 private final class MapNodeAX: NSAccessibilityElement {
     weak var canvas: MapCanvas?
@@ -44,6 +46,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     var onChange: (() -> Void)?
     var onSelectionChange: (() -> Void)?
+    var onImageError: ((Error) -> Void)?
     var localizationDefaults: UserDefaults = .standard
     private func t(_ text: String) -> String { L10n.text(text, defaults: localizationDefaults) }
     private var zoom: CGFloat = 1
@@ -53,6 +56,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var dragPoint: CGPoint? { didSet { previewCache = nil } }
     private var dragOrigin: CGPoint?
     private var dragGrab = CGPoint.zero
+    private var handTool = false
+    private var middlePanning = false
+    private var marquee: CGRect?
     private var resize: (id: UUID, startX: CGFloat, startWidth: CGFloat, currentWidth: CGFloat,
                          visibleWidths: [UUID: CGFloat])?
     private var hoveredPlus: Set<UUID> = [] { didSet { if oldValue != hoveredPlus { needsDisplay = true } } }
@@ -146,6 +152,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let local = screen(item.frame)
         return window?.convertToScreen(convert(local, to: nil)) ?? local
     }
+    private func imageRect(_ item: LaidOutNode) -> CGRect? {
+        guard let image = item.node.image else { return nil }
+        let box = screen(item.frame)
+        let width = min(image.displaySize(width: item.node.imageWidth).width, item.frame.width - 24)
+        let size = image.displaySize(width: max(1, width))
+        return CGRect(x: box.minX + 12 * zoom, y: box.minY + 11 * zoom,
+                      width: size.width * zoom, height: size.height * zoom)
+    }
+    func imageFrameForAccessibility(_ id: UUID) -> CGRect? {
+        guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }),
+              let local = imageRect(item) else { return nil }
+        return window?.convertToScreen(convert(local, to: nil)) ?? local
+    }
 
     func selectNode(_ id: UUID) {
         commitEditing()
@@ -159,6 +178,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         selectNode(id)
         guard model.selected == id else { return }
         beginEditing()
+    }
+    func showSearchResult(_ id: UUID) {
+        commitEditing()
+        let expanded = model.revealSearchResult(id)
+        if expanded { changed() }
+        else { revealSelection(); needsDisplay = true }
     }
 
     private func screen(_ frame: CGRect) -> CGRect {
@@ -222,6 +247,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         screen(item.frame).insetBy(dx: 6 * zoom, dy: 5 * zoom)
     }
     private func resizeHandlePoint(_ item: LaidOutNode) -> CGPoint {
+        if model.selectedIDs.count == 1, let picture = imageRect(item) {
+            return CGPoint(x: picture.maxX, y: picture.maxY)
+        }
         let box = selectionBox(item)
         return CGPoint(x: box.maxX, y: box.minY)
     }
@@ -241,11 +269,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let textHeight = (node.node.title as NSString).boundingRect(
             with: CGSize(width: width - 8, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
-        let height = min(max(22, box.height - 22 * zoom, ceil(textHeight) + 6),
+        let height = min(node.node.image == nil
+                             ? max(22, box.height - 22 * zoom, ceil(textHeight) + 6)
+                             : max(22, ceil(textHeight) + 6),
                          max(22, bounds.height - 56))
         // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
         return CGRect(x: box.minX + 12 * zoom,
-                      y: node.parent == nil ? box.midY - height / 2 : box.maxY - 9 * zoom - height,
+                      y: imageRect(node).map { $0.maxY + 8 * zoom }
+                           ?? (node.parent == nil ? box.midY - height / 2 : box.maxY - 9 * zoom - height),
                       width: width, height: height)
     }
     @discardableResult
@@ -270,9 +301,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             nodes.map { item in
                 var copy = item
                 if let resize, let old = resize.visibleWidths[item.id] {
-                    let width = min(1000, max(60, old + resize.currentWidth - resize.startWidth))
-                    copy.width = width
-                    if copy.location != nil { copy.location!.x += Double(width - old) / 2 }
+                    let delta = resize.currentWidth - resize.startWidth
+                    if model.selectedIDs.count == 1, let image = copy.image {
+                        copy.imageWidth = min(1000, max(60, image.displaySize(width: copy.imageWidth).width + delta))
+                    } else {
+                        let width = min(1000, max(60, old + delta))
+                        copy.width = width
+                        if copy.location != nil { copy.location!.x += Double(width - old) / 2 }
+                    }
                 }
                 copy.children = preview(item.children)
                 return copy
@@ -609,8 +645,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                     dot.fill()
                 }
             }
+            if let rect = imageRect(item), let data = item.node.image?.data,
+               let image = NSImage(data: data) {
+                image.draw(in: rect, from: .zero, operation: .sourceOver,
+                           fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+            }
             if editor != nil && item.node.id == model.selected { continue }
-            let title = item.node.title.isEmpty ? t("New idea") : item.node.title
+            let title = item.node.title.isEmpty ? (item.node.image == nil ? t("New idea") : "") : item.node.title
             let paragraph = NSMutableParagraphStyle()
             switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? "left" {
             case "center": paragraph.alignment = .center
@@ -627,11 +668,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let height = ceil((label as NSString).boundingRect(
                 with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height)
-            let textRect = item.parent == nil
-                ? CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
+            let textRect = item.node.image != nil
+                ? CGRect(x: box.minX + 12 * zoom, y: (imageRect(item)?.maxY ?? box.minY) + 8 * zoom,
                          width: box.width - 24 * zoom, height: height + 2 * zoom)
-                : CGRect(x: box.minX + 12 * zoom, y: baseline(box) - height - 3 * zoom,
-                         width: box.width - 24 * zoom, height: height + 2 * zoom)
+                : item.parent == nil
+                    ? CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
+                             width: box.width - 24 * zoom, height: height + 2 * zoom)
+                    : CGRect(x: box.minX + 12 * zoom, y: baseline(box) - height - 3 * zoom,
+                             width: box.width - 24 * zoom, height: height + 2 * zoom)
             (label as NSString).draw(in: textRect, withAttributes: attrs)
             if model.selectedIDs.contains(item.node.id) {
                 let point = resizeHandlePoint(item)
@@ -644,7 +688,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 handle.stroke()
             }
         }
-        for node in nodes where hoveredPlus.contains(node.node.id) && dragSource == nil && editor == nil {
+        if let marquee {
+            NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
+            NSBezierPath(rect: marquee).fill()
+            NSColor.controlAccentColor.setStroke()
+            let border = NSBezierPath(rect: marquee)
+            border.lineWidth = 1
+            border.setLineDash([4, 3], count: 2, phase: 0)
+            border.stroke()
+        }
+        for node in nodes where hoveredPlus.contains(node.node.id) && dragSource == nil && editor == nil && !handTool {
             let center = plusPoint(node)
             let circle = NSBezierPath(ovalIn: CGRect(x: center.x - 9, y: center.y - 9,
                 width: 18, height: 18))
@@ -665,6 +718,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     override func resetCursorRects() {
         super.resetCursorRects()
+        if handTool || middlePanning {
+            addCursorRect(bounds, cursor: middlePanning ? .closedHand : .openHand)
+            return
+        }
         let nodes = visibleNodes()
         if let item = nodes.first(where: { $0.node.id == model.selected }) {
             let point = resizeHandlePoint(item)
@@ -733,6 +790,45 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     func addSibling(before: Bool = false) { commitEditing(); let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
     func addParent() { commitEditing(); let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
     func addMainNode() { commitEditing(); model.addMainNode(); changed(); beginEditing() }
+    func insertImageData(_ data: Data) throws {
+        let image = try MapImage(data: data)
+        commitEditing()
+        guard model.addImageChild(image) else { throw OwnJSONError.tooLarge }
+        changed()
+    }
+    @discardableResult
+    func pasteImageFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        let imageTypes: [NSPasteboard.PasteboardType] = [.png, .init("public.jpeg"), .init("public.heic"), .init("public.heif")]
+        do {
+            if let data = imageTypes.compactMap({ pasteboard.data(forType: $0) }).first {
+                try insertImageData(data)
+            } else if let tiff = pasteboard.data(forType: .tiff) {
+                guard tiff.count <= 8 * 1024 * 1024 else { throw MapImageError.tooLarge }
+                guard let source = CGImageSourceCreateWithData(tiff as CFData, nil),
+                      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                      let width = props[kCGImagePropertyPixelWidth] as? Int,
+                      let height = props[kCGImagePropertyPixelHeight] as? Int,
+                      (1...4096).contains(width), (1...4096).contains(height),
+                      width * height <= 16_000_000 else { throw MapImageError.invalidDimensions }
+                guard let image = NSBitmapImageRep(data: tiff),
+                      let data = image.representation(using: .png, properties: [:]) else {
+                    throw MapImageError.invalidData
+                }
+                try insertImageData(data)
+            } else { return false }
+            return true
+        } catch { onImageError?(error); return false }
+    }
+    @objc func paste(_ sender: Any?) {
+        let board = NSPasteboard.general
+        if board.availableType(from: [.png, .init("public.jpeg"), .init("public.heic"),
+                                      .init("public.heif"), .tiff]) != nil {
+            _ = pasteImageFromPasteboard(board)
+        } else if let text = board.string(forType: .string) {
+            beginEditing()
+            editor?.currentEditor()?.insertText(text)
+        }
+    }
     func detachSelected() { commitEditing(); if model.detachSelected() { changed() } }
     func undo() { commitEditing(); if model.undo() { changed() } }
     func redo() { commitEditing(); if model.redo() { changed() } }
@@ -757,6 +853,21 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     func controlTextDidEndEditing(_ obj: Notification) { commitEditing() }
 
+    func arrangeMap() {
+        commitEditing()
+        func unfolded(_ nodes: [MapNode]) -> [MapNode] {
+            nodes.map { node in
+                var copy = node
+                copy.folded = false
+                copy.children = unfolded(node.children)
+                return copy
+            }
+        }
+        let positions = Dictionary(uniqueKeysWithValues: mapLayout(unfolded(model.roots)).map {
+            ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        })
+        if model.arrange(at: positions) { changed(); _ = fitMapInView() }
+    }
     func contextMenu(for id: UUID?) -> NSMenu {
         if let id { selectNode(id) } else { commitEditing() }
         let menu = NSMenu()
@@ -787,6 +898,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             menu.addItem(withTitle: t("Node Width"), action: nil, keyEquivalent: "").submenu = widthMenu
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
         } else { add("New Main Node", 3) }
+        menu.addItem(.separator())
+        add("Arrange Map", 20)
         return menu
     }
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -807,6 +920,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let width: CGFloat? = item.tag == 10 ? nil : MapNode.widthPresets[item.tag - 11]
             if model.setWidth(width) { changed() }
         case 16: showFontPanel()
+        case 20: arrangeMap()
         case 15:
             commitEditing()
             let dialog = NSAlert()
@@ -863,8 +977,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         switch event.keyCode {
-        case 53 where dragSource != nil:
-            stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; needsDisplay = true
+        case 4 where event.modifierFlags.intersection([.option, .control, .shift]).isEmpty:
+            handTool = true; window?.invalidateCursorRects(for: self)
+        case 9 where event.modifierFlags.intersection([.option, .control, .shift]).isEmpty:
+            handTool = false; window?.invalidateCursorRects(for: self)
+        case 53 where handTool:
+            handTool = false; marquee = nil; dragOrigin = nil
+            window?.invalidateCursorRects(for: self); needsDisplay = true
+        case 53 where dragSource != nil || marquee != nil:
+            stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil; needsDisplay = true
         case 48 where event.modifierFlags.contains(.option): addParent()
         case 48: addChild()                         // Tab
         case 36, 76:
@@ -924,9 +1045,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         dragSource = nil
         dragPoint = nil
         resize = nil
+        marquee = nil
         if wasPresented { needsDisplay = true } // A no-hit click must not leave stale spring paint or AX.
         let point = convert(event.locationInWindow, from: nil)
         dragOrigin = point
+        if handTool { window?.makeFirstResponder(self); return }
         if event.clickCount == 1,
            let node = hitNodes.last(where: { plusHit(point, item: $0) }) {
             hoveredPlus.removeAll()
@@ -962,7 +1085,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if event.clickCount == 2 || !model.selectedIDs.contains(node.node.id) {
                 model.selectOnly(node.node.id)
             }
-            dragSource = event.clickCount == 1 && node.parent != nil ? node.node.id : nil
+            dragSource = event.clickCount == 1 ? node.node.id : nil
             let box = screen(node.frame)
             dragGrab = CGPoint(x: point.x - box.minX, y: point.y - box.minY)
             needsDisplay = true
@@ -970,8 +1093,34 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else { model.selectOnly(model.selected); needsDisplay = true }
         if editor == nil { window?.makeFirstResponder(self) }
     }
+    private func pan(to point: CGPoint) {
+        guard let origin = dragOrigin else { return }
+        offset.x += point.x - origin.x
+        offset.y += point.y - origin.y
+        dragOrigin = point
+        editor?.frame = selectedNode().map(editorFrame) ?? .zero
+        needsDisplay = true
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { super.otherMouseDown(with: event); return }
+        commitEditing()
+        middlePanning = true
+        dragOrigin = convert(event.locationInWindow, from: nil)
+        window?.invalidateCursorRects(for: self)
+    }
+    override func otherMouseDragged(with event: NSEvent) {
+        guard middlePanning else { super.otherMouseDragged(with: event); return }
+        pan(to: convert(event.locationInWindow, from: nil))
+    }
+    override func otherMouseUp(with event: NSEvent) {
+        guard middlePanning else { super.otherMouseUp(with: event); return }
+        middlePanning = false
+        dragOrigin = nil
+        window?.invalidateCursorRects(for: self)
+    }
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if handTool { pan(to: point); return }
         if var resize {
             resize.currentWidth = min(1000, max(60, resize.startWidth + (point.x - resize.startX) / zoom))
             self.resize = resize
@@ -986,25 +1135,43 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         if let origin = dragOrigin {
-            offset.x += point.x - origin.x
-            offset.y += point.y - origin.y
-            dragOrigin = point
-            editor?.frame = selectedNode().map(editorFrame) ?? .zero
+            guard marquee != nil || hypot(point.x - origin.x, point.y - origin.y) >= 9 else { return }
+            marquee = CGRect(x: min(origin.x, point.x), y: min(origin.y, point.y),
+                             width: abs(point.x - origin.x), height: abs(point.y - origin.y))
             needsDisplay = true
         }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; needsDisplay = true }
+        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; needsDisplay = true }
+        if let marquee {
+            _ = model.selectNodes(Set(visibleNodes().filter { screen($0.frame).intersects(marquee) }.map { $0.node.id }))
+            return
+        }
+        if handTool { return }
         if let handle = resize {
-            if abs(handle.currentWidth - handle.startWidth) > 0.5,
-               model.resizeSelected(by: handle.currentWidth - handle.startWidth,
-                    visibleWidths: handle.visibleWidths) { resize = nil; changed() }
+            let delta = handle.currentWidth - handle.startWidth
+            guard abs(delta) > 0.5 else { return }
+            if model.selectedIDs.count == 1,
+               let selected = selectedNode(), let image = selected.node.image {
+                let width = min(1000, max(60, image.displaySize(width: selected.node.imageWidth).width + delta))
+                if model.setImageWidth(width) { resize = nil; changed() }
+            } else if model.resizeSelected(by: delta, visibleWidths: handle.visibleWidths) {
+                resize = nil; changed()
+            }
             return
         }
         guard let source = dragSource, dragPoint != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         let nodes = visibleNodes()
         guard let anchor = nodes.first(where: { $0.node.id == source }) else { return }
+        if anchor.parent == nil, let origin = dragOrigin {
+            let delta = CGPoint(x: (point.x - origin.x) / zoom, y: (point.y - origin.y) / zoom)
+            let centers = Dictionary(uniqueKeysWithValues: nodes.map {
+                ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+            })
+            if model.translateSelectedSubtrees(by: delta, visibleCenters: centers) { changed() }
+            return
+        }
         let placement: (target: LaidOutNode, parent: UUID, index: Int)
         if let target = validDrop(at: point, source: source, nodes: nodes) { placement = target }
         else {
@@ -1088,6 +1255,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var dirty = false
     private var closeApproved = false
     private var settingsWindow: NSWindow?
+    private var findWindow: NSPanel?
+    private var findField: NSSearchField?
+    private var findStatus: NSTextField?
+    private var findMatches: [UUID] = []
+    private var findIndex = 0
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -1103,9 +1275,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         _ = makeWorkbench(canvas: canvas)
         canvas.onChange = { [weak self] in
             self?.syncDirty(); self?.outline.reloadMap(); self?.inspector.refresh()
+            if self?.findWindow?.isVisible == true { self?.refreshFindResults() }
         }
         canvas.onSelectionChange = { [weak self] in
             self?.outline.syncSelection(); self?.inspector.refresh()
+        }
+        canvas.onImageError = { [weak self] error in
+            self?.alert("Could not import image", detail: error.localizedDescription)
         }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -1115,6 +1291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.minSize = NSSize(width: 640, height: 400)
         window.contentViewController = splitController
         window.toolbar = makeToolbar()
+        window.setContentSize(NSSize(width: 1280, height: 700))
         window.center()
         installMenu()
         window.contentView?.layoutSubtreeIfNeeded()
@@ -1190,6 +1367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             dirty = false
             updateTitle()
             canvas.fitMapInView()
+            refreshFindResults(navigate: false)
             window.makeFirstResponder(canvas)
         } catch { alert("Could not open map", detail: error.localizedDescription) }
     }
@@ -1222,6 +1400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             dirty = false
             updateTitle()
             canvas.fitMapInView()
+            refreshFindResults(navigate: false)
             window.makeFirstResponder(canvas)
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
@@ -1236,6 +1415,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnsupportedSchemeError,
                           userInfo: [NSLocalizedDescriptionKey: t("Select a .mindnode v9 binary-plist file or directory package.")])
         }
+    }
+    @objc private func insertImageFile(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .heif]
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        #endif
+        do {
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            var data = Data()
+            while let chunk = try file.read(upToCount: 8 * 1024 * 1024 + 1 - data.count), !chunk.isEmpty {
+                data.append(chunk)
+                guard data.count <= 8 * 1024 * 1024 else { throw MapImageError.tooLarge }
+            }
+            try canvas.insertImageData(data)
+        } catch { alert("Could not import image", detail: error.localizedDescription) }
+    }
+    @objc private func exportPDF(_ sender: Any?) { export(.pdf, extension: "pdf", type: .pdf) }
+    @objc private func exportPNG(_ sender: Any?) { export(.png, extension: "png", type: .png) }
+    @objc private func exportJPEG(_ sender: Any?) { export(.jpeg, extension: "jpg", type: .jpeg) }
+    @objc private func exportMarkdownFile(_ sender: Any?) {
+        export(.markdown, extension: "md", type: UTType(filenameExtension: "md") ?? .plainText)
+    }
+    private func export(_ format: MapExportFormat, extension suffix: String, type: UTType) {
+        canvas.commitEditing()
+        let panel = NSSavePanel()
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
+        panel.allowedContentTypes = [type]
+        panel.nameFieldStringValue = "MindMap.\(suffix)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        #endif
+        do { try exportMap(canvas, as: format, to: url) }
+        catch { alert("Could not export map", detail: error.localizedDescription) }
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     private func save() -> Bool {
@@ -1316,6 +1539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         sidebar.minimumThickness = 180
         sidebar.maximumThickness = 320
         split.addSplitViewItem(sidebar)
+        sidebar.isCollapsed = true
         let canvasController = NSViewController()
         canvasController.view = canvas
         split.addSplitViewItem(NSSplitViewItem(viewController: canvasController))
@@ -1328,6 +1552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         style.maximumThickness = 320
         style.holdingPriority = .defaultHigh
         split.addSplitViewItem(style)
+        style.isCollapsed = true
         split.preferredContentSize = NSSize(width: 1280, height: 700)
         splitController = split
         return split
@@ -1384,6 +1609,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         applyAppearance(mode, in: menu)
     }
 
+    @objc private func showFind(_ sender: Any?) {
+        if findWindow == nil {
+            let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 430, height: 110),
+                                styleMask: [.titled, .closable, .utilityWindow],
+                                backing: .buffered, defer: false)
+            panel.title = t("Find")
+            let field = NSSearchField(frame: CGRect(x: 16, y: 58, width: 398, height: 28))
+            field.placeholderString = t("Search nodes")
+            field.setAccessibilityLabel(t("Search nodes"))
+            field.sendsSearchStringImmediately = true
+            field.target = self
+            field.action = #selector(findChanged(_:))
+            panel.contentView?.addSubview(field)
+            let status = NSTextField(labelWithString: t("No matches"))
+            status.frame = CGRect(x: 16, y: 16, width: 300, height: 24)
+            panel.contentView?.addSubview(status)
+            let next = NSButton(title: "›", target: self, action: #selector(findNext(_:)))
+            next.frame = CGRect(x: 369, y: 12, width: 44, height: 28)
+            next.setAccessibilityLabel(t("Next Result"))
+            panel.contentView?.addSubview(next)
+            findWindow = panel
+            findField = field
+            findStatus = status
+            panel.center()
+        }
+        findWindow?.makeKeyAndOrderFront(nil)
+        refreshFindResults()
+        if let findField { findWindow?.makeFirstResponder(findField) }
+    }
+    @objc private func findChanged(_ sender: NSSearchField) {
+        findMatches = searchTitles(canvas.model.roots, query: sender.stringValue)
+        findIndex = 0
+        updateFindResult()
+    }
+    @objc private func findNext(_ sender: Any?) {
+        let current = searchTitles(canvas.model.roots, query: findField?.stringValue ?? "")
+        if current != findMatches { findMatches = current; findIndex = 0 }
+        else if !findMatches.isEmpty { findIndex = (findIndex + 1) % findMatches.count }
+        updateFindResult()
+    }
+    private func refreshFindResults(navigate: Bool = true) {
+        guard let findField else { return }
+        let current = searchTitles(canvas.model.roots, query: findField.stringValue)
+        if current != findMatches { findMatches = current; findIndex = 0 }
+        updateFindResult(navigate: navigate)
+    }
+    private func updateFindResult(navigate: Bool = true) {
+        findStatus?.stringValue = findMatches.isEmpty ? t("No matches") : "\(findIndex + 1) / \(findMatches.count)"
+        if navigate && !findMatches.isEmpty { canvas.showSearchResult(findMatches[findIndex]) }
+    }
+
     @objc private func showSettings(_ sender: Any?) {
         if let settingsWindow {
             settingsWindow.makeKeyAndOrderFront(nil)
@@ -1427,6 +1703,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                 item.image = translated.image
             }
         }
+        findWindow?.title = t("Find")
+        findField?.placeholderString = t("Search nodes")
+        findField?.setAccessibilityLabel(t("Search nodes"))
+        if findMatches.isEmpty { findStatus?.stringValue = t("No matches") }
+        findWindow?.contentView?.subviews.compactMap { $0 as? NSButton }.first?.setAccessibilityLabel(t("Next Result"))
         settingsWindow?.title = t("Settings")
         if let label = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSTextField }).first {
             label.stringValue = t("Interface Language")
@@ -1458,6 +1739,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         readOnlyOpen.target = self
         fileMenu.addItem(withTitle: t("Open Own JSON…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: t("Save"), action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: t("Insert Image…"), action: #selector(insertImageFile(_:)), keyEquivalent: "").target = self
+        fileMenu.addItem(.separator())
+        for (title, selector) in [("Export PDF…", #selector(exportPDF(_:))),
+                                  ("Export PNG…", #selector(exportPNG(_:))),
+                                  ("Export JPG…", #selector(exportJPEG(_:))),
+                                  ("Export Markdown…", #selector(exportMarkdownFile(_:)))] {
+            fileMenu.addItem(withTitle: t(title), action: selector, keyEquivalent: "").target = self
+        }
         file.submenu = fileMenu
         main.addItem(file)
         let edit = NSMenuItem(title: t("Edit"), action: nil, keyEquivalent: "")
@@ -1470,6 +1760,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         editMenu.addItem(withTitle: t("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: t("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: t("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: t("Find…"), action: #selector(showFind(_:)), keyEquivalent: "f").target = self
         edit.submenu = editMenu
         main.addItem(edit)
         let view = NSMenuItem(title: t("View"), action: nil, keyEquivalent: "")

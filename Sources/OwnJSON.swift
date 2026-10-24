@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-private let ownJSONLimit = 32 * 1024 * 1024
+private let ownJSONLimit = MapModel.maxSavedJSONBytes
 
 enum OwnJSONError: LocalizedError {
     case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle, invalidImageSize
@@ -22,7 +22,10 @@ enum OwnJSONError: LocalizedError {
 }
 
 private func checkOwnJSONPath(_ url: URL) throws {
-    guard url.isFileURL, url.lastPathComponent.hasSuffix(".mindmap.json") else { throw OwnJSONError.invalidPath }
+    guard url.isFileURL, url.lastPathComponent.hasSuffix(".mindmap.json"),
+          !url.deletingLastPathComponent().resolvingSymlinksInPath().pathComponents.contains(where: {
+              $0.lowercased().hasSuffix(".mindnode")
+          }) else { throw OwnJSONError.invalidPath }
 }
 
 private func checkOwnJSONNodes(_ roots: [MapNode]) throws {

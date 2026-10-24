@@ -155,6 +155,13 @@ enum OwnJSONTests {
         rejects { try writeOwnJSON([placedTooFar], to: url) }
         let afterBadLocation = try readOwnJSON(url)
         assert(afterBadLocation == expected, "Invalid source positions cannot replace saved JSON")
+        let package = scratch.appendingPathComponent("original.mindnode", isDirectory: true)
+        try fm.createDirectory(at: package, withIntermediateDirectories: false)
+        let nested = package.appendingPathComponent("notes.mindmap.json")
+        rejects { try writeOwnJSON(expected, to: nested) }
+        assert(!fm.fileExists(atPath: nested.path), "Own JSON Save must never change a .mindnode package")
+        try Data("[]".utf8).write(to: nested)
+        rejects { _ = try readOwnJSON(nested) }
         let finalSentinel = try String(contentsOf: unrelated, encoding: .utf8)
         assert(finalSentinel == "leave this alone")
         print("own JSON persistence tests passed")

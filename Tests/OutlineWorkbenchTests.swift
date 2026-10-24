@@ -155,13 +155,19 @@ enum OutlineWorkbenchTests {
         delegate.installMenu()
         let item = NSApp.mainMenu!.item(withTitle: "View")!.submenu!.item(withTitle: "Show/Hide Outline")!
         let unchanged = manyCanvas.model.roots
-        let expandedCanvasWidth = manyCanvas.bounds.width
+        let collapsedCanvasWidth = manyCanvas.bounds.width
         let inspectorWidth = workbench.splitViewItems[2].viewController.view.bounds.width
         let beforeNode = manyCanvas.frameForAccessibility(many.id)!
+        assert(sidebar.isCollapsed && workbench.splitViewItems[2].isCollapsed,
+               "A new workbench must start with both sidebars closed")
+        assert(NSApp.sendAction(item.action!, to: item.target, from: item) && !sidebar.isCollapsed)
+        sideWindow.contentView?.layoutSubtreeIfNeeded()
+        assert(manyCanvas.bounds.width < collapsedCanvasWidth - 100,
+               "Showing outline must take its width from the canvas inside the fixed window")
         let hideSent = NSApp.sendAction(item.action!, to: item.target, from: item)
         sideWindow.contentView?.layoutSubtreeIfNeeded()
         guard hideSent, sidebar.isCollapsed, sideWindow.firstResponder === manyCanvas,
-              manyCanvas.bounds.width > expandedCanvasWidth + 100 else {
+              abs(manyCanvas.bounds.width - collapsedCanvasWidth) < 1 else {
             fputs("Hiding outline must collapse and focus canvas (sent=\(hideSent), collapsed=\(sidebar.isCollapsed), responder=\(String(describing: sideWindow.firstResponder)))\n", stderr)
             exit(1)
         }
@@ -199,9 +205,9 @@ enum OutlineWorkbenchTests {
         guard let styleButton = delegate.toolbar(toolbar, itemForItemIdentifier: styleID, willBeInsertedIntoToolbar: true),
               let action = styleButton.action else { fatalError("Style toolbar switch missing") }
         let inspectorItem = workbench.splitViewItems[2]
-        assert(NSApp.sendAction(action, to: styleButton.target, from: styleButton) && inspectorItem.isCollapsed)
-        assert(sideWindow.frame == stableFrame, "Right inspector collapse cannot resize or shift the window")
         assert(NSApp.sendAction(action, to: styleButton.target, from: styleButton) && !inspectorItem.isCollapsed)
+        assert(sideWindow.frame == stableFrame, "Right inspector expansion cannot resize or shift the window")
+        assert(NSApp.sendAction(action, to: styleButton.target, from: styleButton) && inspectorItem.isCollapsed)
         assert(sideWindow.frame == stableFrame)
         sideWindow.orderOut(nil)
 

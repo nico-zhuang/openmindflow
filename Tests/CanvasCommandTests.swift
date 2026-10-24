@@ -99,7 +99,7 @@ enum CanvasCommandTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
-              rightMenu.items.map(\.title) == ["Edit Title", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete"] else {
+              rightMenu.items.map(\.title) == ["Edit Title", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
             fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
         }
         let editTitle = rightMenu.item(withTitle: "Edit Title")!
@@ -118,8 +118,8 @@ enum CanvasCommandTests {
         let blankRight = NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 800, y: 40),
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 2, clickCount: 1, pressure: 1)!
-        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node"],
-               "Blank canvas should offer new main node without pretending a node was clicked")
+        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node", "", "Arrange Map"],
+               "Blank canvas should offer new main node and explicit Arrange without pretending a node was clicked")
         let suiteName = "local.mindmap.appearance-test.\(UUID().uuidString)"
         let appearanceDefaults = UserDefaults(suiteName: suiteName)!
         let priorAppearance = NSApp.appearance
@@ -989,9 +989,12 @@ enum CanvasCommandTests {
         visualCanvas.mouseDragged(with: mouse(.leftMouseDragged,
             CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
         assert(image(visualCanvas) != beforeRootPan,
-               "Grabbing the root must pan the visible map instead of silently failing")
+               "Grabbing the root must preview moving the complete branch")
         visualCanvas.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: rootStart.x + 45, y: rootStart.y + 28)))
-        assert(visualModel.roots == [visualRoot] && visualChanges == 0)
+        assert(visualModel.roots[0].location != nil && visualChanges == 1,
+               "Releasing the root must persist a real branch move rather than pan the viewport")
+        visualCanvas.undo()
+        assert(visualModel.roots == [visualRoot], "One Undo restores the branch before dragging")
         visualCanvas.selectAndEdit(visualRoot.id)
         assert(visualCanvas.subviews.compactMap { $0 as? NSTextField }.first!.font == mapFont(isRoot: true))
         visualCanvas.selectAndEdit(visualRoot.children[0].id)

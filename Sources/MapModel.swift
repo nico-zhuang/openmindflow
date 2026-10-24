@@ -80,6 +80,10 @@ struct MapNode: Codable, Equatable {
 }
 
 final class MapModel {
+    static let maxSavedJSONBytes = 32 * 1024 * 1024
+    private static func fitsSavedJSON(_ roots: [MapNode]) -> Bool {
+        (try? JSONEncoder().encode(roots).count).map { $0 <= maxSavedJSONBytes } ?? false
+    }
     var roots: [MapNode]
     var selected: UUID { didSet { selectedIDs = [selected]; selectionAnchor = selected } }
     private(set) var selectedIDs: Set<UUID>
@@ -116,6 +120,19 @@ final class MapModel {
         if let primary, selected != primary { selected = primary }
         selectedIDs = ids
         return true
+    }
+
+    @discardableResult
+    func revealSearchResult(_ id: UUID) -> Bool {
+        guard let path = Self.path(to: id, in: roots) else { return false }
+        var updated = roots
+        for depth in 1..<path.count {
+            Self.edit(&updated, at: path.prefix(depth)) { nodes, index in nodes[index].folded = false }
+        }
+        let expanded = updated != roots
+        if expanded { save(); roots = updated }
+        selected = id
+        return expanded
     }
 
     @discardableResult
@@ -177,11 +194,14 @@ final class MapModel {
         let child = MapNode(id: UUID(), title: "", children: [], folded: false,
                             fontFamily: parent.fontFamily, fontSize: parent.fontSize,
                             textAlignment: parent.textAlignment, image: image)
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
             nodes[index].folded = false
             nodes[index].children.append(child)
         }
+        guard Self.fitsSavedJSON(updated) else { return false }
+        save()
+        roots = updated
         selected = child.id
         return true
     }
@@ -362,6 +382,27 @@ final class MapModel {
     }
 
     @discardableResult
+    func arrange(at centers: [UUID: CGPoint]) -> Bool {
+        var updated = roots
+        var seen = Set<UUID>()
+        func place(_ nodes: inout [MapNode]) -> Bool {
+            for index in nodes.indices {
+                let id = nodes[index].id
+                guard seen.insert(id).inserted, let point = centers[id],
+                      point.x.isFinite, point.y.isFinite,
+                      abs(point.x) <= 1_000_000, abs(point.y) <= 1_000_000 else { return false }
+                nodes[index].location = SIMD2(Double(point.x), Double(point.y))
+                if !place(&nodes[index].children) { return false }
+            }
+            return true
+        }
+        guard place(&updated), seen.count == centers.count, updated != roots else { return false }
+        save()
+        roots = updated
+        return true
+    }
+
+    @discardableResult
     func detachSelected() -> Bool {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
         let moving = Self.node(at: path[...], in: roots)
@@ -434,6 +475,16 @@ final class MapModel {
     @discardableResult
     func setImage(_ image: MapImage?, displayWidth: CGFloat? = nil) -> Bool {
         guard displayWidth.map({ image != nil && $0.isFinite && (60...1000).contains($0) }) ?? true else { return false }
+        if image != nil {
+            var updated = roots
+            for path in selectedPaths() {
+                Self.edit(&updated, at: path[...]) { nodes, index in
+                    nodes[index].image = image
+                    nodes[index].imageWidth = displayWidth
+                }
+            }
+            guard Self.fitsSavedJSON(updated) else { return false }
+        }
         return editSelected { node in
             node.image = image
             node.imageWidth = image == nil ? nil : displayWidth
