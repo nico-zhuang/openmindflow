@@ -261,7 +261,7 @@ final class MapModel {
             Self.edit(&updated, at: path.prefix(depth)) { nodes, index in nodes[index].folded = false }
         }
         let expanded = updated != roots
-        if expanded { save(); roots = updated }
+        if expanded && !commit(updated) { return false }
         selected = id
         return expanded
     }
@@ -300,20 +300,20 @@ final class MapModel {
 
     func addChild() {
         if roots.isEmpty {
-            save()
             let root = MapNode(id: UUID(), title: "", children: [], folded: false)
-            roots = [root]
+            guard commit([root]) else { return }
             selected = root.id
             pendingInitialWidth.insert(root.id)
             return
         }
         guard let path = Self.path(to: selected, in: roots) else { return }
         let child = MapNode(id: UUID(), title: "", children: [], folded: false)
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
             nodes[index].folded = false
             nodes[index].children.append(child)
         }
+        guard commit(updated) else { return }
         selected = child.id
         pendingInitialWidth.insert(child.id)
     }
@@ -360,10 +360,11 @@ final class MapModel {
         if roots.isEmpty { addChild(); return }
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         let sibling = MapNode(id: UUID(), title: "", children: [], folded: false)
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
             nodes.insert(sibling, at: index + (before ? 0 : 1))
         }
+        guard commit(updated) else { return }
         selected = sibling.id
         pendingInitialWidth.insert(sibling.id)
     }
@@ -372,8 +373,9 @@ final class MapModel {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         let previous = Self.node(at: path[...], in: roots)
         let parent = MapNode(id: UUID(), title: "", children: [previous], folded: false)
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in nodes[index] = parent }
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in nodes[index] = parent }
+        guard commit(updated) else { return }
         selected = parent.id
         pendingInitialWidth.insert(parent.id)
     }
@@ -381,8 +383,9 @@ final class MapModel {
     func addMainNode() {
         let main = MapNode(id: UUID(), title: "", children: [], folded: false)
         let index = Self.path(to: selected, in: roots)?.first.map { $0 + 1 } ?? roots.count
-        save()
-        roots.insert(main, at: index)
+        var updated = roots
+        updated.insert(main, at: index)
+        guard commit(updated) else { return }
         selected = main.id
         pendingInitialWidth.insert(main.id)
     }
@@ -434,14 +437,14 @@ final class MapModel {
                 guard shift(&moving) else { return false }
             } else { moving.location = SIMD2(Double(location.x), Double(location.y)) }
         }
-        save()
-        Self.edit(&roots, at: sourcePath[...]) { nodes, position in nodes.remove(at: position) }
-        let updatedParentPath = Self.path(to: parentID, in: roots)!
-        Self.edit(&roots, at: updatedParentPath[...]) { nodes, position in
+        var updated = roots
+        Self.edit(&updated, at: sourcePath[...]) { nodes, position in nodes.remove(at: position) }
+        let updatedParentPath = Self.path(to: parentID, in: updated)!
+        Self.edit(&updated, at: updatedParentPath[...]) { nodes, position in
             nodes[position].folded = false
             nodes[position].children.insert(moving, at: destinationIndex)
         }
-        return true
+        return commit(updated)
     }
 
     @discardableResult
@@ -490,9 +493,7 @@ final class MapModel {
         }
         guard updated != roots else { return false }
         Self.edit(&updated, at: destination[...]) { nodes, at in nodes[at].folded = false }
-        save()
-        roots = updated
-        return true
+        return commit(updated)
     }
 
     @discardableResult
@@ -526,9 +527,7 @@ final class MapModel {
             guard valid else { return false }
         }
         guard updated != roots else { return false }
-        save()
-        roots = updated
-        return true
+        return commit(updated)
     }
 
     @discardableResult
@@ -547,19 +546,17 @@ final class MapModel {
             return true
         }
         guard place(&updated), seen.count == centers.count, updated != roots else { return false }
-        save()
-        roots = updated
-        return true
+        return commit(updated)
     }
 
     @discardableResult
     func detachSelected() -> Bool {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
         let moving = Self.node(at: path[...], in: roots)
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in nodes.remove(at: index) }
-        roots.insert(moving, at: path[0] + 1)
-        return true
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in nodes.remove(at: index) }
+        updated.insert(moving, at: path[0] + 1)
+        return commit(updated)
     }
 
     @discardableResult
@@ -785,11 +782,11 @@ final class MapModel {
     func toggleFold() -> Bool {
         guard let path = Self.path(to: selected, in: roots),
               !Self.node(at: path[...], in: roots).children.isEmpty else { return false }
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
             nodes[index].folded.toggle()
         }
-        return true
+        return commit(updated)
     }
 
     @discardableResult
@@ -821,6 +818,13 @@ final class MapModel {
             Self.edit(&updated, at: path[...]) { nodes, index in change(&nodes[index]) }
         }
         guard updated != roots, fitsSavedJSON(updated, relationships: relationships) else { return false }
+        save()
+        roots = updated
+        return true
+    }
+
+    private func commit(_ updated: [MapNode]) -> Bool {
+        guard fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         return true
