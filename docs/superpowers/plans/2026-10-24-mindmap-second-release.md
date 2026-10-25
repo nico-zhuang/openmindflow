@@ -17,6 +17,8 @@
 
 ---
 
+**Progress (2026-10-25, `feature/native-editor-v2`, commit `3e9303f`):** Structural clipboard paste, editable relationships, playable video, versioned own JSON, and a **limited experimental plain-tree** `.mindnode` writer are implemented. The development build and 33 safe offscreen test groups passed. This is **not** a second release: the writer rejects relationships/media/themes/rich titles instead of preserving them; original MindNode acceptance, a visible/key/frontmost synthetic journey, physical window-edge dragging, second signing and publication remain unverified or unfinished. The checkboxes below are acceptance criteria, not a claim that every subcase in an implemented feature was tested.
+
 ### Task 1: Relationship data, persistence and one-step Undo
 
 **Files:** Create `Sources/MapRelationship.swift`, `Tests/MapRelationshipTests.swift`; modify `Sources/MapModel.swift`, `Sources/OwnJSON.swift`; add `Tests/OwnDocumentTests.swift`.
@@ -25,7 +27,7 @@
 
 - [ ] Write RED assertions: legacy arrays decode unchanged; new `roots+relationships` envelope reopens byte-valid; dangling endpoints, duplicate IDs, non-finite/out-of-range control offsets are rejected; add/edit/delete/style/arrow each commit one Undo with no-op preserving redo.
 - [ ] Run `swiftc -D HEADLESS_TEST Sources/*.swift Tests/OwnDocumentTests.swift -framework AppKit -o /tmp/mindmap-own-v2 && /tmp/mindmap-own-v2`; confirm missing envelope/relation methods cause RED.
-- [ ] Add the minimum document encoder/decoder and extend `MapModel.Snapshot` to include relationships; `fitsSavedJSON` must measure the exact new envelope when relationships exist, else preserve legacy array bytes. Verify `Tests/MapRelationshipTests.swift` and `Tests/OwnDocumentTests.swift` GREEN.
+- [x] Add the minimum document encoder/decoder and extend `MapModel.Snapshot` to include relationships; `fitsSavedJSON` must measure the exact new envelope when relationships exist, else preserve legacy array bytes. Verify `Tests/MapRelationshipTests.swift` and `Tests/OwnDocumentTests.swift` GREEN.
 
 ### Task 2: Structural clipboard group copy/paste and native commands
 
@@ -68,6 +70,6 @@
 
 **Files:** Create `Tests/SecondReleaseVisibleJourney.swift` and a unique owned-bundle runner; update `README.md` with actual limitations.
 
-- [ ] Re-run the first release's 24 focused groups plus new model/clipboard/relationship/video/writer tests, `bash build.sh`, `git diff --check`.
+- [x] Re-run the first release's 24 focused groups plus new model/clipboard/relationship/video/writer tests, `bash build.sh`, `git diff --check` (33 safe offscreen groups passed; this does not cover the two focus-stealing GUI suites).
 - [ ] Launch a **new owned signed synthetic App** via LaunchServices and require visible/key/frontmost status for marquee→Copy→blank Paste/Undo, Bezier control drag/line style/arrows, playable video/progress, and new `.mindnode` Save dialog without touching user originals. If desktop focus shifts, stop global-input tests and mark them unverified.
 - [ ] Sign a **unique second** app/ZIP; check `codesign --verify --deep --strict`, `unzip -tq`, executable identity and both prior ZIP hashes; open the new app. Commit only scoped source/tests/docs and publish a private second prerelease after validation. Do not declare original-MindNode compatibility without independent original-app round-trip evidence.
