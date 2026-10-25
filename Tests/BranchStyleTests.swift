@@ -111,12 +111,14 @@ import AppKit
         let dashed = styledBitmap()
         let connectorSamples = (1...35).map { step -> (NSColor?, NSColor?, NSColor?) in
             let start = nodes[0].frame, end = nodes[1].frame
-            let t = CGFloat(step) / 36, factor = 3*t*t - 2*t*t*t
-            let x = Int(start.maxX + (end.minX - start.maxX) * factor + 80)
-            let y = Int(start.midY + (end.maxY - 7 - start.midY) * factor + 90)
+            let t = CGFloat(step) / 36
+            let xFactor = (3*t - 3*t*t + 2*t*t*t) / 2 // Actual cubic X: both controls at the horizontal midpoint.
+            let yFactor = 3*t*t - 2*t*t*t
+            let x = Int(start.maxX + (end.minX - start.maxX) * xFactor + 80)
+            let y = Int(start.midY + (end.maxY - 7 - start.midY) * yFactor + 90)
             let other = nodes[2].frame
-            let childX = Int(start.maxX + (other.minX - start.maxX) * factor + 80)
-            let childY = Int(start.midY + (other.maxY - 7 - start.midY) * factor + 90)
+            let childX = Int(start.maxX + (other.minX - start.maxX) * xFactor + 80)
+            let childY = Int(start.midY + (other.maxY - 7 - start.midY) * yFactor + 90)
             return (dashed.colorAt(x: x, y: dashed.pixelsHigh - y - 1),
                     solid.colorAt(x: x, y: solid.pixelsHigh - y - 1),
                     dashed.colorAt(x: childX, y: dashed.pixelsHigh - childY - 1))

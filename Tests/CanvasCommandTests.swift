@@ -35,6 +35,10 @@ enum CanvasCommandTests {
         let spare = MapModel.maxSavedJSONBytes - (try! JSONEncoder().encode([budgetRoot])).count
         assert(spare > 64 && spare < 2_000)
         budgetRoot.children[0].children[0].title += String(repeating: "x", count: spare - 24)
+        assert((try! JSONEncoder().encode([budgetRoot])).count <= MapModel.maxSavedJSONBytes)
+        var rejectedRoot = budgetRoot
+        rejectedRoot.title = String(repeating: "Overflow", count: 8)
+        assert((try! JSONEncoder().encode([rejectedRoot])).count > MapModel.maxSavedJSONBytes)
         let budgetModel = MapModel(roots: [budgetRoot], selected: budgetRoot.id)
         let budgetCanvas = MapCanvas(model: budgetModel)
         budgetCanvas.frame = CGRect(x: 0, y: 0, width: 900, height: 500)
@@ -52,6 +56,40 @@ enum CanvasCommandTests {
         assert(budgetModel.selected == budgetRoot.id && budgetModel.roots == [budgetRoot] &&
                budgetField.superview === budgetCanvas && budgetField.stringValue == rejectedTitle,
                "Selection, insertion and Undo must abort before a rejected title is lost")
+        let budgetOutline = MapOutlineView(canvas: budgetCanvas)
+        let budgetWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1200, height: 600),
+                                    styleMask: [.titled], backing: .buffered, defer: false)
+        let budgetContent = NSView(frame: budgetWindow.contentView!.bounds)
+        budgetWindow.contentView = budgetContent // Owned synthetic window: never shown, keyed, or activated.
+        budgetCanvas.frame = CGRect(x: 300, y: 0, width: 900, height: 600)
+        budgetOutline.frame = CGRect(x: 0, y: 0, width: 300, height: 600)
+        budgetContent.addSubview(budgetCanvas)
+        budgetContent.addSubview(budgetOutline)
+        budgetOutline.reloadMap()
+        assert(budgetWindow.makeFirstResponder(budgetField))
+        budgetOutline.outlineView.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
+        assert(budgetModel.selected == budgetRoot.id && budgetOutline.outlineView.selectedRow == 0 &&
+               (budgetWindow.firstResponder === budgetField || budgetWindow.firstResponder === budgetField.currentEditor()) &&
+               budgetField.superview === budgetCanvas &&
+               budgetField.stringValue == rejectedTitle,
+               "Rejected outline selection restores model row and inline field focus")
+        let relation = MapRelationship(from: budgetRoot.id, to: sibling.id)
+        budgetModel.relationships = [relation] // Seed an existing edge without a budgeted model write.
+        let relationAction = NSMenuItem(title: "Delete Relationship", action: NSSelectorFromString("relationshipCommand:"), keyEquivalent: "")
+        relationAction.target = budgetCanvas
+        relationAction.representedObject = relation.id
+        relationAction.tag = 36
+        assert(NSApp.sendAction(relationAction.action!, to: relationAction.target, from: relationAction))
+        assert(budgetModel.relationships == [relation] && budgetField.superview === budgetCanvas &&
+               (budgetWindow.firstResponder === budgetField || budgetWindow.firstResponder === budgetField.currentEditor()),
+               "Relationship action must abort rejected title")
+        let budgetInspector = StyleInspector(canvas: budgetCanvas)
+        budgetInspector.strokeStylePopup.selectItem(withTitle: "Dashed")
+        budgetInspector.changeStrokeStyle(budgetInspector.strokeStylePopup)
+        assert(budgetModel.roots == [budgetRoot] && budgetField.superview === budgetCanvas &&
+               (budgetWindow.firstResponder === budgetField || budgetWindow.firstResponder === budgetField.currentEditor()),
+               "Inspector setter must abort rejected title")
+        budgetModel.relationships = []
         budgetField.stringValue = "Short"
         assert(budgetCanvas.commitEditing() && budgetModel.roots[0].title == "Short" &&
                budgetModel.undo() && budgetModel.roots == [budgetRoot] && !budgetModel.undo(),

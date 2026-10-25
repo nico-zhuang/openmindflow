@@ -139,7 +139,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         guard !reloading, outlineView.selectedRow >= 0,
               let row = outlineView.item(atRow: outlineView.selectedRow) as? Row else { return }
         let id = row.id
-        canvas.selectNode(id) // Commits the previous canvas editor before changing selected UUID.
+        guard canvas.selectNode(id) else { syncSelection(); return }
         if window != nil { window?.makeFirstResponder(outlineView) }
     }
 
@@ -148,7 +148,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         guard row.folded else { return true }
         disclosureInProgress = true
         defer { disclosureInProgress = false }
-        canvas.selectNode(row.id)
+        guard canvas.selectNode(row.id) else { syncSelection(); return false }
         canvas.toggleFold()
         reloadMap()
         return false
@@ -159,7 +159,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
         guard !row.folded else { return true }
         disclosureInProgress = true
         defer { disclosureInProgress = false }
-        canvas.selectNode(row.id)
+        guard canvas.selectNode(row.id) else { syncSelection(); return false }
         canvas.toggleFold()
         reloadMap()
         return false

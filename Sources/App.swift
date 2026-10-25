@@ -15,7 +15,8 @@ private final class MapNodeAX: NSAccessibilityElement {
 
     override func accessibilityPerformPress() -> Bool {
         guard let canvas, let nodeID else { return false }
-        if addsChild { canvas.selectNode(nodeID); canvas.addChild() }
+        guard canvas.selectNode(nodeID) else { return false }
+        if addsChild { canvas.addChild() }
         else { canvas.selectAndEdit(nodeID) }
         return true
     }
@@ -275,17 +276,17 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard commitEditing() else { return }
         if model.selectNodes(Set(visibleNodes().map(\.node.id))) { needsDisplay = true }
     }
-    func selectNode(_ id: UUID) {
-        guard commitEditing() else { return }
-        guard visibleNodes().contains(where: { $0.node.id == id }) else { return }
+    @discardableResult
+    func selectNode(_ id: UUID) -> Bool {
+        guard commitEditing(), visibleNodes().contains(where: { $0.node.id == id }) else { return false }
         model.selected = id
         revealSelection()
         needsDisplay = true
+        return true
     }
 
     func selectAndEdit(_ id: UUID) {
-        selectNode(id)
-        guard model.selected == id else { return }
+        guard selectNode(id) else { return }
         beginEditing()
     }
     func showSearchResult(_ id: UUID) {
@@ -1038,7 +1039,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }.max() ?? 0
             let compact = localizationDefaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
                 localizationDefaults.bool(forKey: "shrinkNewNodesToFitContent")
-            guard model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil) else { return false }
+            guard model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil) else {
+                if let window = field.window, window.firstResponder !== field {
+                    field.delegate = nil // Avoid reentrant controlTextDidEndEditing while returning focus.
+                    _ = window.makeFirstResponder(field)
+                    field.delegate = self
+                }
+                return false
+            }
             endEditingWithoutSaving()
             changed()
         } else { endEditingWithoutSaving(); needsDisplay = true }
@@ -1285,12 +1293,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let point = convert(event.locationInWindow, from: nil)
         let nodes = previewGeometry().nodes
         let id = nodes.last(where: { screen($0.frame).contains(point) })?.node.id
-        if id == nil, let relation = relationAt(point, nodes: nodes) { return relationshipMenu(for: relation) }
+        if id == nil, let relation = relationAt(point, nodes: nodes) {
+            guard commitEditing() else { return nil }
+            return relationshipMenu(for: relation)
+        }
         if id == nil { blankPastePoint = point }
         return contextMenu(for: id)
     }
     @objc private func relationshipCommand(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? UUID,
+        guard commitEditing(), let id = item.representedObject as? UUID,
               let current = model.relationships.first(where: { $0.id == id }) else { return }
         if item.tag == 36 {
             if model.removeRelationship(id) { selectedRelationshipID = nil; changed() }
@@ -1363,7 +1374,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         NSFontManager.shared.orderFrontFontPanel(self)
     }
     @objc func changeFont(_ manager: NSFontManager) {
-        guard let node = selectedNode() else { return }
+        guard commitEditing(), let node = selectedNode() else { return }
         let changedFont = manager.convert(font(for: node.node, isRoot: node.parent == nil))
         if model.setFont(family: changedFont.fontName, size: Double(changedFont.pointSize)) { changed() }
     }

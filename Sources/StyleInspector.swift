@@ -257,20 +257,24 @@ final class StyleInspector: NSView {
     }
 
     @objc func changeFontFamily(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         guard let family = familyPopup.selectedItem?.representedObject as? String else { refresh(); return }
         changed(canvas.model.setFont(family: family))
     }
     @objc func changeFontSize(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         if sender as? NSStepper === fontSizeStepper { fontSizeField.stringValue = "\(fontSizeStepper.doubleValue)" }
         guard let size = Double(fontSizeField.stringValue) else { refresh(); return }
         changed(canvas.model.setFont(size: size))
     }
     @objc func changeAlignment(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         let names = ["left", "center", "right", "justify"]
         guard names.indices.contains(alignmentControl.selectedSegment) else { return }
         changed(canvas.model.setAlignment(names[alignmentControl.selectedSegment]))
     }
     @objc func changeColorSelection(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         guard let choice = colorPopup.selectedItem?.representedObject as? String else { return }
         if choice == "More…" {
             refresh() // Opening the color panel does not itself change the selection or create undo.
@@ -285,12 +289,14 @@ final class StyleInspector: NSView {
         } else { refresh() }
     }
     @objc func changeStrokeColor(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         guard let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
         let components = [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
         let hex = "#" + components.map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
         changed(canvas.model.setBranchStroke(color: hex))
     }
     @objc func changeStrokeWidth(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         guard let choice = strokeWidthPopup.selectedItem?.representedObject as? String else { return }
         if choice == "Default" { changed(canvas.model.resetStrokeWidth()) }
         else if let width = Self.widths.first(where: { $0.0 == choice })?.1 {
@@ -298,6 +304,7 @@ final class StyleInspector: NSView {
         } else { refresh() }
     }
     @objc func changeStrokeStyle(_ sender: Any?) {
+        guard canvas.commitEditing() else { return }
         guard let value = (strokeStylePopup.selectedItem?.representedObject as? String)?.lowercased() else { return }
         if value == "default" { changed(canvas.model.resetStrokeStyle()) }
         else if value == "solid" || value == "dashed" {
