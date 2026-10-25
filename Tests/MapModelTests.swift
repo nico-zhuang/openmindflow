@@ -12,6 +12,12 @@ enum MapModelTests {
                     location: SIMD2(320, 300))
         ], folded: false)], selected: child)
         let starting = gesture.roots
+        let idNote = MapModel(roots: starting, selected: root)
+        assert(idNote.setNote("child note", for: child) && idNote.roots[0].children[0].note == "child note" &&
+               idNote.selected == root && !idNote.setNote("child note", for: child) &&
+               !idNote.setNote(String(repeating: "界", count: 22_000), for: child) &&
+               !idNote.setNote("missing", for: UUID()) && idNote.undo() && idNote.roots == starting &&
+               !idNote.undo() && idNote.redo() && idNote.roots[0].children[0].note == "child note")
         assert(gesture.selectNodes([root, child]) && gesture.selected == child)
         assert(gesture.selectedIDs == [root, child])
         let centers: [UUID: CGPoint] = [root: CGPoint(x: 100, y: 100)]

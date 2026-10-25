@@ -26,6 +26,107 @@ import AppKit
         defaults.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         let inspector = StyleInspector(canvas: canvas, defaults: defaults)
         inspector.frame = CGRect(x: 0, y: 0, width: 280, height: 550)
+        do {
+        let model = MapModel(roots: [root], selected: rootID)
+        let noteCanvas = MapCanvas(model: model)
+        let inspector = StyleInspector(canvas: noteCanvas, defaults: defaults)
+        assert(inspector.tabs.segmentCount == 3 && (0..<3).allSatisfy {
+            inspector.tabs.image(forSegment: $0) != nil &&
+            !(inspector.tabs.toolTip(forSegment: $0) ?? "").isEmpty
+        })
+        assert(inspector.backgroundPopup.itemTitles == ["Follow System", "Light", "Dark", "More…"])
+        assert(inspector.styleScroll.hasVerticalScroller && inspector.notesScroll.hasVerticalScroller)
+        assert(inspector.themeButtons.count == 3)
+        inspector.selectNotes(for: rootID)
+        inspector.noteTextView.string = "One note"
+        assert(inspector.commitNoteEditing() && model.roots[0].note == "One note")
+        assert(inspector.commitNoteEditing() && model.undo() && model.roots[0].note == nil && !model.undo())
+        inspector.refresh()
+        if !inspector.noteTextView.string.isEmpty {
+            fputs("Model Undo must refresh the visible Notes editor on the same node\n", stderr)
+            exit(1)
+        }
+        inspector.noteTextView.string = "Original root"
+        model.selectOnly(childID)
+        inspector.refresh()
+        assert(model.roots[0].note == "Original root" && model.roots[0].children[0].note == nil)
+        assert(inspector.noteTextView.string.isEmpty)
+        inspector.noteTextView.string = String(repeating: "界", count: 22_000)
+        assert(!inspector.commitNoteEditing() && inspector.noteTextView.string.utf8.count > 65_536)
+        inspector.noteTextView.string = "Child note"
+        assert(inspector.commitNoteEditing() && model.roots[0].children[0].note == "Child note")
+        model.selectOnly(rootID)
+        assert(model.setNote("ID edit", for: childID) && model.roots[0].children[0].note == "ID edit" &&
+               model.selected == rootID && model.undo() && model.roots[0].children[0].note == "Child note")
+        model.selectOnly(rootID)
+        inspector.refresh()
+        inspector.themeButtons[0].performClick(nil)
+        assert(model.theme == InspectorTheme.tropical.rawValue && model.undo() && model.theme == nil)
+        inspector.backgroundPopup.selectItem(withTitle: "Dark")
+        inspector.changeCanvasBackground(inspector.backgroundPopup)
+        assert(model.canvasColor == "#141414FF" && model.undo() && model.canvasColor == nil)
+        inspector.rootShapePopup.selectItem(withTitle: "Rectangle")
+        inspector.changeRootShape(inspector.rootShapePopup)
+        assert(model.roots[0].rootShape == "rectangle" && model.undo())
+        inspector.rootWidthPopup.selectItem(withTitle: "Medium (240 pt)")
+        inspector.changeRootWidth(inspector.rootWidthPopup)
+        assert(model.roots[0].width == 240 && model.undo())
+        let candyPreview = inspector.themeButtons[2].image!
+        let previewBitmap = candyPreview.representations.compactMap { $0 as? NSBitmapImageRep }.first!
+        let pink = NSColor(srgbRed: 239/255, green: 23/255, blue: 96/255, alpha: 1)
+        let actual = previewBitmap.colorAt(x: 110, y: 70)!.usingColorSpace(.sRGB)!
+        let themeCanvas = MapCanvas(model: MapModel(roots: [root], selected: rootID, theme: InspectorTheme.candyland.rawValue))
+        _ = themeCanvas.model.selectNodes([]) // Selected nodes receive a blue translucent overlay.
+        themeCanvas.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        let themeBitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: themeBitmap)
+        themeCanvas.draw(themeCanvas.bounds)
+        NSGraphicsContext.current = previous
+        let themedBox = themeCanvas.frameForAccessibility(rootID)!
+        let liveColor = themeBitmap.colorAt(x: Int(themedBox.maxX - 15),
+            y: themeBitmap.pixelsHigh - Int(themedBox.midY) - 1)!.usingColorSpace(.sRGB)!
+        for expected in [pink, liveColor] {
+            if abs(actual.redComponent - expected.redComponent) >= 0.05 ||
+               abs(actual.greenComponent - expected.greenComponent) >= 0.05 ||
+               abs(actual.blueComponent - expected.blueComponent) >= 0.05 {
+                fputs("Candyland card \(actual) differs from canvas/palette \(expected)\n", stderr)
+                exit(1)
+            }
+        }
+        func matches(_ pixel: NSColor?, hex: String) -> Bool {
+            guard let pixel = pixel?.usingColorSpace(.sRGB),
+                  let rgb = UInt32(hex.dropFirst().prefix(6), radix: 16) else { return false }
+            let channels = [pixel.redComponent, pixel.greenComponent, pixel.blueComponent]
+            return zip(channels, [16, 8, 0]).allSatisfy { channel, shift in
+                abs(channel - CGFloat((rgb >> shift) & 255) / 255) < 0.06
+            }
+        }
+        for (index, theme) in InspectorTheme.allCases.enumerated() {
+            let card = inspector.themeButtons[index].image!.representations.compactMap { $0 as? NSBitmapImageRep }.first!
+            guard matches(card.colorAt(x: 110, y: 70), hex: theme.rootFill),
+                  theme.branchColors.prefix(3).allSatisfy({ hex in
+                      (0..<card.pixelsHigh).contains { y in matches(card.colorAt(x: 320, y: y), hex: hex) }
+                  }) else {
+                fputs("Theme card must show the real root and all three branch colors: \(theme)\n", stderr)
+                exit(1)
+            }
+            inspector.themeButtons[index].performClick(nil)
+            assert(model.theme == theme.rawValue && model.undo())
+        }
+        assert(inspector.tabs.toolTip(forSegment: 1) == "Notes" &&
+               !(0..<inspector.tabs.segmentCount).contains { inspector.tabs.toolTip(forSegment: $0) == "Tags" })
+        inspector.selectNotes(for: rootID)
+        assert(inspector.tabs.selectedSegment == 1 && inspector.noteTextView.string == "Original root")
+        inspector.noteTextView.string = "Original root + newest keystroke"
+        assert(noteCanvas.commitEditing() && model.roots[0].note == inspector.noteTextView.string)
+        let reopened = try! JSONDecoder().decode([MapNode].self, from: JSONEncoder().encode(model.roots))
+        assert(reopened[0].note == "Original root + newest keystroke" && model.undo())
+        inspector.refresh()
+        assert(inspector.noteTextView.string == "Original root")
+        }
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
         }
@@ -183,6 +284,10 @@ import AppKit
               inspector.colorPopup.itemTitles.suffix(1) == ["更多…"],
               inspector.colorPopup.item(withTitle: "蓝色")?.representedObject as? String == "Blue",
               inspector.colorPopup.accessibilityLabel() == "连接线颜色",
+               inspector.tabs.toolTip(forSegment: 0) == "样式",
+               inspector.tabs.toolTip(forSegment: 1) == "注释",
+               inspector.tabs.toolTip(forSegment: 2) == "主题",
+               inspector.backgroundPopup.itemTitles == ["跟随系统", "浅色", "深色", "更多…"],
               inspector.strokeWidthPopup.item(withTitle: "粗")?.representedObject as? String == "Bold",
               inspector.strokeStylePopup.item(withTitle: "虚线")?.representedObject as? String == "Dashed",
               !NSColorPanel.shared.isVisible, model.roots == unchangedRoots,

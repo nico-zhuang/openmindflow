@@ -1,6 +1,6 @@
 import AppKit
 
-final class StyleInspector: NSView {
+final class StyleInspector: NSView, NSTextViewDelegate {
     private let canvas: MapCanvas
     private let defaults: UserDefaults
     private var labels: [String: NSTextField] = [:]
@@ -18,6 +18,20 @@ final class StyleInspector: NSView {
     let colorState = NSTextField(labelWithString: "")
     let strokeWidthPopup = NSPopUpButton()
     let strokeStylePopup = NSPopUpButton()
+    let tabs = NSSegmentedControl(labels: ["", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    let styleScroll = NSScrollView()
+    let notesScroll = NSScrollView()
+    let noteTextView = NSTextView()
+    let noteStatus = NSTextField(labelWithString: "")
+    let backgroundPopup = NSPopUpButton()
+    let rootShapePopup = NSPopUpButton()
+    let rootFillPopup = NSPopUpButton()
+    let rootWidthPopup = NSPopUpButton()
+    private let themeScroll = NSScrollView()
+    private(set) var themeButtons: [NSButton] = []
+    private var noteNodeID: UUID?
+    private var loadedNote = ""
+    private var refreshing = false
 
     override var intrinsicContentSize: NSSize { NSSize(width: 280, height: NSView.noIntrinsicMetric) }
 
@@ -25,17 +39,81 @@ final class StyleInspector: NSView {
         self.canvas = canvas
         self.defaults = defaults
         super.init(frame: .zero)
+        canvas.onBeforeCommit = { [weak self] in self?.commitNoteEditing() ?? true }
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 9
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        tabs.target = self
+        tabs.action = #selector(selectPage(_:))
+        tabs.selectedSegment = 0
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tabs)
+        for page in [styleScroll, notesScroll, themeScroll] {
+            page.translatesAutoresizingMaskIntoConstraints = false
+            page.hasVerticalScroller = true
+            page.autohidesScrollers = true
+            addSubview(page)
+            NSLayoutConstraint.activate([
+                page.leadingAnchor.constraint(equalTo: leadingAnchor),
+                page.trailingAnchor.constraint(equalTo: trailingAnchor),
+                page.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 8),
+                page.bottomAnchor.constraint(equalTo: bottomAnchor)
+            ])
+        }
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 16)
+            tabs.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            tabs.centerXAnchor.constraint(equalTo: centerXAnchor),
+            tabs.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
+            tabs.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12)
         ])
+        let styleDocument = NSView()
+        styleDocument.translatesAutoresizingMaskIntoConstraints = false
+        styleScroll.documentView = styleDocument
+        styleDocument.addSubview(stack)
+        NSLayoutConstraint.activate([
+            styleDocument.widthAnchor.constraint(equalTo: styleScroll.contentView.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: styleDocument.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: styleDocument.trailingAnchor, constant: -14),
+            stack.topAnchor.constraint(equalTo: styleDocument.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: styleDocument.bottomAnchor, constant: -12)
+        ])
+        notesScroll.documentView = noteTextView
+        noteTextView.isRichText = false
+        noteTextView.isAutomaticQuoteSubstitutionEnabled = false
+        noteTextView.isAutomaticTextReplacementEnabled = false
+        noteTextView.isVerticallyResizable = true
+        noteTextView.textContainer?.widthTracksTextView = true
+        noteTextView.delegate = self
+        noteStatus.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(noteStatus)
+        NSLayoutConstraint.activate([
+            noteStatus.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            noteStatus.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            noteStatus.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5)
+        ])
+        noteStatus.setAccessibilityRole(.staticText)
+        let themes = NSStackView()
+        themes.orientation = .vertical
+        themes.spacing = 12
+        themes.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        themeScroll.documentView = themes
+        for (index, theme) in InspectorTheme.allCases.enumerated() {
+            let button = NSButton(title: theme.rawValue.capitalized, target: self, action: #selector(changeTheme(_:)))
+            button.tag = index
+            button.image = preview(for: theme)
+            button.imagePosition = .imageAbove
+            button.bezelStyle = .rounded
+            button.setAccessibilityLabel(theme.rawValue.capitalized)
+            button.widthAnchor.constraint(equalToConstant: 220).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 105).isActive = true
+            themes.addArrangedSubview(button)
+            themeButtons.append(button)
+        }
+        styleScroll.isHidden = false
+        notesScroll.isHidden = true
+        themeScroll.isHidden = true
         func section(_ title: String) {
             let label = NSTextField(labelWithString: title)
             labels[title] = label
@@ -125,6 +203,29 @@ final class StyleInspector: NSView {
         strokeStylePopup.target = self
         strokeStylePopup.action = #selector(changeStrokeStyle(_:))
         row("Line", strokeStylePopup)
+        section("ROOT")
+        rootShapePopup.addItems(withTitles: ["Rounded", "Rectangle"])
+        for item in rootShapePopup.itemArray { item.representedObject = item.title }
+        rootShapePopup.target = self
+        rootShapePopup.action = #selector(changeRootShape(_:))
+        row("Shape", rootShapePopup)
+        rootFillPopup.addItems(withTitles: ["Default", "More…"])
+        for item in rootFillPopup.itemArray { item.representedObject = item.title }
+        rootFillPopup.target = self
+        rootFillPopup.action = #selector(changeRootFill(_:))
+        row("Fill", rootFillPopup)
+        rootWidthPopup.addItems(withTitles: ["Auto", "Narrow (170 pt)", "Medium (240 pt)",
+                                             "Wide (320 pt)", "Extra Wide (480 pt)"])
+        for item in rootWidthPopup.itemArray { item.representedObject = item.title }
+        rootWidthPopup.target = self
+        rootWidthPopup.action = #selector(changeRootWidth(_:))
+        row("Fixed width", rootWidthPopup)
+        section("CANVAS")
+        backgroundPopup.addItems(withTitles: ["Follow System", "Light", "Dark", "More…"])
+        for item in backgroundPopup.itemArray { item.representedObject = item.title }
+        backgroundPopup.target = self
+        backgroundPopup.action = #selector(changeCanvasBackground(_:))
+        row("Canvas Background", backgroundPopup)
         localize()
     }
 
@@ -135,7 +236,8 @@ final class StyleInspector: NSView {
         for (key, label) in labels { label.stringValue = text(key) }
         familyPopup.item(at: 0)?.title = text("Mixed")
         familyPopup.item(at: 1)?.title = text("Unavailable")
-        for popup in [colorPopup, strokeWidthPopup, strokeStylePopup] {
+        for popup in [colorPopup, strokeWidthPopup, strokeStylePopup, rootShapePopup,
+                      rootFillPopup, rootWidthPopup, backgroundPopup] {
             for item in popup.itemArray {
                 if let key = item.representedObject as? String { item.title = text(key) }
             }
@@ -154,6 +256,21 @@ final class StyleInspector: NSView {
         colorPopup.setAccessibilityLabel(text("Connection color"))
         strokeWidthPopup.setAccessibilityLabel(text("Connection width"))
         strokeStylePopup.setAccessibilityLabel(text("Connection line style"))
+        rootShapePopup.setAccessibilityLabel(text("Root shape"))
+        rootFillPopup.setAccessibilityLabel(text("Root fill"))
+        rootWidthPopup.setAccessibilityLabel(text("Fixed width"))
+        backgroundPopup.setAccessibilityLabel(text("Canvas Background"))
+        noteTextView.setAccessibilityLabel(text("Notes"))
+        noteStatus.setAccessibilityLabel(text("Note status"))
+        for (index, pair) in [("paintbrush", "Style"), ("note.text", "Notes"),
+                              ("paintpalette", "Themes")].enumerated() {
+            tabs.setImage(NSImage(systemSymbolName: pair.0, accessibilityDescription: text(pair.1)), forSegment: index)
+            tabs.setToolTip(text(pair.1), forSegment: index)
+        }
+        for (button, theme) in zip(themeButtons, InspectorTheme.allCases) {
+            button.title = text(theme.rawValue.capitalized)
+            button.setAccessibilityLabel(button.title)
+        }
         refresh()
     }
 
@@ -178,6 +295,34 @@ final class StyleInspector: NSView {
     }
 
     func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        guard commitNoteEditing() else {
+            if let noteNodeID, canvas.model.selected != noteNodeID {
+                canvas.model.selected = noteNodeID
+                canvas.needsDisplay = true
+            }
+            return
+        }
+        let currentID = canvas.model.selectedIDs.count == 1 ? canvas.model.selected : nil
+        if noteNodeID != currentID || noteTextView.string != loadedNote ||
+           (currentID.flatMap { node($0, in: canvas.model.roots)?.note } ?? "") != loadedNote {
+            loadNote(for: currentID)
+        }
+        rootShapePopup.isEnabled = selectedNodes().count == 1 && selectedNodes().first?.1 == true
+        rootFillPopup.isEnabled = rootShapePopup.isEnabled
+        rootWidthPopup.isEnabled = rootShapePopup.isEnabled
+        let root = selectedNodes().first?.0
+        rootShapePopup.selectItem(withTitle: L10n.text(root?.rootShape == "rectangle" ? "Rectangle" : "Rounded", defaults: defaults))
+        rootFillPopup.selectItem(withTitle: L10n.text(root?.rootFillColor == nil ? "Default" : "More…", defaults: defaults))
+        let widthIndex = root?.width.flatMap { MapNode.widthPresets.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+        rootWidthPopup.selectItem(at: widthIndex)
+        backgroundPopup.selectItem(withTitle: L10n.text(canvas.model.canvasColor == nil ? "Follow System" :
+            canvas.model.canvasColor == "#FFFFFFFF" ? "Light" : canvas.model.canvasColor == "#141414FF" ? "Dark" : "More…", defaults: defaults))
+        for (button, theme) in zip(themeButtons, InspectorTheme.allCases) {
+            button.state = canvas.model.theme == theme.rawValue ? .on : .off
+        }
         func text(_ key: String) -> String { L10n.text(key, defaults: defaults) }
         let nodes = selectedNodes()
         for control: NSControl in [familyPopup, fontSizeField, fontSizeStepper, alignmentControl,
@@ -249,6 +394,161 @@ final class StyleInspector: NSView {
                                         ? style.map { $0.capitalized } ?? "Default" : "Mixed"))
     }
 
+    private func node(_ id: UUID, in nodes: [MapNode]) -> MapNode? {
+        for node in nodes {
+            if node.id == id { return node }
+            if let child = self.node(id, in: node.children) { return child }
+        }
+        return nil
+    }
+
+    private func loadNote(for id: UUID?) {
+        noteNodeID = id
+        loadedNote = id.flatMap { node($0, in: canvas.model.roots)?.note } ?? ""
+        noteTextView.string = loadedNote
+        noteTextView.isEditable = id != nil
+        noteStatus.stringValue = ""
+    }
+
+    @discardableResult
+    func commitNoteEditing() -> Bool {
+        guard let id = noteNodeID else { return true }
+        let value = noteTextView.string
+        guard value != loadedNote else { return true }
+        guard value.utf8.count <= 65_536, canvas.model.setNote(value, for: id) else {
+            noteStatus.stringValue = L10n.text("Note exceeds 64 KiB or document limit", defaults: defaults)
+            noteStatus.setAccessibilityValue(noteStatus.stringValue)
+            window?.makeFirstResponder(noteTextView)
+            return false
+        }
+        loadedNote = value
+        noteStatus.stringValue = ""
+        canvas.needsDisplay = true
+        canvas.onChange?()
+        return true
+    }
+
+    @discardableResult
+    func selectNotes(for id: UUID) -> Bool {
+        guard canvas.commitEditing(), commitNoteEditing(), canvas.model.selectedIDs == [id] else { return false }
+        loadNote(for: id)
+        tabs.selectedSegment = 1
+        showPage()
+        window?.makeFirstResponder(noteTextView)
+        return true
+    }
+
+    @objc private func selectPage(_ sender: NSSegmentedControl) {
+        guard canvas.commitEditing(), commitNoteEditing() else {
+            sender.selectedSegment = notesScroll.isHidden ? (themeScroll.isHidden ? 0 : 2) : 1
+            return
+        }
+        showPage()
+    }
+
+    private func showPage() {
+        styleScroll.isHidden = tabs.selectedSegment != 0
+        notesScroll.isHidden = tabs.selectedSegment != 1
+        themeScroll.isHidden = tabs.selectedSegment != 2
+        noteStatus.isHidden = tabs.selectedSegment != 1
+    }
+
+    private func ready() -> Bool { canvas.commitEditing() && commitNoteEditing() }
+
+    @objc func changeCanvasBackground(_ sender: Any?) {
+        guard ready(), let choice = backgroundPopup.selectedItem?.representedObject as? String else { refresh(); return }
+        if choice == "More…" {
+            let panel = NSColorPanel.shared
+            panel.setTarget(self)
+            panel.setAction(#selector(changeCanvasPanelColor(_:)))
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            changed(canvas.model.setCanvasColor(["Light": "#FFFFFFFF", "Dark": "#141414FF"][choice]))
+        }
+    }
+    @objc private func changeCanvasPanelColor(_ sender: NSColorPanel) {
+        guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
+        changed(canvas.model.setCanvasColor(Self.hex(color)))
+    }
+    private static func hex(_ color: NSColor) -> String {
+        "#" + [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
+            .map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
+    }
+    @objc func changeRootShape(_ sender: Any?) {
+        guard ready() else { return }
+        changed(canvas.model.setRootShape(rootShapePopup.selectedItem?.representedObject as? String == "Rectangle" ? "rectangle" : "rounded"))
+    }
+    @objc private func changeRootFill(_ sender: Any?) {
+        guard ready() else { return }
+        if rootFillPopup.selectedItem?.representedObject as? String == "More…" {
+            let panel = NSColorPanel.shared
+            panel.setTarget(self)
+            panel.setAction(#selector(changeRootPanelColor(_:)))
+            panel.makeKeyAndOrderFront(nil)
+        } else { changed(canvas.model.setRootFillColor(nil)) }
+    }
+    @objc private func changeRootPanelColor(_ sender: NSColorPanel) {
+        guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
+        changed(canvas.model.setRootFillColor(Self.hex(color)))
+    }
+    @objc func changeRootWidth(_ sender: Any?) {
+        guard ready() else { return }
+        let index = rootWidthPopup.indexOfSelectedItem
+        changed(canvas.model.setWidth(index == 0 ? nil : MapNode.widthPresets[index - 1]))
+    }
+    @objc private func changeTheme(_ sender: NSButton) {
+        guard ready() else { return }
+        changed(canvas.model.setTheme(InspectorTheme.allCases[sender.tag].rawValue))
+    }
+    private func preview(for theme: InspectorTheme) -> NSImage {
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 392, pixelsHigh: 144,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        let scale = AffineTransform(scaleByX: 2, byY: 2)
+        NSAffineTransform(transform: scale).concat()
+        NSColor.windowBackgroundColor.setFill()
+        NSRect(x: 0, y: 0, width: 196, height: 72).fill()
+        let root = NSBezierPath(roundedRect: NSRect(x: 3, y: 21, width: 65, height: 30), xRadius: 5, yRadius: 5)
+        Self.color(theme.rootFill)?.setFill()
+        root.fill()
+        NSColor.secondaryLabelColor.setStroke()
+        root.stroke()
+        let title: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.labelColor]
+        let rootTitle = title.merging([.foregroundColor: NSColor.black]) { _, chosen in chosen }
+        ("Central" as NSString).draw(at: NSPoint(x: 12, y: 30), withAttributes: rootTitle)
+        for index in 0..<3 {
+            let y = CGFloat(12 + index * 23)
+            let stroke = Self.color(theme.branchColors[index]) ?? .systemTeal
+            stroke.setStroke()
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: 68, y: 36))
+            line.curve(to: NSPoint(x: 112, y: y), controlPoint1: NSPoint(x: 90, y: 36), controlPoint2: NSPoint(x: 90, y: y))
+            line.line(to: NSPoint(x: 180, y: y))
+            line.lineWidth = 2.5
+            line.stroke()
+            ("Idea" as NSString).draw(at: NSPoint(x: 120, y: y + 2), withAttributes: title)
+        }
+        NSGraphicsContext.current = previous
+        bitmap.size = NSSize(width: 196, height: 72)
+        let image = NSImage(size: bitmap.size)
+        image.addRepresentation(bitmap)
+        return image
+    }
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                  replacementString: String?) -> Bool {
+        let result = (textView.string as NSString).replacingCharacters(in: affectedCharRange, with: replacementString ?? "")
+        guard result.utf8.count <= 65_536 else {
+            noteStatus.stringValue = L10n.text("Note exceeds 64 KiB or document limit", defaults: defaults)
+            noteStatus.setAccessibilityValue(noteStatus.stringValue)
+            return false
+        }
+        noteStatus.stringValue = ""
+        return true
+    }
+
     private func changed(_ didChange: Bool) {
         guard didChange else { refresh(); return }
         canvas.needsDisplay = true
@@ -257,24 +557,24 @@ final class StyleInspector: NSView {
     }
 
     @objc func changeFontFamily(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         guard let family = familyPopup.selectedItem?.representedObject as? String else { refresh(); return }
         changed(canvas.model.setFont(family: family))
     }
     @objc func changeFontSize(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         if sender as? NSStepper === fontSizeStepper { fontSizeField.stringValue = "\(fontSizeStepper.doubleValue)" }
         guard let size = Double(fontSizeField.stringValue) else { refresh(); return }
         changed(canvas.model.setFont(size: size))
     }
     @objc func changeAlignment(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         let names = ["left", "center", "right", "justify"]
         guard names.indices.contains(alignmentControl.selectedSegment) else { return }
         changed(canvas.model.setAlignment(names[alignmentControl.selectedSegment]))
     }
     @objc func changeColorSelection(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         guard let choice = colorPopup.selectedItem?.representedObject as? String else { return }
         if choice == "More…" {
             refresh() // Opening the color panel does not itself change the selection or create undo.
@@ -289,14 +589,14 @@ final class StyleInspector: NSView {
         } else { refresh() }
     }
     @objc func changeStrokeColor(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         guard let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
         let components = [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
         let hex = "#" + components.map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
         changed(canvas.model.setBranchStroke(color: hex))
     }
     @objc func changeStrokeWidth(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         guard let choice = strokeWidthPopup.selectedItem?.representedObject as? String else { return }
         if choice == "Default" { changed(canvas.model.resetStrokeWidth()) }
         else if let width = Self.widths.first(where: { $0.0 == choice })?.1 {
@@ -304,7 +604,7 @@ final class StyleInspector: NSView {
         } else { refresh() }
     }
     @objc func changeStrokeStyle(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard ready() else { return }
         guard let value = (strokeStylePopup.selectedItem?.representedObject as? String)?.lowercased() else { return }
         if value == "default" { changed(canvas.model.resetStrokeStyle()) }
         else if value == "solid" || value == "dashed" {

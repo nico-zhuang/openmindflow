@@ -99,6 +99,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     var onChange: (() -> Void)?
     var onSelectionChange: (() -> Void)?
+    var onBeforeCommit: (() -> Bool)?
+    var onEditNote: ((UUID) -> Void)?
     var onImageError: ((Error) -> Void)?
     var onVideoError: ((Error) -> Void)?
     var localizationDefaults: UserDefaults = .standard
@@ -1030,6 +1032,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     @discardableResult
     func commitEditing() -> Bool {
+        guard onBeforeCommit?() ?? true else { return false }
         guard let field = editor else { return true }
         let title = field.stringValue
         if let node = selectedNode(), node.node.title != title {
@@ -1221,8 +1224,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if model.arrange(at: positions) { changed(); _ = fitMapInView() }
     }
     func contextMenu(for id: UUID?) -> NSMenu {
-        if let id, !model.selectedIDs.contains(id) { selectNode(id) }
-        else { guard commitEditing() else { return NSMenu() } }
+        if let id, !model.selectedIDs.contains(id) {
+            guard selectNode(id) else { return NSMenu() }
+        } else { guard commitEditing() else { return NSMenu() } }
         guard editor == nil else { return NSMenu() }
         let menu = NSMenu()
         func add(_ title: String, _ tag: Int) {
@@ -1233,6 +1237,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if let node = visibleNodes().first(where: { $0.node.id == id }) {
             if model.selectedIDs.count == 2 { add("Create Relationship", 30) }
             add("Edit Title", 0)
+            add("Edit Note", 37)
             add("Copy", 21)
             add("Font…", 16)
             add("New Child", 1)
@@ -1322,6 +1327,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     @objc private func contextCommand(_ item: NSMenuItem) {
         switch item.tag {
         case 0: beginEditing()
+        case 37: if commitEditing(), model.selectedIDs.count == 1 { onEditNote?(model.selected) }
         case 1: addChild()
         case 2: addSibling()
         case 3: addMainNode()
@@ -1826,8 +1832,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         alert.alertStyle = .warning
         alert.runModal()
     }
+    private func commitPendingEditors() -> Bool {
+        canvas.commitEditing() && inspector.commitNoteEditing()
+    }
     private func confirmDiscardOrSave() -> Bool {
-        guard canvas.commitEditing() else { return false }
+        guard commitPendingEditors() else { return false }
         guard dirty else { return true }
         let prompt = NSAlert()
         prompt.messageText = t("Save changes to this map?")
@@ -1842,6 +1851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
     }
     @objc private func openFile(_ sender: Any?) {
+        guard commitPendingEditors() else { return }
         let panel = NSOpenPanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -1882,6 +1892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         } catch { alert("Could not open map", detail: error.localizedDescription) }
     }
     @objc private func openMindNode(_ sender: Any?) {
+        guard commitPendingEditors() else { return }
         let panel = NSOpenPanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -1972,7 +1983,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         catch { alert("Could not import video", detail: error.localizedDescription) }
     }
     @objc private func exportMindNodeCopy(_ sender: Any?) {
-        guard canvas.commitEditing() else { return }
+        guard commitPendingEditors() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -1998,7 +2009,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         export(.markdown, extension: "md", type: UTType(filenameExtension: "md") ?? .plainText)
     }
     private func export(_ format: MapExportFormat, extension suffix: String, type: UTType) {
-        guard canvas.commitEditing() else { return }
+        guard commitPendingEditors() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -2015,7 +2026,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     private func save() -> Bool {
-        guard canvas.commitEditing() else { return false }
+        guard commitPendingEditors() else { return false }
         var destination = fileURL
         if destination == nil {
             let panel = NSSavePanel()
@@ -2057,8 +2068,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             return false
         }
     }
-    @objc private func undoEdit(_ sender: Any?) { canvas.undo() }
-    @objc private func redoEdit(_ sender: Any?) { canvas.redo() }
+    @objc private func undoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.undo() } }
+    @objc private func redoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.redo() } }
     @objc private func newChild(_ sender: Any?) { canvas.addChild() }
     @objc private func newSibling(_ sender: Any?) { canvas.addSibling() }
     @objc private func newSiblingBefore(_ sender: Any?) { canvas.addSibling(before: true) }
@@ -2085,7 +2096,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if item.isCollapsed { window?.makeFirstResponder(canvas) }
     }
     @objc private func toggleOutline(_ sender: Any?) { togglePane(at: 0) }
-    @objc private func toggleStyle(_ sender: Any?) { togglePane(at: 2) }
+    @objc private func toggleStyle(_ sender: Any?) {
+        guard !splitController.splitViewItems[2].isCollapsed ? commitPendingEditors() : true else { return }
+        togglePane(at: 2)
+    }
 
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
         self.canvas = canvas
@@ -2105,6 +2119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         split.addSplitViewItem(NSSplitViewItem(viewController: canvasController))
         let inspectorController = NSViewController()
         inspector = StyleInspector(canvas: canvas, defaults: defaults)
+        canvas.onEditNote = { [weak self] id in
+            guard let self, self.canvas.model.selectedIDs == [id] else { return }
+            if self.splitController.splitViewItems[2].isCollapsed { self.togglePane(at: 2) }
+            _ = self.inspector.selectNotes(for: id)
+        }
         inspectorController.view = inspector
         let style = NSSplitViewItem(viewController: inspectorController)
         style.canCollapse = true

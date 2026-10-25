@@ -98,7 +98,12 @@ enum CanvasCommandTests {
         let budgetInspector = StyleInspector(canvas: budgetCanvas)
         budgetInspector.strokeStylePopup.selectItem(withTitle: "Dashed")
         budgetInspector.changeStrokeStyle(budgetInspector.strokeStylePopup)
-        if budgetModel.roots != [budgetRoot] || budgetField.superview !== budgetCanvas ||
+        budgetInspector.rootShapePopup.selectItem(withTitle: "Rectangle")
+        budgetInspector.changeRootShape(budgetInspector.rootShapePopup)
+        budgetInspector.backgroundPopup.selectItem(withTitle: "Dark")
+        budgetInspector.changeCanvasBackground(budgetInspector.backgroundPopup)
+        budgetInspector.themeButtons[0].performClick(nil)
+        if budgetModel.roots != [budgetRoot] || budgetModel.canvasColor != nil || budgetModel.theme != nil || budgetField.superview !== budgetCanvas ||
            (budgetWindow.firstResponder !== budgetField && budgetWindow.firstResponder !== budgetField.currentEditor()) {
             fputs("Inspector setter must abort rejected title\n", stderr)
             exit(1)
@@ -179,8 +184,47 @@ enum CanvasCommandTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
-              rightMenu.items.map(\.title) == ["Edit Title", "Copy", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
+              rightMenu.items.map(\.title) == ["Edit Title", "Edit Note", "Copy", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
             fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
+        }
+        var noteTarget: UUID?
+        rightCanvas.onEditNote = { noteTarget = $0 }
+        let editNote = rightMenu.item(withTitle: "Edit Note")!
+        assert(NSApp.sendAction(editNote.action!, to: editNote.target, from: editNote) && noteTarget == rightB.id)
+        let noteDelegate = AppDelegate()
+        let noteWorkbench = noteDelegate.makeWorkbench(canvas: rightCanvas)
+        let noteWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 600),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+        noteWindow.contentViewController = noteWorkbench // Owned synthetic window, never shown.
+        assert(noteWorkbench.splitViewItems[2].isCollapsed)
+        assert(NSApp.sendAction(editNote.action!, to: editNote.target, from: editNote))
+        let noteInspector = noteWorkbench.splitViewItems[2].viewController.view as! StyleInspector
+        assert(!noteWorkbench.splitViewItems[2].isCollapsed && noteInspector.tabs.selectedSegment == 1 &&
+               noteWindow.firstResponder === noteInspector.noteTextView && rightModel.selected == rightB.id)
+        do {
+            let subject = MapNode(id: UUID(), title: "Note target", children: [], folded: false)
+            let survivor = MapNode(id: UUID(), title: "Other", children: [], folded: false)
+            let original = MapNode(id: UUID(), title: "Root", children: [subject, survivor], folded: false)
+            let noteModel = MapModel(roots: [original], selected: subject.id)
+            let noteCanvas = MapCanvas(model: noteModel)
+            let noteInspector = StyleInspector(canvas: noteCanvas)
+            assert(noteInspector.selectNotes(for: subject.id))
+            noteInspector.noteTextView.string = String(repeating: "界", count: 22_000)
+            let blocked = noteCanvas.contextMenu(for: subject.id)
+            let blockedOther = noteCanvas.contextMenu(for: survivor.id)
+            if !blocked.items.isEmpty || !blockedOther.items.isEmpty ||
+               noteModel.selected != subject.id || noteModel.roots != [original] {
+                fputs("Invalid pending note must block destructive node commands\n", stderr)
+                exit(1)
+            }
+            noteInspector.noteTextView.string = "Latest note"
+            let deletion = noteCanvas.contextMenu(for: subject.id).item(withTitle: "Delete")!
+            assert(NSApp.sendAction(deletion.action!, to: deletion.target, from: deletion))
+            if noteModel.roots[0].children.count != 1 || !noteModel.undo() ||
+               noteModel.roots[0].children[0].note != "Latest note" {
+                fputs("Deleting a node must first commit its pending note so Undo restores it\n", stderr)
+                exit(1)
+            }
         }
         let editTitle = rightMenu.item(withTitle: "Edit Title")!
         assert(NSApp.sendAction(editTitle.action!, to: editTitle.target, from: editTitle) &&

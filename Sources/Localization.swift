@@ -97,6 +97,12 @@ enum L10n {
         "Unavailable: %@": "不可用：%@",
         "No selection": "未选中节点", "More…": "更多…",
         "Teal": "青绿", "Blue": "蓝色", "Coral": "珊瑚色", "Gold": "金色", "Gray": "灰色",
-        "Hairline": "极细", "Thin": "细", "Medium": "中等", "Bold": "粗", "Heavy": "极粗"
+        "Hairline": "极细", "Thin": "细", "Medium": "中等", "Bold": "粗", "Heavy": "极粗",
+        "Edit Note": "编辑注释", "Style": "样式", "Notes": "注释", "Themes": "主题",
+        "Note status": "注释状态", "Note exceeds 64 KiB or document limit": "注释超过 64 KiB 或文稿大小上限",
+        "ROOT": "主节点", "CANVAS": "画布", "Rounded": "圆角", "Rectangle": "矩形",
+        "Shape": "形状", "Root shape": "主节点形状", "Fill": "填充", "Root fill": "主节点填充",
+        "Fixed width": "固定宽度", "Canvas Background": "画布背景",
+        "Tropical": "热带", "Rainbow": "彩虹", "Candyland": "糖果乐园"
     ]
 }

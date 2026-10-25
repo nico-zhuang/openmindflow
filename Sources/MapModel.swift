@@ -697,6 +697,19 @@ final class MapModel {
     }
 
     @discardableResult
+    func setNote(_ text: String, for id: UUID) -> Bool {
+        guard text.utf8.count <= 65_536, let path = Self.path(to: id, in: roots) else { return false }
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
+            nodes[index].note = text.isEmpty ? nil : text
+        }
+        guard updated != roots, fitsSavedJSON(updated, relationships: relationships) else { return false }
+        save()
+        roots = updated
+        return true
+    }
+
+    @discardableResult
     func setRootShape(_ value: String?) -> Bool {
         guard value.map({ ["rectangle", "rounded"].contains($0) }) ?? true,
               selectedPaths().allSatisfy({ $0.count == 1 }) else { return false }
