@@ -61,6 +61,70 @@ import AppKit
                 fputs("Branch label needs a visible horizontal line under its text\n", stderr); exit(1)
             }
         }
+        let rootStyled = MapCanvas(model: MapModel(roots: [root], selected: root.id))
+        rootStyled.frame = canvas.frame
+        rootStyled.appearance = NSAppearance(named: .darkAqua)
+        rootStyled.branchStyles = [child.id: MindNodeVisualStyle(rgba: [0, 0.8, 0, 1], width: 3)]
+        func styledBitmap() -> NSBitmapImageRep {
+            rootStyled.needsDisplay = true
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 400,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let previous = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            rootStyled.effectiveAppearance.performAsCurrentDrawingAppearance { rootStyled.draw(rootStyled.bounds) }
+            NSGraphicsContext.current = previous
+            return bitmap
+        }
+        func connector(_ bitmap: NSBitmapImageRep, _ item: LaidOutNode, offset: Int = 0) -> NSColor? {
+            let start = nodes[0].frame, end = item.frame
+            let x = Int((start.maxX + end.minX) / 2 + 80)
+            let y = Int((start.midY + end.maxY - 7) / 2 + 90) + offset
+            return bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)
+        }
+        let beforeRootStyle = styledBitmap()
+        assert(rootStyled.model.setBranchStroke(width: 12, color: "#E10000FF", style: "solid"))
+        let afterRootStyle = styledBitmap()
+        let rootRed = NSColor(srgbRed: 225/255, green: 0, blue: 0, alpha: 1)
+        guard similar(connector(afterRootStyle, nodes[1], offset: 4), rootRed, tolerance: 0.12) &&
+              !similar(connector(beforeRootStyle, nodes[1], offset: 4), rootRed, tolerance: 0.12) else {
+            fputs("Root outgoing color/width after=\(rgba(connector(afterRootStyle, nodes[1], offset: 4))) before=\(rgba(connector(beforeRootStyle, nodes[1], offset: 4))) center=\(rgba(connector(afterRootStyle, nodes[1])))\n", stderr)
+            exit(1)
+        }
+        var explicitRoot = rootStyled.model.roots[0]
+        explicitRoot.strokeStyle = "dashed"
+        explicitRoot.children[1].branchStrokeColor = "#0000E1FF"
+        explicitRoot.children[1].branchStrokeWidth = 2
+        explicitRoot.children[1].strokeStyle = "solid"
+        rootStyled.model.roots = [explicitRoot]
+        let overridden = styledBitmap()
+        guard similar(connector(overridden, nodes[2]), NSColor(srgbRed: 0, green: 0, blue: 225/255, alpha: 1), tolerance: 0.12) &&
+              similar(connector(overridden, nodes[2], offset: 7), overridden.colorAt(x: 2, y: 2)) else {
+            fputs("Child override center=\(rgba(connector(overridden, nodes[2]))) outer=\(rgba(connector(overridden, nodes[2], offset: 7))) blank=\(rgba(overridden.colorAt(x: 2, y: 2)))\n", stderr)
+            exit(1)
+        }
+        var dashedRoot = explicitRoot
+        dashedRoot.strokeStyle = "solid"
+        rootStyled.model.roots = [dashedRoot]
+        let solid = styledBitmap()
+        rootStyled.model.roots = [explicitRoot]
+        let dashed = styledBitmap()
+        let connectorSamples = (1...35).map { step -> (NSColor?, NSColor?, NSColor?) in
+            let start = nodes[0].frame, end = nodes[1].frame
+            let t = CGFloat(step) / 36, factor = 3*t*t - 2*t*t*t
+            let x = Int(start.maxX + (end.minX - start.maxX) * factor + 80)
+            let y = Int(start.midY + (end.maxY - 7 - start.midY) * factor + 90)
+            let other = nodes[2].frame
+            let childX = Int(start.maxX + (other.minX - start.maxX) * factor + 80)
+            let childY = Int(start.midY + (other.maxY - 7 - start.midY) * factor + 90)
+            return (dashed.colorAt(x: x, y: dashed.pixelsHigh - y - 1),
+                    solid.colorAt(x: x, y: solid.pixelsHigh - y - 1),
+                    dashed.colorAt(x: childX, y: dashed.pixelsHigh - childY - 1))
+        }
+        assert(connectorSamples.contains { !similar($0.0, rootRed, tolerance: 0.15) &&
+               similar($0.1, rootRed, tolerance: 0.15) &&
+               similar($0.2, NSColor(srgbRed: 0, green: 0, blue: 225/255, alpha: 1), tolerance: 0.15) },
+               "Root dash creates a gap while child's explicit solid connector does not")
         var chain = MapNode(id: UUID(), title: "Level 5", children: [], folded: false)
         for depth in (1..<5).reversed() {
             chain = MapNode(id: UUID(), title: "Level \(depth)", children: [chain], folded: false)

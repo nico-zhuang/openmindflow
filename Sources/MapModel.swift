@@ -740,9 +740,10 @@ final class MapModel {
     @discardableResult
     func resetStrokeWidth() -> Bool { editSelected { $0.branchStrokeWidth = nil } }
 
-    func rename(_ title: String, initialWidth: CGFloat? = nil) {
-        guard let path = Self.path(to: selected, in: roots),
-              Self.node(at: path[...], in: roots).title != title else { return }
+    @discardableResult
+    func rename(_ title: String, initialWidth: CGFloat? = nil) -> Bool {
+        guard let path = Self.path(to: selected, in: roots) else { return false }
+        guard Self.node(at: path[...], in: roots).title != title else { return true }
         let firstWidth = pendingInitialWidth.contains(selected) && !title.isEmpty &&
             Self.node(at: path[...], in: roots).width == nil &&
             (initialWidth.map(MapNode.validWidth) ?? false) ? initialWidth : nil
@@ -751,10 +752,11 @@ final class MapModel {
             nodes[index].title = title
             if let firstWidth { nodes[index].width = firstWidth }
         }
-        guard fitsSavedJSON(updated, relationships: relationships) else { return }
+        guard fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         if !title.isEmpty { pendingInitialWidth.remove(selected) }
+        return true
     }
 
     @discardableResult

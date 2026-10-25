@@ -27,6 +27,35 @@ enum CanvasCommandTests {
         assert(blankChanges == afterInsert + 1 && blank.roots.count == 1)
         blankCanvas.keyDown(with: delete)
         assert(blankChanges == afterInsert + 1, "Second Delete is a no-op")
+        // A folded child hides its huge grandchild from AppKit layout while JSON nears the cap.
+        let hidden = MapNode(id: UUID(), title: String(repeating: "x", count: MapModel.maxSavedJSONBytes - 2_000), children: [], folded: false)
+        let folded = MapNode(id: UUID(), title: "Folded", children: [hidden], folded: true)
+        let sibling = MapNode(id: UUID(), title: "Visible", children: [], folded: false)
+        var budgetRoot = MapNode(id: UUID(), title: "R", children: [folded, sibling], folded: false)
+        let spare = MapModel.maxSavedJSONBytes - (try! JSONEncoder().encode([budgetRoot])).count
+        assert(spare > 64 && spare < 2_000)
+        budgetRoot.children[0].children[0].title += String(repeating: "x", count: spare - 24)
+        let budgetModel = MapModel(roots: [budgetRoot], selected: budgetRoot.id)
+        let budgetCanvas = MapCanvas(model: budgetModel)
+        budgetCanvas.frame = CGRect(x: 0, y: 0, width: 900, height: 500)
+        budgetCanvas.selectAndEdit(budgetRoot.id)
+        let budgetField = budgetCanvas.subviews.compactMap { $0 as? NSTextField }.first!
+        let rejectedTitle = String(repeating: "Overflow", count: 8)
+        budgetField.stringValue = rejectedTitle
+        assert(!budgetCanvas.commitEditing() && budgetField.superview === budgetCanvas &&
+               budgetField.stringValue == rejectedTitle && budgetModel.roots == [budgetRoot] &&
+               !budgetModel.undo(), "Rejected title stays editable and creates no Undo")
+        budgetCanvas.selectNode(sibling.id)
+        budgetCanvas.selectAndEdit(sibling.id)
+        budgetCanvas.addChild()
+        budgetCanvas.undo()
+        assert(budgetModel.selected == budgetRoot.id && budgetModel.roots == [budgetRoot] &&
+               budgetField.superview === budgetCanvas && budgetField.stringValue == rejectedTitle,
+               "Selection, insertion and Undo must abort before a rejected title is lost")
+        budgetField.stringValue = "Short"
+        assert(budgetCanvas.commitEditing() && budgetModel.roots[0].title == "Short" &&
+               budgetModel.undo() && budgetModel.roots == [budgetRoot] && !budgetModel.undo(),
+               "Shortening the title commits in one Undo")
         let rootID = UUID(), childID = UUID()
         let model = MapModel(roots: [MapNode(id: rootID, title: "Root", children: [
             MapNode(id: childID, title: "Existing", children: [], folded: false)

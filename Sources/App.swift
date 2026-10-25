@@ -272,11 +272,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     @objc override func selectAll(_ sender: Any?) {
-        commitEditing()
+        guard commitEditing() else { return }
         if model.selectNodes(Set(visibleNodes().map(\.node.id))) { needsDisplay = true }
     }
     func selectNode(_ id: UUID) {
-        commitEditing()
+        guard commitEditing() else { return }
         guard visibleNodes().contains(where: { $0.node.id == id }) else { return }
         model.selected = id
         revealSelection()
@@ -289,7 +289,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         beginEditing()
     }
     func showSearchResult(_ id: UUID) {
-        commitEditing()
+        guard commitEditing() else { return }
         let expanded = model.revealSearchResult(id)
         if expanded { changed() }
         else { revealSelection(); needsDisplay = true }
@@ -774,13 +774,25 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if theme == nil, let rgba = branchStyles[item.node.id]?.rgba, rgba.count == 4 {
                 color[item.node.id] = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
             }
+            if level == 1, item.node.branchStrokeColor == nil,
+               let root = nodes.first(where: { $0.node.id == item.parent }),
+               let hex = root.node.branchStrokeColor, let stroke = strokeColor(hex) {
+                color[item.node.id] = stroke
+            }
             if let hex = item.node.branchStrokeColor, let stroke = strokeColor(hex) {
                 color[item.node.id] = stroke
             }
         }
+        func rootStyle(_ item: LaidOutNode) -> MapNode? {
+            guard depth[item.node.id] == 1 else { return nil }
+            return nodes.first(where: { $0.node.id == item.parent })?.node
+        }
         func strokeWidth(_ item: LaidOutNode) -> CGFloat {
             let fallback: CGFloat = item.parent == nil ? 4 : CGFloat(max(2, 7 - (depth[item.node.id] ?? 1)))
-            return max(0.75, (item.node.branchStrokeWidth ?? branchStyles[item.node.id]?.width ?? fallback) * zoom)
+            return max(0.75, (item.node.branchStrokeWidth ?? rootStyle(item)?.branchStrokeWidth ?? branchStyles[item.node.id]?.width ?? fallback) * zoom)
+        }
+        func dashed(_ item: LaidOutNode) -> Bool {
+            (item.node.strokeStyle ?? rootStyle(item)?.strokeStyle) == "dashed"
         }
         func baseline(_ box: CGRect) -> CGFloat { box.maxY - 7 * zoom }
         for item in nodes {
@@ -794,7 +806,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                        controlPoint2: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(end)))
             line.lineWidth = strokeWidth(item)
             line.lineCapStyle = .round
-            if item.node.strokeStyle == "dashed" { line.setLineDash([max(8 * zoom, line.lineWidth * 2),
+            if dashed(item) { line.setLineDash([max(8 * zoom, line.lineWidth * 2),
                 max(6 * zoom, line.lineWidth * 1.6)], count: 2, phase: 0) }
             (color[item.node.id] ?? .systemTeal).setStroke()
             line.stroke()
@@ -856,7 +868,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 path.line(to: CGPoint(x: lineEnd, y: baseline(box)))
                 path.lineWidth = strokeWidth(item) + (hovered ? 1 : 0)
                 path.lineCapStyle = .round
-                if item.node.strokeStyle == "dashed" { path.setLineDash([max(8 * zoom, path.lineWidth * 2),
+                if dashed(item) { path.setLineDash([max(8 * zoom, path.lineWidth * 2),
                     max(6 * zoom, path.lineWidth * 1.6)], count: 2, phase: 0) }
                 (hovered ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
                 path.stroke()
@@ -1015,10 +1027,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         editor = nil
         window?.makeFirstResponder(self)
     }
-    func commitEditing() {
-        guard let field = editor else { return }
+    @discardableResult
+    func commitEditing() -> Bool {
+        guard let field = editor else { return true }
         let title = field.stringValue
-        endEditingWithoutSaving()
         if let node = selectedNode(), node.node.title != title {
             let face = font(for: node.node, isRoot: node.parent == nil)
             let longest = title.components(separatedBy: "\n").map {
@@ -1026,24 +1038,26 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }.max() ?? 0
             let compact = localizationDefaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
                 localizationDefaults.bool(forKey: "shrinkNewNodesToFitContent")
-            model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil)
+            guard model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil) else { return false }
+            endEditingWithoutSaving()
             changed()
-        } else { needsDisplay = true }
+        } else { endEditingWithoutSaving(); needsDisplay = true }
+        return true
     }
     private func changed() { revealSelection(); needsDisplay = true; onChange?() }
-    func addChild() { commitEditing(); let old = model.selected; model.addChild(); if old != model.selected { changed(); beginEditing() } }
-    func addSibling(before: Bool = false) { commitEditing(); let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
-    func addParent() { commitEditing(); let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
-    func addMainNode() { commitEditing(); let old = model.selected; model.addMainNode(); if old != model.selected { changed(); beginEditing() } }
+    func addChild() { guard commitEditing() else { return }; let old = model.selected; model.addChild(); if old != model.selected { changed(); beginEditing() } }
+    func addSibling(before: Bool = false) { guard commitEditing() else { return }; let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
+    func addParent() { guard commitEditing() else { return }; let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
+    func addMainNode() { guard commitEditing() else { return }; let old = model.selected; model.addMainNode(); if old != model.selected { changed(); beginEditing() } }
     func insertImageData(_ data: Data) throws {
         let image = try MapImage(data: data)
-        commitEditing()
+        guard commitEditing() else { throw OwnJSONError.tooLarge }
         guard model.addImageChild(image) else { throw OwnJSONError.tooLarge }
         changed()
     }
     func insertVideoData(_ data: Data) throws {
         let video = try MapVideo(data: data)
-        commitEditing()
+        guard commitEditing() else { throw OwnJSONError.tooLarge }
         guard model.addVideoChild(video) else { throw OwnJSONError.tooLarge }
         changed()
     }
@@ -1097,7 +1111,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     @discardableResult
     func copySelection(to pasteboard: NSPasteboard) -> Bool {
-        commitEditing()
+        guard commitEditing() else { return false }
         let centers = Dictionary(uniqueKeysWithValues: visibleNodes().map {
             ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
         })
@@ -1113,7 +1127,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard let data = pasteboard.data(forType: Self.groupPasteboardType),
               data.count <= MapModel.maxSavedJSONBytes,
               let clip = try? JSONDecoder().decode(MapSelectionClip.self, from: data) else { return false }
-        commitEditing()
+        guard commitEditing() else { return false }
         let world = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
         guard model.pasteSelection(clip, at: world) else { return false }
         changed()
@@ -1136,10 +1150,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             editor?.currentEditor()?.insertText(text)
         }
     }
-    func detachSelected() { commitEditing(); if model.detachSelected() { changed() } }
-    func undo() { commitEditing(); if model.undo() { changed() } }
-    func redo() { commitEditing(); if model.redo() { changed() } }
-    func toggleFold() { commitEditing(); if model.toggleFold() { changed() } }
+    func detachSelected() { guard commitEditing() else { return }; if model.detachSelected() { changed() } }
+    func undo() { guard commitEditing() else { return }; if model.undo() { changed() } }
+    func redo() { guard commitEditing() else { return }; if model.redo() { changed() } }
+    func toggleFold() { guard commitEditing() else { return }; if model.toggleFold() { changed() } }
 
     private func performNodeShortcut(_ command: String) -> Bool {
         switch command {
@@ -1148,7 +1162,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case "new-sibling-before": addSibling(before: true)
         case "new-main": addMainNode()
         case "new-parent": addParent()
-        case "edit-title": editor == nil ? beginEditing() : commitEditing()
+        case "edit-title": if editor == nil { beginEditing() } else { _ = commitEditing() }
         default: return false
         }
         return true
@@ -1183,7 +1197,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) { commitEditing() }
 
     func arrangeMap() {
-        commitEditing()
+        guard commitEditing() else { return }
         func unfolded(_ nodes: [MapNode]) -> [MapNode] {
             nodes.map { node in
                 var copy = node
@@ -1198,7 +1212,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if model.arrange(at: positions) { changed(); _ = fitMapInView() }
     }
     func contextMenu(for id: UUID?) -> NSMenu {
-        if let id, !model.selectedIDs.contains(id) { selectNode(id) } else { commitEditing() }
+        if let id, !model.selectedIDs.contains(id) { selectNode(id) }
+        else { guard commitEditing() else { return NSMenu() } }
+        guard editor == nil else { return NSMenu() }
         let menu = NSMenu()
         func add(_ title: String, _ tag: Int) {
             let item = menu.addItem(withTitle: t(title), action: #selector(contextCommand(_:)), keyEquivalent: "")
@@ -1298,9 +1314,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 2: addSibling()
         case 3: addMainNode()
         case 4: toggleFold()
-        case 5: commitEditing(); if model.remove() { changed() }
+        case 5: guard commitEditing() else { return }; if model.remove() { changed() }
         case 10...14:
-            commitEditing()
+            guard commitEditing() else { return }
             let width: CGFloat? = item.tag == 10 ? nil : MapNode.widthPresets[item.tag - 11]
             if model.setWidth(width) { changed() }
         case 16: showFontPanel()
@@ -1314,7 +1330,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 33: _ = fitMapInView()
         case 34: selectAll(nil)
         case 15:
-            commitEditing()
+            guard commitEditing() else { return }
             let dialog = NSAlert()
             dialog.messageText = t("Custom Node Width")
             dialog.informativeText = t("Enter a width from 60 to 1000 points.")
@@ -1331,7 +1347,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     @objc func createRelationship(_ sender: Any?) {
-        commitEditing()
+        guard commitEditing() else { return }
         guard model.selectedIDs.count == 2 else { return }
         let ids = visibleNodes().map(\.node.id).filter { model.selectedIDs.contains($0) }
         guard ids.count == 2 else { return }
@@ -1340,7 +1356,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     func showFontPanel() {
-        commitEditing()
+        guard commitEditing() else { return }
         guard let node = selectedNode() else { return }
         NSFontManager.shared.setSelectedFont(font(for: node.node, isRoot: node.parent == nil), isMultiple: false)
         window?.makeFirstResponder(self)
@@ -1363,7 +1379,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                !event.modifierFlags.contains(.option),
                !event.modifierFlags.contains(.control),
                [UInt16(125), 126].contains(event.keyCode) {
-                commitEditing()
+                guard commitEditing() else { return }
                 if model.moveSibling(by: event.keyCode == 126 ? -1 : 1) { changed() }
                 return
             }
@@ -1392,7 +1408,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
             relationshipDrag = nil; selectedRelationshipID = nil; needsDisplay = true
         case 51, 117:
-            commitEditing()
+            guard commitEditing() else { return }
             if let id = selectedRelationshipID {
                 if model.removeRelationship(id) { selectedRelationshipID = nil; changed() }
                 else { selectedRelationshipID = nil; needsDisplay = true }
@@ -1410,7 +1426,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     private func moveSelection(_ key: UInt16) {
-        commitEditing()
+        guard commitEditing() else { return }
         let nodes = visibleNodes()
         guard let current = nodes.first(where: { $0.node.id == model.selected }) else { return }
         let target: LaidOutNode?
@@ -1443,7 +1459,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override func mouseExited(with event: NSEvent) { hoveredPlus.removeAll() }
 
     override func mouseDown(with event: NSEvent) {
-        commitEditing()
+        guard commitEditing() else { return }
         let wasPresented = !springPositions.isEmpty
         let hitNodes = wasPresented ? previewGeometry().nodes : visibleNodes()
         stopSpring()
@@ -1545,7 +1561,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else { super.otherMouseDown(with: event); return }
-        commitEditing()
+        guard commitEditing() else { return }
         middlePanning = true
         dragOrigin = convert(event.locationInWindow, from: nil)
         window?.invalidateCursorRects(for: self)
@@ -1799,7 +1815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         alert.runModal()
     }
     private func confirmDiscardOrSave() -> Bool {
-        canvas.commitEditing()
+        guard canvas.commitEditing() else { return false }
         guard dirty else { return true }
         let prompt = NSAlert()
         prompt.messageText = t("Save changes to this map?")
@@ -1944,7 +1960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         catch { alert("Could not import video", detail: error.localizedDescription) }
     }
     @objc private func exportMindNodeCopy(_ sender: Any?) {
-        canvas.commitEditing()
+        guard canvas.commitEditing() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -1970,7 +1986,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         export(.markdown, extension: "md", type: UTType(filenameExtension: "md") ?? .plainText)
     }
     private func export(_ format: MapExportFormat, extension suffix: String, type: UTType) {
-        canvas.commitEditing()
+        guard canvas.commitEditing() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -1987,7 +2003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     private func save() -> Bool {
-        canvas.commitEditing()
+        guard canvas.commitEditing() else { return false }
         var destination = fileURL
         if destination == nil {
             let panel = NSSavePanel()
