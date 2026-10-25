@@ -3,8 +3,33 @@ import Darwin
 
 private let ownJSONLimit = MapModel.maxSavedJSONBytes
 
+struct OwnMapDocument: Codable {
+    var roots: [MapNode]
+    var relationships: [MapRelationship]
+
+    init(roots: [MapNode], relationships: [MapRelationship] = []) {
+        self.roots = roots
+        self.relationships = relationships
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, roots, relationships }
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        guard try fields.decode(Int.self, forKey: .version) == 1 else { throw OwnJSONError.unsupportedVersion }
+        roots = try fields.decode([MapNode].self, forKey: .roots)
+        relationships = try fields.decode([MapRelationship].self, forKey: .relationships)
+    }
+    func encode(to encoder: Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(1, forKey: .version)
+        try fields.encode(roots, forKey: .roots)
+        try fields.encode(relationships, forKey: .relationships)
+    }
+}
+
 enum OwnJSONError: LocalizedError {
     case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle, invalidImageSize
+    case invalidRelationship, duplicateRelationship, unsupportedVersion, requiresDocumentAPI
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +42,10 @@ enum OwnJSONError: LocalizedError {
         case .invalidFont: return "A font name must be at most 128 bytes and a font size from 1 to 512 points."
         case .invalidStyle: return "Alignment, line color, width or dash style is invalid."
         case .invalidImageSize: return "An image display width must be 60 to 1000 points and requires an image."
+        case .invalidRelationship: return "A relationship has a missing endpoint, self-loop, or invalid control point."
+        case .duplicateRelationship: return "The document contains duplicate relationship IDs."
+        case .unsupportedVersion: return "This map document version is not supported."
+        case .requiresDocumentAPI: return "This document has relationships; open it using the complete document reader."
         }
     }
 }
@@ -28,7 +57,7 @@ private func checkOwnJSONPath(_ url: URL) throws {
           }) else { throw OwnJSONError.invalidPath }
 }
 
-private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
+private func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
     var ids = Set<UUID>()
     func visit(_ nodes: [MapNode]) throws {
         for node in nodes {
@@ -66,9 +95,19 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws {
         }
     }
     try visit(roots)
+    return ids
 }
 
-func readOwnJSON(_ url: URL) throws -> [MapNode] {
+private func checkOwnDocument(_ document: OwnMapDocument) throws {
+    let ids = try checkOwnJSONNodes(document.roots)
+    var edgeIDs = Set<UUID>()
+    for edge in document.relationships {
+        guard edgeIDs.insert(edge.id).inserted else { throw OwnJSONError.duplicateRelationship }
+        guard validRelationship(edge, nodeIDs: ids) else { throw OwnJSONError.invalidRelationship }
+    }
+}
+
+func readOwnDocument(_ url: URL) throws -> OwnMapDocument {
     try checkOwnJSONPath(url)
     let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
     guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
@@ -82,15 +121,27 @@ func readOwnJSON(_ url: URL) throws -> [MapNode] {
         data.append(chunk)
         if data.count > ownJSONLimit { throw OwnJSONError.tooLarge }
     }
-    let roots = try JSONDecoder().decode([MapNode].self, from: data)
-    try checkOwnJSONNodes(roots)
-    return roots
+    let document: OwnMapDocument
+    if data.first(where: { ![9, 10, 13, 32].contains($0) }) == UInt8(ascii: "[") {
+        document = OwnMapDocument(roots: try JSONDecoder().decode([MapNode].self, from: data))
+    } else {
+        document = try JSONDecoder().decode(OwnMapDocument.self, from: data)
+    }
+    try checkOwnDocument(document)
+    return document
 }
 
-func writeOwnJSON(_ roots: [MapNode], to url: URL) throws {
+func readOwnJSON(_ url: URL) throws -> [MapNode] {
+    let document = try readOwnDocument(url)
+    guard document.relationships.isEmpty else { throw OwnJSONError.requiresDocumentAPI }
+    return document.roots
+}
+
+func writeOwnDocument(_ document: OwnMapDocument, to url: URL) throws {
     try checkOwnJSONPath(url)
-    try checkOwnJSONNodes(roots)
-    let data = try JSONEncoder().encode(roots)
+    try checkOwnDocument(document)
+    let data = try document.relationships.isEmpty
+        ? JSONEncoder().encode(document.roots) : JSONEncoder().encode(document)
     guard data.count <= ownJSONLimit else { throw OwnJSONError.tooLarge }
     var info = stat()
     if lstat(url.path, &info) == 0 {
@@ -99,4 +150,16 @@ func writeOwnJSON(_ roots: [MapNode], to url: URL) throws {
         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
     try data.write(to: url, options: .atomic)
+}
+
+func writeOwnJSON(_ roots: [MapNode], to url: URL) throws {
+    try checkOwnJSONPath(url)
+    var info = stat()
+    if lstat(url.path, &info) == 0 {
+        guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { throw OwnJSONError.invalidFile }
+        guard try readOwnDocument(url).relationships.isEmpty else { throw OwnJSONError.requiresDocumentAPI }
+    } else if errno != ENOENT {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    try writeOwnDocument(OwnMapDocument(roots: roots), to: url)
 }
