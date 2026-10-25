@@ -6,30 +6,40 @@ private let ownJSONLimit = MapModel.maxSavedJSONBytes
 struct OwnMapDocument: Codable {
     var roots: [MapNode]
     var relationships: [MapRelationship]
+    var theme: String?
+    var canvasColor: String?
 
-    init(roots: [MapNode], relationships: [MapRelationship] = []) {
+    init(roots: [MapNode], relationships: [MapRelationship] = [],
+         theme: String? = nil, canvasColor: String? = nil) {
         self.roots = roots
         self.relationships = relationships
+        self.theme = theme
+        self.canvasColor = canvasColor
     }
 
-    private enum CodingKeys: String, CodingKey { case version, roots, relationships }
+    private enum CodingKeys: String, CodingKey { case version, roots, relationships, theme, canvasColor }
     init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         guard try fields.decode(Int.self, forKey: .version) == 1 else { throw OwnJSONError.unsupportedVersion }
         roots = try fields.decode([MapNode].self, forKey: .roots)
         relationships = try fields.decode([MapRelationship].self, forKey: .relationships)
+        theme = try fields.decodeIfPresent(String.self, forKey: .theme)
+        canvasColor = try fields.decodeIfPresent(String.self, forKey: .canvasColor)
     }
     func encode(to encoder: Encoder) throws {
         var fields = encoder.container(keyedBy: CodingKeys.self)
         try fields.encode(1, forKey: .version)
         try fields.encode(roots, forKey: .roots)
         try fields.encode(relationships, forKey: .relationships)
+        try fields.encodeIfPresent(theme, forKey: .theme)
+        try fields.encodeIfPresent(canvasColor, forKey: .canvasColor)
     }
 }
 
 enum OwnJSONError: LocalizedError {
     case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle, invalidImageSize
     case invalidRelationship, duplicateRelationship, unsupportedVersion, requiresDocumentAPI, invalidVideoSize
+    case invalidNote, invalidAppearance
 
     var errorDescription: String? {
         switch self {
@@ -45,7 +55,9 @@ enum OwnJSONError: LocalizedError {
         case .invalidRelationship: return "A relationship has a missing endpoint, self-loop, or invalid control point."
         case .duplicateRelationship: return "The document contains duplicate relationship IDs."
         case .unsupportedVersion: return "This map document version is not supported."
-        case .requiresDocumentAPI: return "This document has relationships; open it using the complete document reader."
+        case .requiresDocumentAPI: return "This document has relationships or appearance settings; use the complete document API."
+        case .invalidNote: return "A note must be at most 64 KiB of UTF-8 text."
+        case .invalidAppearance: return "A root shape, fill color, theme, or canvas color is invalid."
         case .invalidVideoSize: return "A video display width must be 60 to 1000 points, require a video, and not share a node with an image."
         }
     }
@@ -60,9 +72,16 @@ private func checkOwnJSONPath(_ url: URL) throws {
 
 func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
     var ids = Set<UUID>()
-    func visit(_ nodes: [MapNode]) throws {
+    func visit(_ nodes: [MapNode], root: Bool) throws {
         for node in nodes {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
+            if let note = node.note, note.utf8.count > 65_536 { throw OwnJSONError.invalidNote }
+            if let shape = node.rootShape, (!root || !["rectangle", "rounded"].contains(shape)) {
+                throw OwnJSONError.invalidAppearance
+            }
+            if let fill = node.rootFillColor, (!root || !MapNode.validColor(fill)) {
+                throw OwnJSONError.invalidAppearance
+            }
             if let width = node.width {
                 guard MapNode.validWidth(width) else { throw OwnJSONError.invalidWidth }
             }
@@ -97,14 +116,16 @@ func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
                     throw OwnJSONError.invalidLocation
                 }
             }
-            try visit(node.children)
+            try visit(node.children, root: false)
         }
     }
-    try visit(roots)
+    try visit(roots, root: true)
     return ids
 }
 
 private func checkOwnDocument(_ document: OwnMapDocument) throws {
+    guard document.theme.map({ ["tropical", "rainbow", "candyland"].contains($0) }) ?? true,
+          document.canvasColor.map(MapNode.validColor) ?? true else { throw OwnJSONError.invalidAppearance }
     let ids = try checkOwnJSONNodes(document.roots)
     var edgeIDs = Set<UUID>()
     for edge in document.relationships {
@@ -139,14 +160,16 @@ func readOwnDocument(_ url: URL) throws -> OwnMapDocument {
 
 func readOwnJSON(_ url: URL) throws -> [MapNode] {
     let document = try readOwnDocument(url)
-    guard document.relationships.isEmpty else { throw OwnJSONError.requiresDocumentAPI }
+    guard document.relationships.isEmpty, document.theme == nil, document.canvasColor == nil else {
+        throw OwnJSONError.requiresDocumentAPI
+    }
     return document.roots
 }
 
 func writeOwnDocument(_ document: OwnMapDocument, to url: URL) throws {
     try checkOwnJSONPath(url)
     try checkOwnDocument(document)
-    let data = try document.relationships.isEmpty
+    let data = try document.relationships.isEmpty && document.theme == nil && document.canvasColor == nil
         ? JSONEncoder().encode(document.roots) : JSONEncoder().encode(document)
     guard data.count <= ownJSONLimit else { throw OwnJSONError.tooLarge }
     var info = stat()
@@ -163,7 +186,10 @@ func writeOwnJSON(_ roots: [MapNode], to url: URL) throws {
     var info = stat()
     if lstat(url.path, &info) == 0 {
         guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { throw OwnJSONError.invalidFile }
-        guard try readOwnDocument(url).relationships.isEmpty else { throw OwnJSONError.requiresDocumentAPI }
+        let existing = try readOwnDocument(url)
+        guard existing.relationships.isEmpty, existing.theme == nil, existing.canvasColor == nil else {
+            throw OwnJSONError.requiresDocumentAPI
+        }
     } else if errno != ENOENT {
         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }

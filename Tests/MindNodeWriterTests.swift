@@ -120,6 +120,32 @@ enum MindNodeWriterTests {
         assert(!fm.fileExists(atPath: themedOutput.path))
 
         var unsupported = child
+        unsupported.note = "A note that must not disappear"
+        let noteOutput = scratch.appendingPathComponent("note.mindnode")
+        do { try MindNodeWriter.write([unsupported], to: noteOutput, relationships: []); fatalError("Silently lost note") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: noteOutput.path))
+        unsupported = root
+        unsupported.rootShape = "rounded"
+        let shapeOutput = scratch.appendingPathComponent("shape.mindnode")
+        do { try MindNodeWriter.write([unsupported], to: shapeOutput, relationships: []); fatalError("Silently lost root shape") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: shapeOutput.path))
+        unsupported.rootShape = nil
+        unsupported.rootFillColor = "#112233FF"
+        let fillOutput = scratch.appendingPathComponent("fill.mindnode")
+        do { try MindNodeWriter.write([unsupported], to: fillOutput, relationships: []); fatalError("Silently lost root fill") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: fillOutput.path))
+        for (name, theme, canvasColor) in [("new-theme", "tropical", nil), ("canvas", nil, "#102030FF")] {
+            let destination = scratch.appendingPathComponent("\(name).mindnode")
+            do { try MindNodeWriter.write(roots, to: destination, relationships: [],
+                                          theme: theme, canvasColor: canvasColor)
+                 fatalError("Silently lost document appearance") }
+            catch MindNodeWriter.WriterError.unsupported { }
+            assert(!fm.fileExists(atPath: destination.path))
+        }
+        unsupported = child
         unsupported.strokeStyle = "dashed" // No verified v9 line-dash schema or importer roundtrip.
         let dashed = scratch.appendingPathComponent("dashed.mindnode")
         do { try MindNodeWriter.write([unsupported], to: dashed, relationships: []); fatalError("Silently lost line dash") }

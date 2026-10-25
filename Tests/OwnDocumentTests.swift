@@ -29,7 +29,7 @@ enum OwnDocumentTests {
         let edge = MapRelationship(from: left, to: right, style: .dashed)
         let document = OwnMapDocument(roots: roots, relationships: [edge])
         try writeOwnDocument(document, to: url)
-        let saved = try Data(contentsOf: url)
+        var saved = try Data(contentsOf: url)
         assert(saved.first == UInt8(ascii: "{"))
         let reopened = try readOwnDocument(url)
         assert(reopened.roots == roots && reopened.relationships == [edge])
@@ -44,6 +44,42 @@ enum OwnDocumentTests {
         catch OwnJSONError.requiresDocumentAPI { }
         let afterLegacySave = try Data(contentsOf: url)
         assert(afterLegacySave == saved)
+        let styled = OwnMapDocument(roots: roots, theme: "tropical", canvasColor: "#102030FF")
+        var inspectorRoots = roots
+        inspectorRoots[0].note = "Example note"
+        inspectorRoots[0].rootShape = "rounded"
+        inspectorRoots[0].rootFillColor = "#112233FF"
+        try writeOwnDocument(OwnMapDocument(roots: inspectorRoots, theme: "tropical", canvasColor: "#102030FF"), to: url)
+        assert((try? readOwnDocument(url).roots) == inspectorRoots)
+        try writeOwnDocument(styled, to: url)
+        let styledBytes = try Data(contentsOf: url)
+        assert(styledBytes.first == UInt8(ascii: "{"))
+        let reopenedStyled = try readOwnDocument(url)
+        assert(reopenedStyled.roots == roots && reopenedStyled.relationships.isEmpty &&
+               reopenedStyled.theme == "tropical" && reopenedStyled.canvasColor == "#102030FF")
+        do { _ = try readOwnJSON(url); fatalError("Legacy read lost appearance") }
+        catch OwnJSONError.requiresDocumentAPI { }
+        do { try writeOwnJSON(roots, to: url); fatalError("Legacy write lost appearance") }
+        catch OwnJSONError.requiresDocumentAPI { }
+        assert((try? Data(contentsOf: url)) == styledBytes)
+        var invalidStyled = styled
+        invalidStyled.theme = "unknown"
+        rejects { try writeOwnDocument(invalidStyled, to: url) }
+        invalidStyled = styled
+        invalidStyled.canvasColor = "not a color"
+        rejects { try writeOwnDocument(invalidStyled, to: url) }
+        invalidStyled = styled
+        invalidStyled.roots[0].note = String(repeating: "é", count: 32_769)
+        rejects { try writeOwnDocument(invalidStyled, to: url) }
+        invalidStyled = styled
+        invalidStyled.roots[0].rootShape = "ellipse"
+        rejects { try writeOwnDocument(invalidStyled, to: url) }
+        invalidStyled = styled
+        invalidStyled.roots[0].rootFillColor = "bad"
+        rejects { try writeOwnDocument(invalidStyled, to: url) }
+        assert((try? Data(contentsOf: url)) == styledBytes)
+        try writeOwnDocument(document, to: url)
+        saved = try Data(contentsOf: url)
         var invalid = document
         invalid.relationships[0].to = UUID()
         rejects { try writeOwnDocument(invalid, to: url) }

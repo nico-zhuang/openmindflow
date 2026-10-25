@@ -18,7 +18,8 @@ enum MindNodeWriter {
 
     static func write(_ roots: [MapNode], to destination: URL,
                       imported: MindNodeDetailedImport? = nil,
-                      relationships: [MapRelationship]) throws {
+                      relationships: [MapRelationship], theme: String? = nil,
+                      canvasColor: String? = nil) throws {
         let target = destination.standardizedFileURL
         let parent = target.deletingLastPathComponent()
         guard destination.isFileURL, target.pathExtension.lowercased() == "mindnode",
@@ -26,7 +27,8 @@ enum MindNodeWriter {
               !parent.pathComponents.contains(where: { $0.lowercased().hasSuffix(".mindnode") }) else {
             throw WriterError.invalidDestination
         }
-        guard imported?.theme == nil,
+        guard theme == nil, canvasColor == nil,
+              imported?.theme == nil,
               imported?.hasUnimportedConnections != true,
               imported?.hasUnimportedAttachments != true,
               imported?.hasUnimportedRichTitles != true,
@@ -99,7 +101,9 @@ enum MindNodeWriter {
             guard depth <= 200, count < 10_000, seen.insert(node.id).inserted,
                   node.image == nil, node.imageWidth == nil,
                    node.video == nil, node.videoWidth == nil,
-                  node.strokeStyle == nil else { throw WriterError.unsupported }
+                  node.strokeStyle == nil,
+                   node.note.map({ $0.isEmpty }) ?? true,
+                   node.rootShape == nil, node.rootFillColor == nil else { throw WriterError.unsupported }
             count += 1
             let meta = imported?.presentation[node.id]
             guard meta?.font?.alignmentCode == nil, meta?.font?.bold == nil,

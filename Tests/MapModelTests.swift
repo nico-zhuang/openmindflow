@@ -464,6 +464,39 @@ enum MapModelTests {
         imported.selected = imported.roots[0].id
         imported.rename("Imported", initialWidth: 200)
         assert(imported.roots[0].width == nil, "Legacy blank nodes keep content-sized width")
+        let noteRoot = UUID(), noteSibling = UUID()
+        let notes = MapModel(roots: [noteRoot, noteSibling].map {
+            MapNode(id: $0, title: "Node", children: [], folded: false)
+        }, selected: noteRoot)
+        assert(!notes.setNote("") && !notes.undo(), "Empty note must not create Undo")
+        assert(!notes.setNote(String(repeating: "é", count: 32_769)))
+        assert(!notes.undo(), "Oversized UTF-8 note must not create Undo")
+        assert(notes.setNote("Example") && notes.roots[0].note == "Example" && notes.roots[1].note == nil)
+        assert(!notes.setNote("Example") && notes.undo() && notes.roots[0].note == nil)
+        assert(!notes.undo() && notes.redo() && notes.roots[0].note == "Example")
+        assert(notes.selectNodes([noteRoot, noteSibling]) && !notes.setNote("Not for a group"))
+        notes.selectOnly(noteRoot)
+        assert(notes.setRootShape("rounded") && notes.setRootFillColor("#aabbccff"))
+        assert(notes.roots[0].rootShape == "rounded" && notes.roots[0].rootFillColor == "#AABBCCFF")
+        assert(!notes.setRootShape("oval") && !notes.setRootFillColor("red"))
+        assert(notes.setTheme("tropical") && notes.theme == "tropical")
+        assert(!notes.setTheme("tropical") && !notes.setTheme("unknown"))
+        assert(notes.undo() && notes.theme == nil && notes.redo() && notes.theme == "tropical")
+        assert(notes.setCanvasColor("#102030ff") && notes.canvasColor == "#102030FF")
+        assert(!notes.setCanvasColor("#10203") && notes.undo() && notes.canvasColor == nil)
+        notes.selectOnly(noteSibling)
+        assert(notes.setNote("Sibling") && notes.roots[0].note == "Example" && notes.roots[1].note == "Sibling")
+        let nestedNotes = MapModel(roots: [MapNode(id: noteRoot, title: "Root", children: [
+            MapNode(id: noteSibling, title: "Child", children: [], folded: false)
+        ], folded: false)], selected: noteSibling)
+        assert(!nestedNotes.setRootShape("rectangle") && !nestedNotes.setRootFillColor("#112233FF") && !nestedNotes.undo())
+        var nearLimit = MapNode(id: UUID(), title: "", children: [], folded: false)
+        let bareSize = try! JSONEncoder().encode([nearLimit]).count
+        nearLimit.title = String(repeating: "x", count: MapModel.maxSavedJSONBytes - bareSize - 20)
+        let bounded = MapModel(roots: [nearLimit], selected: nearLimit.id)
+        assert(!bounded.setNote(String(repeating: "y", count: 128)) && bounded.roots == [nearLimit])
+        assert(!bounded.setTheme("rainbow") && !bounded.setCanvasColor("#102030FF") && !bounded.undo(),
+               "Inspector changes must not create a document exceeding 32 MiB")
         print("model tests passed")
     }
 }

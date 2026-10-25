@@ -63,6 +63,12 @@ struct MapImage: Codable, Equatable {
 struct MapNode: Codable, Equatable {
     static let widthPresets: [CGFloat] = [170, 240, 320, 480]
     static func validWidth(_ width: CGFloat) -> Bool { width.isFinite && (60...1000).contains(width) }
+    static func validColor(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 9 && bytes[0] == 35 && bytes.dropFirst().allSatisfy {
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+        }
+    }
     var id: UUID
     var title: String
     var children: [MapNode]
@@ -79,6 +85,9 @@ struct MapNode: Codable, Equatable {
     var imageWidth: CGFloat? = nil // nil fits the picture within a 296pt square.
     var video: MapVideo? = nil
     var videoWidth: CGFloat? = nil // nil fits the clip within a 296pt square.
+    var note: String? = nil
+    var rootShape: String? = nil
+    var rootFillColor: String? = nil
 }
 
 struct MapSelectionClip: Codable {
@@ -88,26 +97,35 @@ struct MapSelectionClip: Codable {
 
 final class MapModel {
     static let maxSavedJSONBytes = 32 * 1024 * 1024
-    private static func fitsSavedJSON(_ roots: [MapNode], relationships: [MapRelationship]) -> Bool {
+    private static func fitsSavedJSON(_ roots: [MapNode], relationships: [MapRelationship],
+                                      theme: String?, canvasColor: String?) -> Bool {
         let encoder = JSONEncoder()
-        let size = relationships.isEmpty
+        let size = relationships.isEmpty && theme == nil && canvasColor == nil
             ? try? encoder.encode(roots).count
-            : try? encoder.encode(OwnMapDocument(roots: roots, relationships: relationships)).count
+            : try? encoder.encode(OwnMapDocument(roots: roots, relationships: relationships,
+                                                 theme: theme, canvasColor: canvasColor)).count
         return size.map { $0 <= maxSavedJSONBytes } ?? false
+    }
+    private func fitsSavedJSON(_ roots: [MapNode], relationships: [MapRelationship]) -> Bool {
+        Self.fitsSavedJSON(roots, relationships: relationships, theme: theme, canvasColor: canvasColor)
     }
     var roots: [MapNode]
     var relationships: [MapRelationship] = []
+    private(set) var theme: String?
+    private(set) var canvasColor: String?
     var selected: UUID { didSet { selectedIDs = [selected]; selectionAnchor = selected } }
     private(set) var selectedIDs: Set<UUID>
     private var selectionAnchor: UUID
     private var pendingInitialWidth: Set<UUID> = []
 
-    private typealias Snapshot = (roots: [MapNode], relationships: [MapRelationship], selected: UUID, selectedIDs: Set<UUID>, anchor: UUID, pending: Set<UUID>)
+    private typealias Snapshot = (roots: [MapNode], relationships: [MapRelationship], theme: String?, canvasColor: String?, selected: UUID, selectedIDs: Set<UUID>, anchor: UUID, pending: Set<UUID>)
     private var past: [Snapshot] = []
     private var future: [Snapshot] = []
 
-    init(roots: [MapNode], selected: UUID) {
+    init(roots: [MapNode], selected: UUID, theme: String? = nil, canvasColor: String? = nil) {
         self.roots = roots
+        self.theme = theme
+        self.canvasColor = canvasColor
         self.selected = selected
         selectedIDs = [selected]
         selectionAnchor = selected
@@ -173,7 +191,7 @@ final class MapModel {
         }
         let edges = remapRelationships(clip.relationships, nodeIDs: idMap)
         guard edges.count == clip.relationships.count,
-              Self.fitsSavedJSON(roots + copies, relationships: relationships + edges) else { return false }
+              fitsSavedJSON(roots + copies, relationships: relationships + edges) else { return false }
         save()
         roots.append(contentsOf: copies)
         relationships.append(contentsOf: edges)
@@ -200,7 +218,7 @@ final class MapModel {
             guard updated[index] != edge else { return false }
             updated[index] = edge
         } else { updated.append(edge) }
-        guard Self.fitsSavedJSON(roots, relationships: updated) else { return false }
+        guard fitsSavedJSON(roots, relationships: updated) else { return false }
         save()
         relationships = updated
         return true
@@ -312,7 +330,7 @@ final class MapModel {
             nodes[index].folded = false
             nodes[index].children.append(child)
         }
-        guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
+        guard fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         selected = child.id
@@ -331,7 +349,7 @@ final class MapModel {
             nodes[index].folded = false
             nodes[index].children.append(child)
         }
-        guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
+        guard fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         selected = child.id
@@ -617,7 +635,7 @@ final class MapModel {
                     nodes[index].videoWidth = nil
                 }
             }
-            guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
+            guard fitsSavedJSON(updated, relationships: relationships) else { return false }
         }
         return editSelected { node in
             node.image = image
@@ -676,6 +694,49 @@ final class MapModel {
     }
 
     @discardableResult
+    func setNote(_ text: String) -> Bool {
+        guard text.utf8.count <= 65_536, selectedPaths().count == 1 else { return false }
+        return editSelected { $0.note = text.isEmpty ? nil : text }
+    }
+
+    @discardableResult
+    func setRootShape(_ value: String?) -> Bool {
+        guard value.map({ ["rectangle", "rounded"].contains($0) }) ?? true,
+              selectedPaths().allSatisfy({ $0.count == 1 }) else { return false }
+        return editSelected { $0.rootShape = value }
+    }
+
+    @discardableResult
+    func setRootFillColor(_ value: String?) -> Bool {
+        guard value.map(MapNode.validColor) ?? true,
+              selectedPaths().allSatisfy({ $0.count == 1 }) else { return false }
+        return editSelected { $0.rootFillColor = value?.uppercased() }
+    }
+
+    @discardableResult
+    func setTheme(_ value: String?) -> Bool {
+        guard value.map({ ["tropical", "rainbow", "candyland"].contains($0) }) ?? true,
+              value != theme,
+              Self.fitsSavedJSON(roots, relationships: relationships, theme: value, canvasColor: canvasColor)
+        else { return false }
+        save()
+        theme = value
+        return true
+    }
+
+    @discardableResult
+    func setCanvasColor(_ value: String?) -> Bool {
+        guard value.map(MapNode.validColor) ?? true else { return false }
+        let color = value?.uppercased()
+        guard color != canvasColor,
+              Self.fitsSavedJSON(roots, relationships: relationships, theme: theme, canvasColor: color)
+        else { return false }
+        save()
+        canvasColor = color
+        return true
+    }
+
+    @discardableResult
     func resetStrokeStyle() -> Bool { editSelected { $0.strokeStyle = nil } }
     @discardableResult
     func resetStrokeColor() -> Bool { editSelected { $0.branchStrokeColor = nil } }
@@ -731,16 +792,16 @@ final class MapModel {
     @discardableResult
     func undo() -> Bool {
         guard let previous = past.popLast() else { return false }
-        future.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
-        (roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = previous
+        future.append((roots, relationships, theme, canvasColor, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, relationships, theme, canvasColor, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = previous
         return true
     }
 
     @discardableResult
     func redo() -> Bool {
         guard let next = future.popLast() else { return false }
-        past.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
-        (roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = next
+        past.append((roots, relationships, theme, canvasColor, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, relationships, theme, canvasColor, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = next
         return true
     }
 
@@ -756,14 +817,14 @@ final class MapModel {
         for path in paths {
             Self.edit(&updated, at: path[...]) { nodes, index in change(&nodes[index]) }
         }
-        guard updated != roots else { return false }
+        guard updated != roots, fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         return true
     }
 
     private func save() {
-        past.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        past.append((roots, relationships, theme, canvasColor, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
         future.removeAll()
     }
 
