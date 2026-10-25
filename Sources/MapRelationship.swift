@@ -8,6 +8,8 @@ struct MapRelationship: Codable, Equatable {
     var to: UUID
     var control1: SIMD2<Double> // World-space offset from the start node anchor.
     var control2: SIMD2<Double> // World-space offset from the end node anchor.
+    var control1Aim: SIMD2<Double>? // Manually aimed handle, relative to start node center.
+    var control2Aim: SIMD2<Double>? // Manually aimed handle, relative to end node center.
     var style: MapRelationshipStyle
     var startArrow: Bool
     var endArrow: Bool
@@ -20,6 +22,8 @@ struct MapRelationship: Codable, Equatable {
         self.to = to
         self.control1 = control1
         self.control2 = control2
+        self.control1Aim = nil
+        self.control2Aim = nil
         self.style = style
         self.startArrow = startArrow
         self.endArrow = endArrow
@@ -28,9 +32,9 @@ struct MapRelationship: Codable, Equatable {
 
 func validRelationship(_ edge: MapRelationship, nodeIDs: Set<UUID>) -> Bool {
     nodeIDs.contains(edge.from) && nodeIDs.contains(edge.to) && edge.from != edge.to &&
-        [edge.control1.x, edge.control1.y, edge.control2.x, edge.control2.y].allSatisfy {
-            $0.isFinite && abs($0) <= 1_000_000
-        }
+        ([edge.control1.x, edge.control1.y, edge.control2.x, edge.control2.y] +
+         [edge.control1Aim?.x, edge.control1Aim?.y, edge.control2Aim?.x, edge.control2Aim?.y].compactMap { $0 })
+            .allSatisfy { $0.isFinite && abs($0) <= 1_000_000 }
 }
 
 func sanitizeRelationships(_ edges: [MapRelationship], nodeIDs: Set<UUID>) -> [MapRelationship] {
@@ -64,6 +68,29 @@ struct RelationshipGeometry {
         curve.curve(to: end, controlPoint1: control1, controlPoint2: control2)
         return curve
     }
+}
+
+func relationshipAnchor(in node: CGRect, toward target: CGPoint) -> CGPoint? {
+    guard node.width > 0, node.height > 0,
+          [node.minX, node.minY, node.maxX, node.maxY, target.x, target.y].allSatisfy(\.isFinite) else { return nil }
+    let dx = target.x - node.midX, dy = target.y - node.midY
+    guard dx != 0 || dy != 0 else { return nil }
+    let scale = min(dx == 0 ? .infinity : node.width / (2 * abs(dx)),
+                    dy == 0 ? .infinity : node.height / (2 * abs(dy)))
+    return CGPoint(x: node.midX + dx * scale, y: node.midY + dy * scale)
+}
+
+func relationshipGeometry(_ edge: MapRelationship, from source: CGRect, to target: CGRect) -> RelationshipGeometry? {
+    guard validRelationship(edge, nodeIDs: [edge.from, edge.to]) else { return nil }
+    let startAim = edge.control1Aim.flatMap { $0 == .zero ? nil : CGPoint(
+        x: source.midX + $0.x, y: source.midY + $0.y) }
+        ?? CGPoint(x: target.midX + edge.control1.x, y: target.midY + edge.control1.y)
+    let endAim = edge.control2Aim.flatMap { $0 == .zero ? nil : CGPoint(
+        x: target.midX + $0.x, y: target.midY + $0.y) }
+        ?? CGPoint(x: source.midX + edge.control2.x, y: source.midY + edge.control2.y)
+    guard let start = relationshipAnchor(in: source, toward: startAim),
+          let end = relationshipAnchor(in: target, toward: endAim) else { return nil }
+    return relationshipGeometry(edge, from: start, to: end)
 }
 
 func relationshipGeometry(_ edge: MapRelationship, from: CGPoint, to: CGPoint) -> RelationshipGeometry? {

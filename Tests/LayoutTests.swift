@@ -17,6 +17,21 @@ enum LayoutTests {
             MapNode(id: UUID(), title: "Second", children: [], folded: true)
         ], folded: false)
         let secondRoot = MapNode(id: UUID(), title: "Other", children: [], folded: false)
+        let single = mapLayout([MapNode(id: UUID(), title: "Root", children: [
+            MapNode(id: UUID(), title: "Only child", children: [], folded: false)
+        ], folded: false)])
+        assert(abs(single[0].frame.midY - (single[1].frame.maxY - 7)) < 0.01,
+               "The first child's underline must meet the root center without bending the new branch")
+        let short = MapNode(id: UUID(), title: "Short", children: [
+            MapNode(id: UUID(), title: "Leaf", children: [], folded: false)
+        ], folded: false)
+        let tall = MapNode(id: UUID(), title: "Tall", children: [
+            MapNode(id: UUID(), title: String(repeating: "Multiline child\n", count: 16),
+                    children: [], folded: false)
+        ], folded: false)
+        let stacked = mapLayout([short, tall])
+        assert(!stacked[1].frame.intersects(stacked[3].frame),
+               "Straight single-child branches must reserve their headroom so separate root trees cannot collide")
         let roots = [root, secondRoot]
         let first = mapLayout(roots)
         assert(first.map(\.frame) == mapLayout(roots).map(\.frame), "Layout must be deterministic")

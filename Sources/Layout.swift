@@ -131,6 +131,10 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         let childHeight = children.reduce(CGFloat(0)) { $0 + subtreeHeights[$1.id]! }
             + CGFloat(max(0, children.count - 1)) * gap
         var childTop = top + (subtreeHeight - childHeight) / 2
+        if depth == 0, children.count == 1, let child = children.first,
+           let size = sizes[child.id], let height = subtreeHeights[child.id] {
+            childTop = frame.midY - (height + size.height) / 2 + 7
+        }
         for child in children {
             place(child, depth: depth + 1, parent: node.id, top: childTop)
             childTop += subtreeHeights[child.id]! + gap
@@ -138,6 +142,10 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
     }
     var top: CGFloat = 0
     for (root, height) in zip(roots, rootHeights) {
+        if !root.folded, root.children.count == 1, let child = root.children.first {
+            // The straight first branch lifts this subtree above its root's original top.
+            top += max(0, (subtreeHeights[child.id]! + sizes[child.id]!.height - height) / 2 - 7)
+        }
         place(root, depth: 0, parent: nil, top: top)
         top += height + gap
     }

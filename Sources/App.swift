@@ -21,6 +21,51 @@ private final class MapNodeAX: NSAccessibilityElement {
     }
 }
 
+private enum NodeShortcuts {
+    static let commands: [(id: String, title: String, key: String)] = [
+        ("new-child", "New Child", "tab"), ("new-sibling", "New Sibling", "return"),
+        ("new-sibling-before", "New Sibling Before", "option-return"),
+        ("new-main", "New Main Node", "shift-return"),
+        ("new-parent", "New Parent", "option-tab"), ("edit-title", "Edit Title", "command-return")
+    ]
+    static let choices: [(key: String, code: UInt16, modifiers: NSEvent.ModifierFlags, label: String)] = [
+        ("tab", 48, [], "Tab"), ("return", 36, [], "Return"),
+        ("option-return", 36, .option, "Option + Return"),
+        ("shift-return", 36, .shift, "Shift + Return"),
+        ("option-tab", 48, .option, "Option + Tab"),
+        ("command-return", 36, .command, "Command + Return"),
+        ("control-tab", 48, .control, "Control + Tab"),
+        ("control-return", 36, .control, "Control + Return"),
+        ("control-shift-tab", 48, [.control, .shift], "Control + Shift + Tab"),
+        ("control-shift-return", 36, [.control, .shift], "Control + Shift + Return"),
+        ("option-shift-return", 36, [.option, .shift], "Option + Shift + Return"),
+        ("command-shift-return", 36, [.command, .shift], "Command + Shift + Return")
+    ]
+    static func bindings(_ defaults: UserDefaults) -> [String: String] {
+        let fallback = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0.key) })
+        guard let saved = defaults.dictionary(forKey: "nodeShortcuts") as? [String: String],
+              saved.count == commands.count, Set(saved.keys) == Set(fallback.keys),
+              Set(saved.values).count == saved.count,
+              saved.values.allSatisfy({ key in choices.contains { $0.key == key } }) else { return fallback }
+        return saved
+    }
+    static func set(_ command: String, key: String, defaults: UserDefaults) -> Bool {
+        guard commands.contains(where: { $0.id == command }), choices.contains(where: { $0.key == key }) else { return false }
+        var saved = bindings(defaults)
+        guard !saved.contains(where: { $0.key != command && $0.value == key }) else { return false }
+        saved[command] = key
+        defaults.set(saved, forKey: "nodeShortcuts")
+        return true
+    }
+    static func command(code: UInt16, modifiers: NSEvent.ModifierFlags,
+                        defaults: UserDefaults) -> String? {
+        let normalized = code == 76 ? UInt16(36) : code
+        let flags = modifiers.intersection([.command, .option, .control, .shift])
+        guard let key = choices.first(where: { $0.code == normalized && $0.modifiers == flags })?.key else { return nil }
+        return bindings(defaults).first(where: { $0.value == key })?.key
+    }
+}
+
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; revealSelection(); needsDisplay = true } }
     private(set) var selectedRelationshipID: UUID?
@@ -226,6 +271,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         return window?.convertToScreen(convert(local, to: nil)) ?? local
     }
 
+    @objc override func selectAll(_ sender: Any?) {
+        commitEditing()
+        if model.selectNodes(Set(visibleNodes().map(\.node.id))) { needsDisplay = true }
+    }
     func selectNode(_ id: UUID) {
         commitEditing()
         guard visibleNodes().contains(where: { $0.node.id == id }) else { return }
@@ -259,16 +308,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func relationGeometry(_ edge: MapRelationship, nodes: [LaidOutNode]) -> RelationshipGeometry? {
         guard let from = nodes.first(where: { $0.node.id == edge.from }),
               let to = nodes.first(where: { $0.node.id == edge.to }) else { return nil }
-        let forward = from.frame.midX <= to.frame.midX
-        let start = CGPoint(x: forward ? from.frame.maxX : from.frame.minX, y: from.frame.midY)
-        let end = CGPoint(x: forward ? to.frame.minX : to.frame.maxX, y: to.frame.midY)
         var preview = edge
         if let drag = relationshipDrag, drag.id == edge.id {
             let point = world(drag.point)
-            if drag.first { preview.control1 = SIMD2(Double(point.x - start.x), Double(point.y - start.y)) }
-            else { preview.control2 = SIMD2(Double(point.x - end.x), Double(point.y - end.y)) }
+            let node = drag.first ? from.frame : to.frame
+            let other = drag.first ? to.frame : from.frame
+            let aim = SIMD2(Double(point.x - node.midX), Double(point.y - node.midY))
+            let toward = aim == .zero ? CGPoint(x: other.midX, y: other.midY) : point
+            guard let anchor = relationshipAnchor(in: node, toward: toward) else { return nil }
+            let offset = SIMD2(Double(point.x - anchor.x), Double(point.y - anchor.y))
+            if drag.first { preview.control1Aim = aim; preview.control1 = offset }
+            else { preview.control2Aim = aim; preview.control2 = offset }
         }
-        return relationshipGeometry(preview, from: start, to: end)
+        return relationshipGeometry(preview, from: from.frame, to: to.frame)
     }
     private func relationAt(_ screenPoint: CGPoint, nodes: [LaidOutNode]) -> UUID? {
         let point = world(screenPoint)
@@ -946,7 +998,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let longest = title.components(separatedBy: "\n").map {
                 ($0 as NSString).size(withAttributes: [.font: face]).width
             }.max() ?? 0
-            model.rename(title, initialWidth: min(320, max(60, ceil(longest) + 24)))
+            let compact = localizationDefaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
+                localizationDefaults.bool(forKey: "shrinkNewNodesToFitContent")
+            model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil)
             changed()
         } else { needsDisplay = true }
     }
@@ -1061,21 +1115,43 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     func redo() { commitEditing(); if model.redo() { changed() } }
     func toggleFold() { commitEditing(); if model.toggleFold() { changed() } }
 
+    private func performNodeShortcut(_ command: String) -> Bool {
+        switch command {
+        case "new-child": addChild()
+        case "new-sibling": addSibling()
+        case "new-sibling-before": addSibling(before: true)
+        case "new-main": addMainNode()
+        case "new-parent": addParent()
+        case "edit-title": editor == nil ? beginEditing() : commitEditing()
+        default: return false
+        }
+        return true
+    }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.insertTabIgnoringFieldEditor(_:)) { addParent(); return true }
-        if selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) { addSibling(before: true); return true }
-        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
-        if selector == #selector(NSResponder.insertTab(_:)) {
-            modifiers.contains(.option) ? addParent() : addChild()
+        let fallback: (UInt16, NSEvent.ModifierFlags)
+        switch selector {
+        case #selector(NSResponder.insertTabIgnoringFieldEditor(_:)): fallback = (48, .option)
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): fallback = (36, .option)
+        case #selector(NSResponder.insertTab(_:)): fallback = (48, [])
+        case #selector(NSResponder.insertNewline(_:)): fallback = (36, [])
+        case #selector(NSResponder.cancelOperation(_:)):
+            endEditingWithoutSaving(); needsDisplay = true; return true
+        default: return false
+        }
+        let event = NSApp.currentEvent.flatMap { [UInt16(48), 36, 76].contains($0.keyCode) ? $0 : nil }
+        let code = event?.keyCode ?? fallback.0
+        let modifiers = event?.modifierFlags ?? fallback.1
+        let action = NodeShortcuts.command(code: code, modifiers: modifiers, defaults: localizationDefaults)
+        if action == "new-sibling" && code != 48 &&
+            modifiers.intersection([.shift, .option, .command, .control]).isEmpty {
+            commitEditing() // First plain Return completes the active editor; second creates a sibling.
             return true
         }
-        if selector == #selector(NSResponder.insertNewline(_:)) {
-            if modifiers.intersection([.shift, .option, .command, .control]).isEmpty { commitEditing() }
-            else if modifiers.contains(.shift) { addMainNode() }
-            else { addSibling(before: modifiers.contains(.option)) }
+        if let action { return performNodeShortcut(action) }
+        if code != 48 && modifiers.intersection([.shift, .option, .command, .control]).isEmpty {
+            commitEditing()
             return true
         }
-        if selector == #selector(NSResponder.cancelOperation(_:)) { endEditingWithoutSaving(); needsDisplay = true; return true }
         return false
     }
     func controlTextDidEndEditing(_ obj: Notification) { commitEditing() }
@@ -1126,7 +1202,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             custom.tag = 15
             menu.addItem(withTitle: t("Node Width"), action: nil, keyEquivalent: "").submenu = widthMenu
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
-        } else { add("New Main Node", 3); add("Paste", 22) }
+        } else {
+            add("New Main Node", 3)
+            add("Paste", 22)
+            menu.addItem(.separator())
+            add("Zoom In", 31)
+            add("Zoom Out", 32)
+            add("Fit Content", 33)
+            menu.addItem(.separator())
+            add("Select All", 34)
+        }
         menu.addItem(.separator())
         add("Arrange Map", 20)
         return menu
@@ -1197,6 +1282,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 21: copy(nil)
         case 22: paste(nil)
         case 30: createRelationship(nil)
+        case 31, 32:
+            let point = blankPastePoint ?? CGPoint(x: bounds.midX, y: bounds.midY)
+            zoom(at: point, by: item.tag == 31 ? 1.25 : 0.8)
+        case 33: _ = fitMapInView()
+        case 34: selectAll(nil)
         case 15:
             commitEditing()
             let dialog = NSAlert()
@@ -1237,6 +1327,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     override func keyDown(with event: NSEvent) {
+        if let action = NodeShortcuts.command(code: event.keyCode, modifiers: event.modifierFlags,
+                                               defaults: localizationDefaults),
+           performNodeShortcut(action) { return }
         if event.modifierFlags.contains(.command) {
             if event.modifierFlags.intersection([.shift, .option, .control]).isEmpty,
                event.charactersIgnoringModifiers?.lowercased() == "n" { addMainNode(); return }
@@ -1272,11 +1365,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 53 where dragSource != nil || marquee != nil || relationshipDrag != nil || selectedRelationshipID != nil:
             stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
             relationshipDrag = nil; selectedRelationshipID = nil; needsDisplay = true
-        case 48 where event.modifierFlags.contains(.option): addParent()
-        case 48: addChild()                         // Tab
-        case 36, 76:
-            if event.modifierFlags.contains(.shift) { addMainNode() }
-            else { addSibling(before: event.modifierFlags.contains(.option)) }
         case 51, 117:
             commitEditing()
             if let id = selectedRelationshipID {
@@ -1478,13 +1566,18 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override func mouseUp(with event: NSEvent) {
         defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
         if let drag = relationshipDrag,
-           let edge = model.relationships.first(where: { $0.id == drag.id }),
-           let preview = relationGeometry(edge, nodes: visibleNodes()) {
+           let edge = model.relationships.first(where: { $0.id == drag.id }) {
+            let nodes = visibleNodes()
+            let nodeID = drag.first ? edge.from : edge.to
+            guard let node = nodes.first(where: { $0.node.id == nodeID }),
+                  let preview = relationGeometry(edge, nodes: nodes) else { return }
             var changedEdge = edge
             let anchor = drag.first ? preview.start : preview.end
             let point = world(drag.point)
             let value = SIMD2(Double(point.x - anchor.x), Double(point.y - anchor.y))
-            if drag.first { changedEdge.control1 = value } else { changedEdge.control2 = value }
+            let aim = SIMD2(Double(point.x - node.frame.midX), Double(point.y - node.frame.midY))
+            if drag.first { changedEdge.control1 = value; changedEdge.control1Aim = aim }
+            else { changedEdge.control2 = value; changedEdge.control2Aim = aim }
             if model.setRelationship(changedEdge) { changed() }
             return
         }
@@ -2007,6 +2100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard ["system", "light", "dark"].contains(mode) else { return }
         defaults.set(mode, forKey: "appearance")
         applyAppearance(mode, in: menu)
+        if let popup = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSPopUpButton })
+            .first(where: { $0.identifier?.rawValue == "general-appearance" }) {
+            popup.select(popup.itemArray.first { ($0.representedObject as? String) == mode })
+        }
     }
 
     @objc private func showFind(_ sender: Any?) {
@@ -2065,11 +2162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             settingsWindow.makeKeyAndOrderFront(nil)
             return
         }
-        let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 390, height: 120),
+        let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 390),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let tabs = NSSegmentedControl(labels: [t("General"), t("Keyboard Shortcuts")],
+                                      trackingMode: .selectOne, target: self, action: #selector(chooseSettingsTab(_:)))
+        tabs.frame = CGRect(x: 125, y: 310, width: 290, height: 54)
+        tabs.selectedSegment = 0
+        tabs.setImage(NSImage(systemSymbolName: "gearshape", accessibilityDescription: t("General")), forSegment: 0)
+        tabs.setImage(NSImage(systemSymbolName: "keyboard", accessibilityDescription: t("Keyboard Shortcuts")), forSegment: 1)
+        tabs.setAccessibilityLabel(t("Settings Page"))
+        panel.contentView?.addSubview(tabs)
         let label = NSTextField(labelWithString: t("Interface Language"))
-        label.frame = CGRect(x: 18, y: 56, width: 130, height: 22)
-        let popup = NSPopUpButton(frame: CGRect(x: 148, y: 52, width: 224, height: 28), pullsDown: false)
+        label.identifier = NSUserInterfaceItemIdentifier("general-Interface Language")
+        label.frame = CGRect(x: 28, y: 246, width: 130, height: 22)
+        let popup = NSPopUpButton(frame: CGRect(x: 164, y: 240, width: 344, height: 30), pullsDown: false)
+        popup.identifier = NSUserInterfaceItemIdentifier("general-language")
         for (key, name) in [("system", "Follow System"), ("zh-Hans", "Simplified Chinese"), ("en", "English")] {
             let item = popup.menu!.addItem(withTitle: t(name), action: nil, keyEquivalent: "")
             item.representedObject = key
@@ -2080,10 +2187,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         popup.action = #selector(chooseLanguage(_:))
         panel.contentView?.addSubview(label)
         panel.contentView?.addSubview(popup)
+        let appearanceLabel = NSTextField(labelWithString: t("Appearance"))
+        appearanceLabel.identifier = NSUserInterfaceItemIdentifier("general-Appearance")
+        appearanceLabel.frame = CGRect(x: 28, y: 188, width: 130, height: 22)
+        panel.contentView?.addSubview(appearanceLabel)
+        let appearancePopup = NSPopUpButton(frame: CGRect(x: 164, y: 182, width: 344, height: 30), pullsDown: false)
+        appearancePopup.identifier = NSUserInterfaceItemIdentifier("general-appearance")
+        for (key, name) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+            let item = appearancePopup.menu!.addItem(withTitle: t(name), action: nil, keyEquivalent: "")
+            item.representedObject = key
+        }
+        let mode = defaults.string(forKey: "appearance") ?? "system"
+        appearancePopup.select(appearancePopup.itemArray.first { ($0.representedObject as? String) == mode }
+            ?? appearancePopup.item(at: 0)!)
+        appearancePopup.setAccessibilityLabel(t("Appearance"))
+        appearancePopup.target = self
+        appearancePopup.action = #selector(chooseSettingsAppearance(_:))
+        panel.contentView?.addSubview(appearancePopup)
+        let shrink = NSButton(checkboxWithTitle: t("Shrink new nodes to fit content"), target: self,
+                              action: #selector(chooseShrinkNewNodes(_:)))
+        shrink.identifier = NSUserInterfaceItemIdentifier("general-shrink")
+        shrink.frame = CGRect(x: 164, y: 121, width: 344, height: 30)
+        shrink.setAccessibilityLabel(t("Shrink new nodes to fit content"))
+        shrink.state = defaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
+            defaults.bool(forKey: "shrinkNewNodesToFitContent") ? .on : .off
+        panel.contentView?.addSubview(shrink)
+        for (index, command) in NodeShortcuts.commands.enumerated() {
+            let y = CGFloat(270 - index * 39)
+            let title = NSTextField(labelWithString: t(command.title))
+            title.identifier = NSUserInterfaceItemIdentifier("shortcuts-label-\(command.id)")
+            title.frame = CGRect(x: 28, y: y + 4, width: 188, height: 22)
+            title.alignment = .right
+            title.isHidden = true
+            panel.contentView?.addSubview(title)
+            let keys = NSPopUpButton(frame: CGRect(x: 228, y: y, width: 280, height: 30), pullsDown: false)
+            keys.identifier = NSUserInterfaceItemIdentifier("shortcuts-\(command.id)")
+            keys.setAccessibilityLabel(t(command.title))
+            for choice in NodeShortcuts.choices {
+                let item = keys.menu!.addItem(withTitle: t(choice.label), action: nil, keyEquivalent: "")
+                item.representedObject = choice.key
+            }
+            keys.select(keys.itemArray.first {
+                ($0.representedObject as? String) == NodeShortcuts.bindings(defaults)[command.id]
+            }!)
+            keys.target = self
+            keys.action = #selector(chooseNodeShortcut(_:))
+            keys.isHidden = true
+            panel.contentView?.addSubview(keys)
+        }
+        let restore = NSButton(title: t("Restore Defaults"), target: self, action: #selector(resetNodeShortcuts(_:)))
+        restore.identifier = NSUserInterfaceItemIdentifier("shortcuts-restore")
+        restore.frame = CGRect(x: 228, y: 24, width: 170, height: 30)
+        restore.setAccessibilityLabel(t("Restore Defaults"))
+        restore.isHidden = true
+        panel.contentView?.addSubview(restore)
         panel.title = t("Settings")
         panel.center()
         settingsWindow = panel
         panel.makeKeyAndOrderFront(nil)
+    }
+    @objc private func chooseSettingsTab(_ sender: NSSegmentedControl) {
+        for view in settingsWindow?.contentView?.subviews ?? [] {
+            guard let identifier = view.identifier?.rawValue else { continue }
+            if identifier.hasPrefix("general-") { view.isHidden = sender.selectedSegment != 0 }
+            if identifier.hasPrefix("shortcuts-") { view.isHidden = sender.selectedSegment != 1 }
+        }
+    }
+    @objc private func chooseSettingsAppearance(_ sender: NSPopUpButton) {
+        guard let mode = sender.selectedItem?.representedObject as? String,
+              ["system", "light", "dark"].contains(mode),
+              let menu = NSApp.mainMenu?.item(withTitle: t("View"))?.submenu?
+                .item(withTitle: t("Appearance"))?.submenu else { return }
+        defaults.set(mode, forKey: "appearance")
+        applyAppearance(mode, in: menu)
+    }
+    @objc private func chooseShrinkNewNodes(_ sender: NSButton) {
+        defaults.set(sender.state == .on, forKey: "shrinkNewNodesToFitContent")
+    }
+    @objc private func chooseNodeShortcut(_ sender: NSPopUpButton) {
+        guard let id = sender.identifier?.rawValue.replacingOccurrences(of: "shortcuts-", with: ""),
+              let key = sender.selectedItem?.representedObject as? String else { return }
+        guard NodeShortcuts.set(id, key: key, defaults: defaults) else {
+            let current = NodeShortcuts.bindings(defaults)[id]
+            sender.select(sender.itemArray.first { ($0.representedObject as? String) == current })
+            sender.toolTip = t("Shortcut already in use")
+            return
+        }
+        sender.toolTip = nil
+        installMenu()
+    }
+    @objc private func resetNodeShortcuts(_ sender: NSButton) {
+        defaults.removeObject(forKey: "nodeShortcuts")
+        for popup in settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSPopUpButton }) ?? [] {
+            guard let id = popup.identifier?.rawValue, id.hasPrefix("shortcuts-") else { continue }
+            let key = NodeShortcuts.bindings(defaults)[String(id.dropFirst("shortcuts-".count))]
+            popup.select(popup.itemArray.first { ($0.representedObject as? String) == key })
+            popup.toolTip = nil
+        }
+        installMenu()
     }
     @objc private func chooseLanguage(_ sender: NSPopUpButton) {
         guard let chosen = sender.selectedItem?.representedObject as? String,
@@ -2119,6 +2320,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             case "zh-Hans": item.title = t("Simplified Chinese")
             case "en": item.title = t("English")
             default: break
+            }
+        }
+        for view in settingsWindow?.contentView?.subviews ?? [] {
+            switch view.identifier?.rawValue {
+            case "general-Appearance": (view as? NSTextField)?.stringValue = t("Appearance")
+            case "general-appearance":
+                if let popup = view as? NSPopUpButton {
+                    popup.setAccessibilityLabel(t("Appearance"))
+                    for item in popup.itemArray {
+                        let title = (item.representedObject as? String ?? "system").capitalized
+                        item.title = t(title)
+                    }
+                }
+            case "general-shrink":
+                (view as? NSButton)?.title = t("Shrink new nodes to fit content")
+                view.setAccessibilityLabel(t("Shrink new nodes to fit content"))
+            case "shortcuts-restore":
+                (view as? NSButton)?.title = t("Restore Defaults")
+                view.setAccessibilityLabel(t("Restore Defaults"))
+            default: break
+            }
+            if let identifier = view.identifier?.rawValue {
+                let id = identifier.replacingOccurrences(of: "shortcuts-label-", with: "")
+                    .replacingOccurrences(of: "shortcuts-", with: "")
+                if let command = NodeShortcuts.commands.first(where: { $0.id == id }) {
+                    (view as? NSTextField)?.stringValue = t(command.title)
+                    if let popup = view as? NSPopUpButton {
+                        popup.setAccessibilityLabel(t(command.title))
+                        for item in popup.itemArray {
+                            if let choice = NodeShortcuts.choices.first(where: {
+                                $0.key == item.representedObject as? String
+                            }) { item.title = t(choice.label) }
+                        }
+                    }
+                }
+            }
+            if let tabs = view as? NSSegmentedControl {
+                tabs.setLabel(t("General"), forSegment: 0)
+                tabs.setLabel(t("Keyboard Shortcuts"), forSegment: 1)
+                tabs.setAccessibilityLabel(t("Settings Page"))
+                tabs.setImage(NSImage(systemSymbolName: "gearshape", accessibilityDescription: t("General")), forSegment: 0)
+                tabs.setImage(NSImage(systemSymbolName: "keyboard", accessibilityDescription: t("Keyboard Shortcuts")), forSegment: 1)
             }
         }
     }
@@ -2200,8 +2443,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             ("Detach Node", #selector(detachNode(_:)), "D", [.command, .shift])
         ]
         for (title, action, key, modifiers) in entries {
-            let item = nodeMenu.addItem(withTitle: t(title), action: action, keyEquivalent: key)
-            item.keyEquivalentModifierMask = modifiers
+            let command = NodeShortcuts.commands.first { $0.title == title }
+            let choice = command.flatMap { node in
+                NodeShortcuts.choices.first { $0.key == NodeShortcuts.bindings(defaults)[node.id] }
+            }
+            let useCustom = command != nil && title != "New Main Node" &&
+                !(title == "New Sibling" && choice?.key == "return")
+            let equivalent = useCustom ? (choice?.code == 48 ? "\t" : "\r") : key
+            let item = nodeMenu.addItem(withTitle: t(title), action: action, keyEquivalent: equivalent)
+            item.keyEquivalentModifierMask = useCustom ? (choice?.modifiers ?? modifiers) : modifiers
             item.target = self
         }
         nodeMenu.addItem(withTitle: t("Font…"), action: #selector(showNodeFont(_:)), keyEquivalent: "t").target = self

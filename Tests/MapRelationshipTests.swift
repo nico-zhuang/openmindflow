@@ -26,8 +26,39 @@ enum MapRelationshipTests {
         moved.control1 = SIMD2(80, -20)
         assert(relationshipGeometry(moved, from: from, to: to)!.control1 == CGPoint(x: 180, y: 180))
         assert(relationshipGeometry(moved, from: from, to: to)!.control2 == geometry.control2)
+        let upper = CGRect(x: 100, y: 100, width: 120, height: 60)
+        let lower = CGRect(x: 100, y: 400, width: 120, height: 60)
+        let vertical = relationshipGeometry(MapRelationship(from: left, to: right), from: upper, to: lower)!
+        assert(vertical.start.y == upper.maxY && vertical.end.y == lower.minY,
+               "Vertical relationships must start/end on the nearest node outline, not a fixed left/right side")
+        assert((upper.minX...upper.maxX).contains(vertical.start.x) &&
+               (lower.minX...lower.maxX).contains(vertical.end.x) &&
+               vertical.endArrowhead?.first == vertical.end,
+               "Arrow tips must remain on the same node boundary as the curve")
+        let reversed = relationshipGeometry(MapRelationship(from: left, to: right), from: lower, to: upper)!
+        assert(reversed.start.y == lower.minY && reversed.end.y == upper.maxY,
+               "Moving a node past the other must slide both anchors to the newly nearest sides")
+        let horizontal = CGRect(x: 400, y: 100, width: 120, height: 60)
+        let straight = relationshipGeometry(MapRelationship(from: left, to: right), from: upper, to: horizontal)!
+        var upward = MapRelationship(from: left, to: right)
+        upward.control1 = SIMD2(0, -1_000)
+        upward.control2 = SIMD2(0, 1_000)
+        let aimed = relationshipGeometry(upward, from: upper, to: horizontal)!
+        assert(straight.start.x == upper.maxX && straight.end.x == horizontal.minX &&
+               aimed.start.y == upper.minY && aimed.end.y == horizontal.maxY,
+               "Dragging either Bézier control past a node corner slides its arrow anchor onto the facing edge")
         let decoded = try JSONDecoder().decode(MapRelationship.self, from: JSONEncoder().encode(edge))
         assert(decoded == edge)
+        var manuallyAimed = edge
+        manuallyAimed.control1Aim = SIMD2(-250, 20)
+        manuallyAimed.control2Aim = SIMD2(300, -80)
+        let manualBytes = try JSONEncoder().encode(manuallyAimed)
+        let restoredManual = try JSONDecoder().decode(MapRelationship.self, from: manualBytes)
+        assert(restoredManual == manuallyAimed,
+               "World-center aims from dragged handles must survive own JSON save and reopen")
+        manuallyAimed.control1Aim = SIMD2(.nan, 0)
+        assert(!validRelationship(manuallyAimed, nodeIDs: ids),
+               "Untrusted JSON must not introduce nonfinite manual Bézier anchor directions")
         var dotted = edge
         dotted.style = .dotted
         let decodedDot = try JSONDecoder().decode(MapRelationship.self, from: JSONEncoder().encode(dotted))

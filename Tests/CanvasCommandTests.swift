@@ -118,8 +118,23 @@ enum CanvasCommandTests {
         let blankRight = NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 800, y: 40),
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 2, clickCount: 1, pressure: 1)!
-        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node", "Paste", "", "Arrange Map"],
-               "Blank canvas should offer new main node and explicit Arrange without pretending a node was clicked")
+        let menu = rightCanvas.menu(for: blankRight)!
+        let expectedBlank = ["New Main Node", "Paste", "", "Zoom In", "Zoom Out", "Fit Content", "", "Select All", "", "Arrange Map"]
+        assert(menu.items.map(\.title) == expectedBlank.map { $0.isEmpty ? "" : L10n.text($0, defaults: rightCanvas.localizationDefaults) },
+               "Blank canvas must expose original-style zoom/fit/select groups without pretending a node was clicked")
+        let beforeZoom = rightCanvas.frameForAccessibility(rightB.id)!
+        let zoomIn = menu.item(withTitle: L10n.text("Zoom In", defaults: rightCanvas.localizationDefaults))!
+        assert(NSApp.sendAction(zoomIn.action!, to: zoomIn.target, from: zoomIn) &&
+               rightCanvas.frameForAccessibility(rightB.id)!.width > beforeZoom.width)
+        let blankZoomOut = menu.item(withTitle: L10n.text("Zoom Out", defaults: rightCanvas.localizationDefaults))!
+        assert(NSApp.sendAction(blankZoomOut.action!, to: blankZoomOut.target, from: blankZoomOut) &&
+               abs(rightCanvas.frameForAccessibility(rightB.id)!.width - beforeZoom.width) < 0.01)
+        let blankFit = menu.item(withTitle: L10n.text("Fit Content", defaults: rightCanvas.localizationDefaults))!
+        assert(NSApp.sendAction(blankFit.action!, to: blankFit.target, from: blankFit))
+        let selectAll = menu.item(withTitle: L10n.text("Select All", defaults: rightCanvas.localizationDefaults))!
+        assert(NSApp.sendAction(selectAll.action!, to: selectAll.target, from: selectAll) &&
+               rightModel.selectedIDs == [rightRoot.id, rightA.id, rightB.id],
+               "Blank-canvas Select All must select visible nodes without mutating map content")
         let suiteName = "local.mindmap.appearance-test.\(UUID().uuidString)"
         let appearanceDefaults = UserDefaults(suiteName: suiteName)!
         let priorAppearance = NSApp.appearance

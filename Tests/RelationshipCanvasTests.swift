@@ -22,6 +22,16 @@ import AppKit
         let id = model.relationships[0].id
         assert(canvas.selectedRelationshipID == id)
         let first = canvas.frameForAccessibility(a.id)!, second = canvas.frameForAccessibility(b.id)!
+        let overrides = Dictionary(uniqueKeysWithValues: [a, b].map {
+            ($0.id, MapLayoutOverride(location: nil, maxWidth: nil, allowToShrinkWidth: true,
+                                      font: mapFont(isRoot: true, node: $0)))
+        })
+        let worldBoxes = Dictionary(uniqueKeysWithValues: mapLayout(model.roots, overrides: overrides).map { ($0.node.id, $0.frame) })
+        func screenControl(_ geometry: RelationshipGeometry, firstHandle: Bool) -> CGPoint {
+            let point = firstHandle ? geometry.control1 : geometry.control2
+            return CGPoint(x: point.x + first.minX - worldBoxes[a.id]!.minX,
+                           y: point.y + first.minY - worldBoxes[a.id]!.minY)
+        }
         let start = CGPoint(x: first.maxX, y: first.midY)
         let end = CGPoint(x: second.minX, y: second.midY)
         let middle = CGPoint(x: (start.x + end.x) / 2, y: start.y)
@@ -58,25 +68,46 @@ import AppKit
         canvas.mouseDragged(with: event(.leftMouseDragged, firstMoved))
         assert(model.relationships[0].control1 == SIMD2(60, 0), "Preview drag must not create repeated Undo snapshots")
         canvas.mouseUp(with: event(.leftMouseUp, firstMoved))
-        assert(model.relationships[0].control1 == SIMD2(86, -14) &&
-               model.relationships[0].control2 == SIMD2(-60, 0), "First handle changes only first control")
+        let firstCurve = relationshipGeometry(model.relationships[0], from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        let firstNow = screenControl(firstCurve, firstHandle: true)
+        assert(abs(firstNow.x - firstMoved.x) < 1 && abs(firstNow.y - firstMoved.y) < 1 &&
+               model.relationships[0].control2 == SIMD2(-60, 0),
+               "First handle follows the mouse while the anchor slides on the source outline")
         canvas.undo()
         assert(model.relationships[0].control1 == SIMD2(60, 0), "Control drag is one Undo step")
+        let crossedHandle = CGPoint(x: first.minX - 50, y: first.midY)
+        canvas.mouseDown(with: event(.leftMouseDown, firstHandle))
+        canvas.mouseDragged(with: event(.leftMouseDragged, crossedHandle))
+        canvas.mouseUp(with: event(.leftMouseUp, crossedHandle))
+        let crossedCurve = relationshipGeometry(model.relationships[0], from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        let crossedNow = screenControl(crossedCurve, firstHandle: true)
+        assert(abs(crossedNow.x - crossedHandle.x) < 1 && abs(crossedNow.y - crossedHandle.y) < 1 &&
+               crossedCurve.start.x == worldBoxes[a.id]!.minX,
+               "Dragging a handle across its source must retain the pointer and slide the anchor to the opposite edge")
+        canvas.undo()
+        assert(model.relationships[0].control1 == SIMD2(60, 0), "Crossing the source must also undo in one step")
         let secondHandle = CGPoint(x: end.x - 60, y: end.y)
         let secondMoved = CGPoint(x: secondHandle.x - 22, y: secondHandle.y + 18)
         canvas.mouseDown(with: event(.leftMouseDown, secondHandle))
         canvas.mouseDragged(with: event(.leftMouseDragged, secondMoved))
         canvas.mouseUp(with: event(.leftMouseUp, secondMoved))
-        assert(model.relationships[0].control2 == SIMD2(-82, 18) && model.relationships[0].control1 == SIMD2(60, 0),
-               "Second handle changes only second control")
+        let secondCurve = relationshipGeometry(model.relationships[0], from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        let secondNow = screenControl(secondCurve, firstHandle: false)
+        assert(abs(secondNow.x - secondMoved.x) < 1 && abs(secondNow.y - secondMoved.y) < 1 &&
+               model.relationships[0].control1 == SIMD2(60, 0),
+               "Second handle follows the mouse and changes no source-side control")
         let beforePan = model.relationships[0]
         canvas.shiftViewport(by: CGPoint(x: 35, y: 25))
         let pannedSecond = CGPoint(x: secondMoved.x + 35, y: secondMoved.y + 25)
         canvas.mouseDown(with: event(.leftMouseDown, pannedSecond))
         canvas.mouseDragged(with: event(.leftMouseDragged, CGPoint(x: pannedSecond.x + 10, y: pannedSecond.y - 12)))
         canvas.mouseUp(with: event(.leftMouseUp, CGPoint(x: pannedSecond.x + 10, y: pannedSecond.y - 12)))
-        assert(model.relationships[0].control2 == beforePan.control2 + SIMD2(10, -12),
-               "Screen offset must not leak into stored world-space controls")
+        let pannedCurve = relationshipGeometry(model.relationships[0], from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        let pannedHandle = screenControl(pannedCurve, firstHandle: false)
+        assert(abs(pannedHandle.x + 35 - pannedSecond.x - 10) < 1 &&
+               abs(pannedHandle.y + 25 - pannedSecond.y + 12) < 1 &&
+               model.relationships[0].control2 != beforePan.control2,
+               "Pan cannot leak into stored world geometry or detach a dragged contour handle from the pointer")
         action(remove)
         assert(model.relationships.isEmpty && model.roots == [a, b], "Deleting curve cannot delete either node")
         canvas.undo()
@@ -99,8 +130,12 @@ import AppKit
         let worldWidth = mapNodeSize(a, font: mapFont(isRoot: true, node: a)).width
         let fittedFirst = wideCanvas.frameForAccessibility(a.id)!
         let factor = fittedFirst.width / worldWidth
-        let control = CGPoint(x: fittedFirst.maxX + 60 * factor,
-                              y: fittedFirst.midY - 800 * factor)
+        let wideGeometry = relationshipGeometry(curved, from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        func fittedScreen(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: fittedFirst.minX + (point.x - worldBoxes[a.id]!.minX) * factor,
+                    y: fittedFirst.minY + (point.y - worldBoxes[a.id]!.minY) * factor)
+        }
+        let control = fittedScreen(wideGeometry.control1)
         guard factor < 1 && fitted.insetBy(dx: -1, dy: -1).contains(control) else {
             fputs("Fit curve: frame=\(fitted) control=\(control) factor=\(factor)\n", stderr); exit(1)
         }
@@ -110,15 +145,19 @@ import AppKit
                 eventNumber: 1, clickCount: 1, pressure: 1)!
         }
         // A synthetic curve right-click reveals its handles at a non-unit zoom.
-        let fittedMiddle = CGPoint(x: (fittedFirst.maxX + wideCanvas.frameForAccessibility(b.id)!.minX) / 2,
-                                   y: fittedFirst.midY - 240 * factor)
-        _ = wideCanvas.menu(for: wideEvent(.rightMouseDown, fittedMiddle))
+        let midpoint = CGPoint(x: (wideGeometry.start.x + 3 * wideGeometry.control1.x +
+                                      3 * wideGeometry.control2.x + wideGeometry.end.x) / 8,
+                               y: (wideGeometry.start.y + 3 * wideGeometry.control1.y +
+                                      3 * wideGeometry.control2.y + wideGeometry.end.y) / 8)
+        _ = wideCanvas.menu(for: wideEvent(.rightMouseDown, fittedScreen(midpoint)))
         assert(wideCanvas.selectedRelationshipID == curved.id)
         wideCanvas.mouseDown(with: wideEvent(.leftMouseDown, control))
         wideCanvas.mouseDragged(with: wideEvent(.leftMouseDragged, CGPoint(x: control.x + 20, y: control.y)))
         wideCanvas.mouseUp(with: wideEvent(.leftMouseUp, CGPoint(x: control.x + 20, y: control.y)))
-        assert(abs(distant.relationships[0].control1.x - (60 + Double(20 / factor))) < 0.001,
-               "Twenty screen points must translate to 20 / zoom world units")
+        let movedWide = relationshipGeometry(distant.relationships[0], from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        assert(abs(movedWide.control1.x - wideGeometry.control1.x - 20 / factor) < 1 &&
+               abs(movedWide.control1.y - wideGeometry.control1.y) < 1,
+               "At reduced zoom the actual handle must move twenty screen points, independent of its sliding anchor")
         let menuModel = MapModel(roots: [a, b], selected: a.id)
         let menuCanvas = MapCanvas(model: menuModel)
         let delegate = AppDelegate()
