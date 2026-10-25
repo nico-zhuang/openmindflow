@@ -749,11 +749,14 @@ final class MapModel {
         let firstWidth = pendingInitialWidth.contains(selected) && !title.isEmpty &&
             Self.node(at: path[...], in: roots).width == nil &&
             (initialWidth.map(MapNode.validWidth) ?? false) ? initialWidth : nil
-        save()
-        Self.edit(&roots, at: path[...]) { nodes, index in
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
             nodes[index].title = title
             if let firstWidth { nodes[index].width = firstWidth }
         }
+        guard fitsSavedJSON(updated, relationships: relationships) else { return }
+        save()
+        roots = updated
         if !title.isEmpty { pendingInitialWidth.remove(selected) }
     }
 

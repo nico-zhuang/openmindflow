@@ -17,6 +17,15 @@ import AppKit
                "Adding a relationship crosses the *exact* new envelope budget")
         assert(!model.setRelationship(edge) && model.relationships.isEmpty,
                "Reject unsavable relationship before modifying model or Undo")
+        let originalRoots = model.roots
+        let oversizedTitle = full.title + String(repeating: "y", count: 64)
+        var renamed = originalRoots
+        renamed[0].title = oversizedTitle
+        let renamedBytes = try JSONEncoder().encode(renamed).count
+        assert(renamedBytes > MapModel.maxSavedJSONBytes)
+        model.rename(oversizedTitle)
+        assert(model.roots == originalRoots && !model.undo(),
+               "Reject oversized rename before changing roots or creating Undo")
         print("exact combined roots-and-relationships JSON capacity check passed")
     }
 }
