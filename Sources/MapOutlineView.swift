@@ -19,12 +19,14 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     private final class Row: NSObject {
         let id: UUID
         let title: String
+        let mediaLabel: String?
         let folded: Bool
         let children: [Row]
 
         init(_ node: MapNode) {
             id = node.id
             title = node.title
+            mediaLabel = node.video != nil ? "Video" : node.image != nil ? "Image" : nil
             folded = node.folded
             children = node.children.map(Row.init)
         }
@@ -122,7 +124,7 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let row = item as! Row
         let label = NSTextField(labelWithString: row.title.isEmpty
-            ? L10n.text("New idea", defaults: localizationDefaults) : row.title)
+            ? L10n.text(row.mediaLabel ?? "New idea", defaults: localizationDefaults) : row.title)
         label.lineBreakMode = .byTruncatingTail
         label.toolTip = row.title
         return label

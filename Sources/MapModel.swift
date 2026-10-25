@@ -77,20 +77,32 @@ struct MapNode: Codable, Equatable {
     var strokeStyle: String? = nil
     var image: MapImage? = nil
     var imageWidth: CGFloat? = nil // nil fits the picture within a 296pt square.
+    var video: MapVideo? = nil
+    var videoWidth: CGFloat? = nil // nil fits the clip within a 296pt square.
+}
+
+struct MapSelectionClip: Codable {
+    let roots: [MapNode]
+    let relationships: [MapRelationship]
 }
 
 final class MapModel {
     static let maxSavedJSONBytes = 32 * 1024 * 1024
-    private static func fitsSavedJSON(_ roots: [MapNode]) -> Bool {
-        (try? JSONEncoder().encode(roots).count).map { $0 <= maxSavedJSONBytes } ?? false
+    private static func fitsSavedJSON(_ roots: [MapNode], relationships: [MapRelationship]) -> Bool {
+        let encoder = JSONEncoder()
+        let size = relationships.isEmpty
+            ? try? encoder.encode(roots).count
+            : try? encoder.encode(OwnMapDocument(roots: roots, relationships: relationships)).count
+        return size.map { $0 <= maxSavedJSONBytes } ?? false
     }
     var roots: [MapNode]
+    var relationships: [MapRelationship] = []
     var selected: UUID { didSet { selectedIDs = [selected]; selectionAnchor = selected } }
     private(set) var selectedIDs: Set<UUID>
     private var selectionAnchor: UUID
     private var pendingInitialWidth: Set<UUID> = []
 
-    private typealias Snapshot = (roots: [MapNode], selected: UUID, selectedIDs: Set<UUID>, anchor: UUID, pending: Set<UUID>)
+    private typealias Snapshot = (roots: [MapNode], relationships: [MapRelationship], selected: UUID, selectedIDs: Set<UUID>, anchor: UUID, pending: Set<UUID>)
     private var past: [Snapshot] = []
     private var future: [Snapshot] = []
 
@@ -99,6 +111,107 @@ final class MapModel {
         self.selected = selected
         selectedIDs = [selected]
         selectionAnchor = selected
+    }
+
+    func copySelection(visibleCenters: [UUID: CGPoint] = [:]) -> MapSelectionClip? {
+        let selected = selectedPaths()
+        let outer = selected.filter { path in
+            !selected.contains { $0.count < path.count && path.starts(with: $0) }
+        }
+        guard !outer.isEmpty else { return nil }
+        var group = outer.map { Self.node(at: $0[...], in: roots) }
+        for index in group.indices where group[index].location == nil {
+            guard let point = visibleCenters[group[index].id], point.x.isFinite, point.y.isFinite,
+                  abs(point.x) <= 1_000_000, abs(point.y) <= 1_000_000 else { return nil }
+            group[index].location = SIMD2(Double(point.x), Double(point.y))
+        }
+        var copiedIDs = Set<UUID>()
+        func collect(_ node: MapNode) {
+            copiedIDs.insert(node.id)
+            node.children.forEach(collect)
+        }
+        group.forEach(collect)
+        let clip = MapSelectionClip(roots: group, relationships: relationships.filter {
+            copiedIDs.contains($0.from) && copiedIDs.contains($0.to)
+        })
+        guard (try? JSONEncoder().encode(clip).count).map({ $0 <= Self.maxSavedJSONBytes }) ?? false else { return nil }
+        return clip
+    }
+
+    @discardableResult
+    func pasteSelection(_ clip: MapSelectionClip, at anchor: CGPoint) -> Bool {
+        guard anchor.x.isFinite, anchor.y.isFinite,
+              abs(anchor.x) <= 1_000_000, abs(anchor.y) <= 1_000_000,
+              !clip.roots.isEmpty, let first = clip.roots.first?.location,
+              (try? JSONEncoder().encode(clip).count).map({ $0 <= Self.maxSavedJSONBytes }) ?? false else { return false }
+        guard let oldIDs = try? checkOwnJSONNodes(clip.roots),
+              sanitizeRelationships(clip.relationships, nodeIDs: oldIDs).count == clip.relationships.count else { return false }
+        let delta = SIMD2(Double(anchor.x) - first.x, Double(anchor.y) - first.y)
+        var idMap: [UUID: UUID] = [:]
+        func clone(_ node: MapNode) -> MapNode? {
+            var result = node
+            result.id = UUID()
+            idMap[node.id] = result.id
+            if let old = result.location {
+                let next = old + delta
+                guard next.x.isFinite, next.y.isFinite,
+                      abs(next.x) <= 1_000_000, abs(next.y) <= 1_000_000 else { return nil }
+                result.location = next
+            }
+            var children: [MapNode] = []
+            for child in node.children {
+                guard let next = clone(child) else { return nil }
+                children.append(next)
+            }
+            result.children = children
+            return result
+        }
+        var copies: [MapNode] = []
+        for root in clip.roots {
+            guard let next = clone(root) else { return false }
+            copies.append(next)
+        }
+        let edges = remapRelationships(clip.relationships, nodeIDs: idMap)
+        guard edges.count == clip.relationships.count,
+              Self.fitsSavedJSON(roots + copies, relationships: relationships + edges) else { return false }
+        save()
+        roots.append(contentsOf: copies)
+        relationships.append(contentsOf: edges)
+        selected = copies[0].id
+        selectedIDs = Set(copies.map(\.id))
+        return true
+    }
+
+    private func allNodeIDs() -> Set<UUID> {
+        var ids = Set<UUID>()
+        func visit(_ node: MapNode) {
+            ids.insert(node.id)
+            node.children.forEach(visit)
+        }
+        roots.forEach(visit)
+        return ids
+    }
+
+    @discardableResult
+    func setRelationship(_ edge: MapRelationship) -> Bool {
+        guard validRelationship(edge, nodeIDs: allNodeIDs()) else { return false }
+        var updated = relationships
+        if let index = updated.firstIndex(where: { $0.id == edge.id }) {
+            guard updated[index] != edge else { return false }
+            updated[index] = edge
+        } else { updated.append(edge) }
+        guard Self.fitsSavedJSON(roots, relationships: updated) else { return false }
+        save()
+        relationships = updated
+        return true
+    }
+
+    @discardableResult
+    func removeRelationship(_ id: UUID) -> Bool {
+        guard let index = relationships.firstIndex(where: { $0.id == id }) else { return false }
+        save()
+        relationships.remove(at: index)
+        return true
     }
 
     @discardableResult
@@ -199,7 +312,26 @@ final class MapModel {
             nodes[index].folded = false
             nodes[index].children.append(child)
         }
-        guard Self.fitsSavedJSON(updated) else { return false }
+        guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
+        save()
+        roots = updated
+        selected = child.id
+        return true
+    }
+
+    @discardableResult
+    func addVideoChild(_ video: MapVideo) -> Bool {
+        guard let path = Self.path(to: selected, in: roots) else { return false }
+        let parent = Self.node(at: path[...], in: roots)
+        let child = MapNode(id: UUID(), title: "", children: [], folded: false,
+                            fontFamily: parent.fontFamily, fontSize: parent.fontSize,
+                            textAlignment: parent.textAlignment, video: video)
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
+            nodes[index].folded = false
+            nodes[index].children.append(child)
+        }
+        guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
         save()
         roots = updated
         selected = child.id
@@ -481,13 +613,16 @@ final class MapModel {
                 Self.edit(&updated, at: path[...]) { nodes, index in
                     nodes[index].image = image
                     nodes[index].imageWidth = displayWidth
+                    nodes[index].video = nil
+                    nodes[index].videoWidth = nil
                 }
             }
-            guard Self.fitsSavedJSON(updated) else { return false }
+            guard Self.fitsSavedJSON(updated, relationships: relationships) else { return false }
         }
         return editSelected { node in
             node.image = image
             node.imageWidth = image == nil ? nil : displayWidth
+            if image != nil { node.video = nil; node.videoWidth = nil }
         }
     }
 
@@ -496,6 +631,13 @@ final class MapModel {
         guard width.isFinite, (60...1000).contains(width),
               selectedPaths().allSatisfy({ Self.node(at: $0[...], in: roots).image != nil }) else { return false }
         return editSelected { $0.imageWidth = width }
+    }
+
+    @discardableResult
+    func setVideoWidth(_ width: CGFloat) -> Bool {
+        guard width.isFinite, (60...1000).contains(width),
+              selectedPaths().allSatisfy({ Self.node(at: $0[...], in: roots).video != nil }) else { return false }
+        return editSelected { $0.videoWidth = width }
     }
 
     @discardableResult
@@ -561,6 +703,7 @@ final class MapModel {
             guard roots.count > 1 else { return false }
             save()
             roots.remove(at: path[0])
+            relationships = sanitizeRelationships(relationships, nodeIDs: allNodeIDs())
             selected = roots[min(path[0], roots.count - 1)].id
             return true
         }
@@ -569,6 +712,7 @@ final class MapModel {
         Self.edit(&roots, at: path[...]) { nodes, index in
             nodes.remove(at: index)
         }
+        relationships = sanitizeRelationships(relationships, nodeIDs: allNodeIDs())
         selected = parentID
         return true
     }
@@ -587,16 +731,16 @@ final class MapModel {
     @discardableResult
     func undo() -> Bool {
         guard let previous = past.popLast() else { return false }
-        future.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
-        (roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = previous
+        future.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = previous
         return true
     }
 
     @discardableResult
     func redo() -> Bool {
         guard let next = future.popLast() else { return false }
-        past.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
-        (roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = next
+        past.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        (roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth) = next
         return true
     }
 
@@ -619,7 +763,7 @@ final class MapModel {
     }
 
     private func save() {
-        past.append((roots, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
+        past.append((roots, relationships, selected, selectedIDs, selectionAnchor, pendingInitialWidth))
         future.removeAll()
     }
 

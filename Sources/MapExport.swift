@@ -27,11 +27,12 @@ enum MapExportError: LocalizedError {
     }
 }
 
-func exportMarkdown(_ roots: [MapNode]) -> String {
-    func containsImage(_ nodes: [MapNode]) -> Bool {
-        nodes.contains { $0.image != nil || containsImage($0.children) }
+func exportMarkdown(_ roots: [MapNode], relationships: [MapRelationship] = []) -> String {
+    func containsMedia(_ nodes: [MapNode]) -> Bool {
+        nodes.contains { $0.image != nil || $0.video != nil || containsMedia($0.children) }
     }
-    var output = containsImage(roots) ? "> Images and other media are not embedded in this Markdown export.\n\n" : ""
+    var output = containsMedia(roots) ? "> Images and other media are not embedded in this Markdown export.\n\n" : ""
+    if !relationships.isEmpty { output += "> Cross-node relationships are not embedded in this Markdown export.\n\n" }
     func append(_ nodes: [MapNode], depth: Int) {
         for node in nodes {
             let text = node.title.replacingOccurrences(of: "\r\n", with: "\n")
@@ -48,6 +49,7 @@ func exportMarkdown(_ roots: [MapNode]) -> String {
                 }
             }
             if escaped.isEmpty && node.image != nil { escaped = "[Image omitted]" }
+            if escaped.isEmpty && node.video != nil { escaped = "[Video omitted]" }
             output += String(repeating: "  ", count: depth) + "- " + escaped + "\n"
             append(node.children, depth: depth + 1)
         }
@@ -67,11 +69,12 @@ func exportMap(_ canvas: MapCanvas, as format: MapExportFormat, to url: URL) thr
 
     let data: Data
     if format == .markdown {
-        data = Data(exportMarkdown(canvas.model.roots).utf8)
+        data = Data(exportMarkdown(canvas.model.roots, relationships: canvas.model.relationships).utf8)
     } else {
         // Render on a detached canvas: no viewport, selection, model, or source file is modified.
         let roots = canvas.model.roots
         let snapshot = MapCanvas(model: MapModel(roots: roots, selected: UUID()))
+        snapshot.model.relationships = canvas.model.relationships
         snapshot.branchStyles = canvas.branchStyles
         snapshot.nativePresentation = canvas.nativePresentation
         snapshot.embeddedTheme = canvas.embeddedTheme

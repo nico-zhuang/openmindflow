@@ -29,7 +29,7 @@ struct OwnMapDocument: Codable {
 
 enum OwnJSONError: LocalizedError {
     case invalidPath, invalidFile, tooLarge, duplicateID, invalidWidth, invalidLocation, invalidFont, invalidStyle, invalidImageSize
-    case invalidRelationship, duplicateRelationship, unsupportedVersion, requiresDocumentAPI
+    case invalidRelationship, duplicateRelationship, unsupportedVersion, requiresDocumentAPI, invalidVideoSize
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +46,7 @@ enum OwnJSONError: LocalizedError {
         case .duplicateRelationship: return "The document contains duplicate relationship IDs."
         case .unsupportedVersion: return "This map document version is not supported."
         case .requiresDocumentAPI: return "This document has relationships; open it using the complete document reader."
+        case .invalidVideoSize: return "A video display width must be 60 to 1000 points, require a video, and not share a node with an image."
         }
     }
 }
@@ -57,7 +58,7 @@ private func checkOwnJSONPath(_ url: URL) throws {
           }) else { throw OwnJSONError.invalidPath }
 }
 
-private func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
+func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
     var ids = Set<UUID>()
     func visit(_ nodes: [MapNode]) throws {
         for node in nodes {
@@ -68,6 +69,11 @@ private func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
             if let width = node.imageWidth,
                (node.image == nil || !width.isFinite || !(60...1000).contains(width)) {
                 throw OwnJSONError.invalidImageSize
+            }
+            if node.image != nil && node.video != nil { throw OwnJSONError.invalidVideoSize }
+            if let width = node.videoWidth,
+               (node.video == nil || !width.isFinite || !(60...1000).contains(width)) {
+                throw OwnJSONError.invalidVideoSize
             }
             if let family = node.fontFamily, (family.isEmpty || family.utf8.count > 128) {
                 throw OwnJSONError.invalidFont

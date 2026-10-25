@@ -38,26 +38,32 @@ func mapFont(isRoot: Bool, zoom: CGFloat = 1, node: MapNode? = nil) -> NSFont {
 
 func mapNodeSize(_ node: MapNode, font: NSFont, maxWidth: CGFloat? = nil,
                  allowToShrinkWidth: Bool = false) -> CGSize {
-    let title = node.title.isEmpty && node.image != nil ? "" : (node.title.isEmpty ? "New idea" : node.title)
+    let hasMedia = node.image != nil || node.video != nil
+    let title = node.title.isEmpty && hasMedia ? "" : (node.title.isEmpty ? "New idea" : node.title)
     let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
     let attributes: [NSAttributedString.Key: Any] = [.font: font]
     let longestLine = text.components(separatedBy: "\n").map {
         ($0 as NSString).size(withAttributes: attributes).width
     }.max() ?? 0
     let naturalWidth = max(ceil(longestLine) + 24,
-                           (node.image.map { $0.displaySize(width: node.imageWidth).width + 24 } ?? 0))
+                           node.image.map { $0.displaySize(width: node.imageWidth).width + 24 } ?? 0,
+                           node.video.map { $0.displaySize(width: node.videoWidth).width + 24 } ?? 0)
     let width: CGFloat
     if let explicit = node.width { width = explicit }
     else if let maxWidth {
         width = max(60, allowToShrinkWidth ? min(naturalWidth, maxWidth) : maxWidth)
-    } else { width = min(node.image == nil ? 320 : 1000, max(170, naturalWidth)) }
+    } else { width = min(hasMedia ? 1000 : 320, max(170, naturalWidth)) }
     let textHeight: CGFloat = text.isEmpty ? 0 : ceil((text as NSString).boundingRect(
         with: CGSize(width: max(1, width - 24), height: .greatestFiniteMagnitude),
         options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height)
     let imageHeight = node.image.map {
         ceil($0.displaySize(width: min(node.imageWidth ?? $0.displaySize().width, max(1, width - 24))).height)
     } ?? 0
-    return CGSize(width: width, height: max(44, imageHeight + textHeight + (node.image == nil ? 22 : 22 + (text.isEmpty ? 0 : 8))))
+    let videoHeight = node.video.map {
+        ceil($0.displaySize(width: min(node.videoWidth ?? $0.displaySize().width, max(1, width - 24))).height)
+    } ?? 0
+    return CGSize(width: width, height: max(44, max(imageHeight, videoHeight) + textHeight
+        + 22 + (hasMedia && !text.isEmpty ? 8 : 0)))
 }
 
 func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -> [LaidOutNode] {

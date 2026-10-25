@@ -99,7 +99,7 @@ enum CanvasCommandTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
-              rightMenu.items.map(\.title) == ["Edit Title", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
+              rightMenu.items.map(\.title) == ["Edit Title", "Copy", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
             fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
         }
         let editTitle = rightMenu.item(withTitle: "Edit Title")!
@@ -118,7 +118,7 @@ enum CanvasCommandTests {
         let blankRight = NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 800, y: 40),
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 2, clickCount: 1, pressure: 1)!
-        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node", "", "Arrange Map"],
+        assert(rightCanvas.menu(for: blankRight)?.items.map(\.title) == ["New Main Node", "Paste", "", "Arrange Map"],
                "Blank canvas should offer new main node and explicit Arrange without pretending a node was clicked")
         let suiteName = "local.mindmap.appearance-test.\(UUID().uuidString)"
         let appearanceDefaults = UserDefaults(suiteName: suiteName)!
@@ -178,6 +178,10 @@ enum CanvasCommandTests {
             fputs("File shortcuts must be Cmd+O Own JSON and Cmd+Shift+O read-only MindNode, preserving actions and targets\n", stderr)
             exit(1)
         }
+        let mindNodeCopy = fileMenu.item(withTitle: "Experimental MindNode v9 Plain-Tree Copy…")
+        assert(mindNodeCopy?.action.map(NSStringFromSelector) == "exportMindNodeCopy:" &&
+               mindNodeCopy?.target as AnyObject? === appDelegate,
+               "The limited v9 writer must be available only as an explicitly experimental new-copy export")
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let fontMenu = nodeMenu.item(withTitle: "Font…")
         assert(fontMenu?.keyEquivalent == "t" && fontMenu?.keyEquivalentModifierMask == [.command],

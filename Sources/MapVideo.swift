@@ -89,6 +89,13 @@ struct MapVideo: Codable, Equatable {
         duration = seconds
     }
 
+    func posterImage() -> NSImage? {
+        guard let temporary = try? MapVideoTemporaryFile(data: data),
+              let frame = try? AVAssetImageGenerator(asset: AVURLAsset(url: temporary.url))
+                .copyCGImage(at: .zero, actualTime: nil) else { return nil }
+        return NSImage(cgImage: frame, size: CGSize(width: pixelWidth, height: pixelHeight))
+    }
+
     func displaySize(width: CGFloat? = nil) -> CGSize {
         let ratio = CGFloat(pixelWidth) / CGFloat(pixelHeight)
         let fitted = min(296, CGFloat(pixelWidth), 296 * ratio)

@@ -59,6 +59,10 @@ struct MindNodeDetailedImport {
     let styles: [UUID: MindNodeVisualStyle]
     let presentation: [UUID: MindNodePresentation]
     let theme: MindNodeThemeMetadata?
+    var hasUnimportedConnections = false
+    var hasUnimportedAttachments = false
+    var hasUnimportedRichTitles = false
+    var hasUnimportedTheme = false
 }
 
 enum MindNodeImporter {
@@ -110,6 +114,8 @@ enum MindNodeImporter {
         var styles: [UUID: MindNodeVisualStyle] = [:]
         var presentation: [UUID: MindNodePresentation] = [:]
         var count = 0
+        var hasUnimportedAttachments = false
+        var hasUnimportedRichTitles = false
         func parse(_ value: Any, depth: Int) throws -> MapNode {
             guard depth <= 200, count < 10_000, let node = value as? [String: Any],
                   let rawID = node["nodeID"] as? String, let id = UUID(uuidString: rawID),
@@ -121,8 +127,17 @@ enum MindNodeImporter {
                 throw ImportError.invalid
             }
             count += 1
+            if node["attachment"] != nil { hasUnimportedAttachments = true }
             styles[id] = visualStyle((node["pathStyle"] as? [String: Any])?["strokeStyle"])
             let parsed = try parsedTitle(richText)
+            let unknownCSS = parsed.css.map { css in
+                css.split(separator: ";").contains { declaration in
+                    let key = declaration.split(separator: ":", maxSplits: 1).first?
+                        .trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+                    return !["font", "color", "text-align"].contains(key)
+                }
+            } ?? false
+            if parsed.rich || unknownCSS { hasUnimportedRichTitles = true }
             let location = (node["location"] as? String).flatMap(point)
             let maxWidth = number(title["maxWidth"], range: 1...100_000)
             let shrink = boolean(title["allowToShrinkWidth"])
@@ -146,14 +161,24 @@ enum MindNodeImporter {
             guard let main = map["mainNode"] else { throw ImportError.invalid }
             return try parse(main, depth: 0)
         }
-        return MindNodeDetailedImport(roots: roots, styles: styles, presentation: presentation,
-                                      theme: kind == .typeDirectory ? theme(at: url) : nil)
+        let sourceTheme = kind == .typeDirectory ? theme(at: url) : nil
+        var detailed = MindNodeDetailedImport(roots: roots, styles: styles, presentation: presentation,
+                                      theme: sourceTheme)
+        detailed.hasUnimportedRichTitles = hasUnimportedRichTitles
+        detailed.hasUnimportedTheme = kind == .typeDirectory &&
+            FileManager.default.fileExists(atPath: url.appendingPathComponent("style.mindnodestyle").path) &&
+            sourceTheme == nil
+        detailed.hasUnimportedConnections = canvas["crossConnections"].map {
+            ($0 as? [Any])?.isEmpty != true
+        } ?? false
+        detailed.hasUnimportedAttachments = hasUnimportedAttachments
+        return detailed
     }
 
     static func plainTitle(_ rich: String) throws -> String { try parsedTitle(rich).text }
 
-    private static func parsedTitle(_ rich: String) throws -> (text: String, css: String?) {
-        if rich.isEmpty { return ("", nil) } // Real v9 packages use an empty string for untitled nodes.
+    private static func parsedTitle(_ rich: String) throws -> (text: String, css: String?, rich: Bool) {
+        if rich.isEmpty { return ("", nil, false) } // Real v9 packages use an empty string for untitled nodes.
         guard rich.utf8.count <= 65_536,
               rich.range(of: "<!DOCTYPE", options: .caseInsensitive) == nil,
               rich.range(of: "<!ENTITY", options: .caseInsensitive) == nil else {
@@ -166,7 +191,7 @@ enum MindNodeImporter {
         guard parser.parse(), handler.valid, handler.depth == 0, handler.hasRoot else {
             throw ImportError.invalid
         }
-        return (handler.value, handler.css)
+        return (handler.value, handler.css, handler.hasRichMarkup)
     }
 
     private static func number(_ value: Any?, range: ClosedRange<Double>) -> Double? {
@@ -307,10 +332,16 @@ private final class PlainTitle: NSObject, XMLParserDelegate {
     var depth = 0
     var hasRoot = false
     var valid = true
+    var hasRichMarkup = false
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
         guard depth < 64 else { valid = false; parser.abortParsing(); return }
-        if depth == 0 { hasRoot = true; css = attributeDict["style"]; if elementName != "p" { valid = false } }
+        if depth == 0 {
+            hasRoot = true
+            css = attributeDict["style"]
+            if elementName != "p" { valid = false }
+            if attributeDict.keys.contains(where: { $0 != "style" }) { hasRichMarkup = true }
+        } else if elementName != "br" || !attributeDict.isEmpty { hasRichMarkup = true }
         if !["p", "b", "strong", "i", "em", "u", "span", "br"].contains(elementName) { valid = false }
         if elementName == "br" { value += "\n" }
         depth += 1

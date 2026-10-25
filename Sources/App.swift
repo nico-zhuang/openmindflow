@@ -22,7 +22,8 @@ private final class MapNodeAX: NSAccessibilityElement {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); revealSelection(); needsDisplay = true } }
+    var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; revealSelection(); needsDisplay = true } }
+    private(set) var selectedRelationshipID: UUID?
     var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
     var nativePresentation: [UUID: MindNodePresentation] = [:] { didSet { needsDisplay = true } }
     var embeddedTheme: MindNodeThemeMetadata? { didSet { needsDisplay = true } }
@@ -30,7 +31,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         didSet {
             if springTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
             previewCache = nil
-            let visibleIDs = Set(visibleNodes().map { $0.node.id })
+            let visible = visibleNodes()
+            let visibleIDs = Set(visible.map { $0.node.id })
+            if let playing = videoPlayer {
+                if let node = visible.first(where: { $0.node.id == playing.id }),
+                   let rect = videoRect(node) { playing.view.frame = rect }
+                else { stopVideo() }
+            }
             if needsDisplay, window != nil {
                 NSAccessibility.post(element: self, notification: .layoutChanged)
                 window?.invalidateCursorRects(for: self)
@@ -47,18 +54,24 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     var onChange: (() -> Void)?
     var onSelectionChange: (() -> Void)?
     var onImageError: ((Error) -> Void)?
+    var onVideoError: ((Error) -> Void)?
     var localizationDefaults: UserDefaults = .standard
     private func t(_ text: String) -> String { L10n.text(text, defaults: localizationDefaults) }
     private var zoom: CGFloat = 1
     private var offset = CGPoint(x: 80, y: 90)
     private var editor: NSTextField?
+    private var videoPlayer: (id: UUID, view: MapVideoPlayerView)?
+    private let videoPosters = NSCache<NSUUID, NSImage>()
     private var dragSource: UUID?
+    private var relationshipDrag: (id: UUID, first: Bool, grab: CGPoint, point: CGPoint)?
     private var dragPoint: CGPoint? { didSet { previewCache = nil } }
     private var dragOrigin: CGPoint?
     private var dragGrab = CGPoint.zero
     private var handTool = false
     private var middlePanning = false
     private var marquee: CGRect?
+    private var blankPastePoint: CGPoint?
+    private static let groupPasteboardType = NSPasteboard.PasteboardType("local.mindmap.node-group.v1")
     private var resize: (id: UUID, startX: CGFloat, startWidth: CGFloat, currentWidth: CGFloat,
                          visibleWidths: [UUID: CGFloat])?
     private var hoveredPlus: Set<UUID> = [] { didSet { if oldValue != hoveredPlus { needsDisplay = true } } }
@@ -81,6 +94,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         self.model = model
         announcedSelection = model.selectedIDs
         super.init(frame: .zero)
+        videoPosters.totalCostLimit = 128 * 1024 * 1024
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
     deinit { springTimer?.invalidate() }
@@ -115,7 +129,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             element.nodeID = item.node.id
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
-            element.setAccessibilityLabel(item.node.title.isEmpty ? t("New idea") : item.node.title)
+            element.setAccessibilityLabel(item.node.title.isEmpty
+                ? t(item.node.video != nil ? "Video" : item.node.image != nil ? "Image" : "New idea")
+                : item.node.title)
             element.setAccessibilityHelp(item.node.children.isEmpty ? nil :
                 "\(t(item.node.folded ? "Collapsed" : "Expanded")), \(item.node.children.count) \(t(item.node.children.count == 1 ? "child" : "children"))")
             element.setAccessibilitySelected(model.selectedIDs.contains(item.node.id))
@@ -160,6 +176,50 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         return CGRect(x: box.minX + 12 * zoom, y: box.minY + 11 * zoom,
                       width: size.width * zoom, height: size.height * zoom)
     }
+    private func videoRect(_ item: LaidOutNode) -> CGRect? {
+        guard let video = item.node.video else { return nil }
+        let box = screen(item.frame)
+        let width = min(video.displaySize(width: item.node.videoWidth).width, item.frame.width - 24)
+        let size = video.displaySize(width: max(1, width))
+        return CGRect(x: box.minX + 12 * zoom, y: box.minY + 11 * zoom,
+                      width: size.width * zoom, height: size.height * zoom)
+    }
+    func mediaRect(for id: UUID) -> CGRect? {
+        guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }) else { return nil }
+        return videoRect(item) ?? imageRect(item)
+    }
+    func mediaTitleRect(for id: UUID) -> CGRect? {
+        guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }),
+              let media = videoRect(item) ?? imageRect(item) else { return nil }
+        let box = screen(item.frame)
+        let face = font(for: item.node, isRoot: item.parent == nil, zoom: zoom)
+        let height = ceil((item.node.title as NSString).boundingRect(
+            with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: face]).height)
+        return CGRect(x: box.minX + 12 * zoom, y: media.maxY + 8 * zoom,
+                      width: box.width - 24 * zoom, height: height + 2 * zoom)
+    }
+    private func stopVideo() {
+        guard let playing = videoPlayer else { return }
+        videoPlayer = nil
+        playing.view.player?.pause()
+        playing.view.removeFromSuperview()
+    }
+    @discardableResult
+    func playVideo(_ id: UUID) -> Bool {
+        if videoPlayer?.id == id { return true }
+        guard let item = visibleNodes().first(where: { $0.node.id == id }),
+              let video = item.node.video, let frame = videoRect(item) else { return false }
+        do {
+            let view = try MapVideoPlayerView(video: video)
+            stopVideo()
+            view.frame = frame
+            addSubview(view)
+            videoPlayer = (id, view)
+            view.player?.play()
+            return true
+        } catch { onVideoError?(error); return false }
+    }
     func imageFrameForAccessibility(_ id: UUID) -> CGRect? {
         guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }),
               let local = imageRect(item) else { return nil }
@@ -189,6 +249,47 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func screen(_ frame: CGRect) -> CGRect {
         CGRect(x: frame.minX * zoom + offset.x, y: frame.minY * zoom + offset.y,
                width: frame.width * zoom, height: frame.height * zoom)
+    }
+    private func screen(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x * zoom + offset.x, y: point.y * zoom + offset.y)
+    }
+    private func world(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
+    }
+    private func relationGeometry(_ edge: MapRelationship, nodes: [LaidOutNode]) -> RelationshipGeometry? {
+        guard let from = nodes.first(where: { $0.node.id == edge.from }),
+              let to = nodes.first(where: { $0.node.id == edge.to }) else { return nil }
+        let forward = from.frame.midX <= to.frame.midX
+        let start = CGPoint(x: forward ? from.frame.maxX : from.frame.minX, y: from.frame.midY)
+        let end = CGPoint(x: forward ? to.frame.minX : to.frame.maxX, y: to.frame.midY)
+        var preview = edge
+        if let drag = relationshipDrag, drag.id == edge.id {
+            let point = world(drag.point)
+            if drag.first { preview.control1 = SIMD2(Double(point.x - start.x), Double(point.y - start.y)) }
+            else { preview.control2 = SIMD2(Double(point.x - end.x), Double(point.y - end.y)) }
+        }
+        return relationshipGeometry(preview, from: start, to: end)
+    }
+    private func relationAt(_ screenPoint: CGPoint, nodes: [LaidOutNode]) -> UUID? {
+        let point = world(screenPoint)
+        for edge in model.relationships.reversed() {
+            guard let curve = relationGeometry(edge, nodes: nodes) else { continue }
+            var previous = curve.start
+            for step in 1...32 {
+                let t = CGFloat(step) / 32, u = 1 - t
+                let next = CGPoint(x: u*u*u*curve.start.x + 3*u*u*t*curve.control1.x +
+                    3*u*t*t*curve.control2.x + t*t*t*curve.end.x,
+                    y: u*u*u*curve.start.y + 3*u*u*t*curve.control1.y +
+                    3*u*t*t*curve.control2.y + t*t*t*curve.end.y)
+                let dx = next.x - previous.x, dy = next.y - previous.y
+                let projection = max(0, min(1, ((point.x - previous.x)*dx + (point.y - previous.y)*dy) / max(1, dx*dx + dy*dy)))
+                if hypot(point.x - previous.x - projection*dx, point.y - previous.y - projection*dy) <= 9 / zoom {
+                    return edge.id
+                }
+                previous = next
+            }
+        }
+        return nil
     }
     func shiftViewport(by delta: CGPoint) {
         guard delta != .zero else { return }
@@ -247,8 +348,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         screen(item.frame).insetBy(dx: 6 * zoom, dy: 5 * zoom)
     }
     private func resizeHandlePoint(_ item: LaidOutNode) -> CGPoint {
-        if model.selectedIDs.count == 1, let picture = imageRect(item) {
-            return CGPoint(x: picture.maxX, y: picture.maxY)
+        if model.selectedIDs.count == 1, let media = imageRect(item) ?? videoRect(item) {
+            return CGPoint(x: media.maxX, y: media.maxY)
         }
         let box = selectionBox(item)
         return CGPoint(x: box.maxX, y: box.minY)
@@ -269,13 +370,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let textHeight = (node.node.title as NSString).boundingRect(
             with: CGSize(width: width - 8, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
-        let height = min(node.node.image == nil
+        let height = min(node.node.image == nil && node.node.video == nil
                              ? max(22, box.height - 22 * zoom, ceil(textHeight) + 6)
                              : max(22, ceil(textHeight) + 6),
                          max(22, bounds.height - 56))
         // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
         return CGRect(x: box.minX + 12 * zoom,
-                      y: imageRect(node).map { $0.maxY + 8 * zoom }
+                      y: (imageRect(node) ?? videoRect(node)).map { $0.maxY + 8 * zoom }
                            ?? (node.parent == nil ? box.midY - height / 2 : box.maxY - 9 * zoom - height),
                       width: width, height: height)
     }
@@ -284,7 +385,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard bounds.width > 128, bounds.height > 128 else { return .null }
         let nodes = visibleNodes()
         guard !nodes.isEmpty else { return .null }
-        let world = nodes.reduce(CGRect.null) { $0.union($1.frame) }
+        var world = nodes.reduce(CGRect.null) { $0.union($1.frame) }
+        for edge in model.relationships {
+            guard let curve = relationGeometry(edge, nodes: nodes) else { continue }
+            for point in [curve.start, curve.control1, curve.control2, curve.end] +
+                (curve.startArrowhead ?? []) + (curve.endArrowhead ?? []) {
+                world = world.union(CGRect(origin: point, size: .zero))
+            }
+        }
         zoom = min(1, max(editor == nil ? 0.35 : 0.8,
                           min((bounds.width - 128) / world.width, (bounds.height - 128) / world.height)))
         offset = CGPoint(x: bounds.midX - world.midX * zoom, y: bounds.midY - world.midY * zoom)
@@ -611,6 +719,42 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             (color[item.node.id] ?? .systemTeal).setStroke()
             line.stroke()
         }
+        for edge in model.relationships {
+            guard let geometry = relationGeometry(edge, nodes: nodes) else { continue }
+            let path = NSBezierPath()
+            path.move(to: screen(geometry.start))
+            path.curve(to: screen(geometry.end), controlPoint1: screen(geometry.control1),
+                       controlPoint2: screen(geometry.control2))
+            path.lineWidth = max(1.5, zoom * (selectedRelationshipID == edge.id ? 3 : 2))
+            path.lineCapStyle = .round
+            switch edge.style {
+            case .solid: break
+            case .dashed: path.setLineDash([8 * zoom, 5 * zoom], count: 2, phase: 0)
+            case .dotted: path.setLineDash([1 * zoom, 5 * zoom], count: 2, phase: 0)
+            }
+            (selectedRelationshipID == edge.id ? NSColor.controlAccentColor : .systemPurple).set()
+            path.stroke()
+            for head in [geometry.startArrowhead, geometry.endArrowhead].compactMap({ $0 }) {
+                let arrow = NSBezierPath()
+                arrow.move(to: screen(head[0]))
+                arrow.line(to: screen(head[1]))
+                arrow.line(to: screen(head[2]))
+                arrow.close()
+                arrow.fill()
+            }
+            if selectedRelationshipID == edge.id {
+                for point in [geometry.control1, geometry.control2] {
+                    let center = screen(point)
+                    let handle = NSBezierPath(ovalIn: CGRect(x: center.x - 6, y: center.y - 6,
+                                                             width: 12, height: 12))
+                    NSColor.windowBackgroundColor.setFill()
+                    handle.fill()
+                    NSColor.controlAccentColor.setStroke()
+                    handle.lineWidth = 2
+                    handle.stroke()
+                }
+            }
+        }
         for item in nodes {
             let box = screen(item.frame)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
@@ -650,8 +794,28 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 image.draw(in: rect, from: .zero, operation: .sourceOver,
                            fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
             }
+            if let rect = videoRect(item), let clip = item.node.video {
+                let poster = videoPosters.object(forKey: item.node.id as NSUUID) ?? clip.posterImage()
+                if let poster {
+                    videoPosters.setObject(poster, forKey: item.node.id as NSUUID,
+                                           cost: clip.pixelWidth * clip.pixelHeight * 4)
+                    poster.draw(in: rect, from: .zero, operation: .sourceOver,
+                                fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+                }
+                if videoPlayer?.id != item.node.id {
+                    NSColor.black.withAlphaComponent(0.7).setFill()
+                    NSBezierPath(ovalIn: CGRect(x: rect.midX - 18, y: rect.midY - 18, width: 36, height: 36)).fill()
+                    NSColor.white.setFill()
+                    let play = NSBezierPath()
+                    play.move(to: CGPoint(x: rect.midX - 5, y: rect.midY - 9))
+                    play.line(to: CGPoint(x: rect.midX + 11, y: rect.midY))
+                    play.line(to: CGPoint(x: rect.midX - 5, y: rect.midY + 9))
+                    play.close()
+                    play.fill()
+                }
+            }
             if editor != nil && item.node.id == model.selected { continue }
-            let title = item.node.title.isEmpty ? (item.node.image == nil ? t("New idea") : "") : item.node.title
+            let title = item.node.title.isEmpty ? (item.node.image == nil && item.node.video == nil ? t("New idea") : "") : item.node.title
             let paragraph = NSMutableParagraphStyle()
             switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? "left" {
             case "center": paragraph.alignment = .center
@@ -668,8 +832,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let height = ceil((label as NSString).boundingRect(
                 with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height)
-            let textRect = item.node.image != nil
-                ? CGRect(x: box.minX + 12 * zoom, y: (imageRect(item)?.maxY ?? box.minY) + 8 * zoom,
+            let textRect = item.node.image != nil || item.node.video != nil
+                ? CGRect(x: box.minX + 12 * zoom,
+                         y: ((imageRect(item) ?? videoRect(item))?.maxY ?? box.minY) + 8 * zoom,
                          width: box.width - 24 * zoom, height: height + 2 * zoom)
                 : item.parent == nil
                     ? CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
@@ -796,6 +961,37 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         guard model.addImageChild(image) else { throw OwnJSONError.tooLarge }
         changed()
     }
+    func insertVideoData(_ data: Data) throws {
+        let video = try MapVideo(data: data)
+        commitEditing()
+        guard model.addVideoChild(video) else { throw OwnJSONError.tooLarge }
+        changed()
+    }
+    func insertVideoFile(_ url: URL) throws {
+        guard url.isFileURL, ["mov", "mp4", "m4v"].contains(url.pathExtension.lowercased()) else {
+            throw MapVideoError.invalidFormat
+        }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var data = Data()
+        while let chunk = try file.read(upToCount: MapVideo.maxEmbeddedBytes + 1 - data.count), !chunk.isEmpty {
+            data.append(chunk)
+            guard data.count <= MapVideo.maxEmbeddedBytes else { throw MapVideoError.tooLarge }
+        }
+        try insertVideoData(data)
+    }
+    @discardableResult
+    func pasteVideoFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        do {
+            if let file = pasteboard.string(forType: .fileURL), let url = URL(string: file) {
+                try insertVideoFile(url)
+            } else if let data = ["public.mpeg-4", "com.apple.quicktime-movie", "public.m4v"]
+                        .compactMap({ pasteboard.data(forType: .init($0)) }).first {
+                try insertVideoData(data)
+            } else { return false }
+            return true
+        } catch { onVideoError?(error); return false }
+    }
     @discardableResult
     func pasteImageFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
         let imageTypes: [NSPasteboard.PasteboardType] = [.png, .init("public.jpeg"), .init("public.heic"), .init("public.heif")]
@@ -819,11 +1015,42 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return true
         } catch { onImageError?(error); return false }
     }
+    @discardableResult
+    func copySelection(to pasteboard: NSPasteboard) -> Bool {
+        commitEditing()
+        let centers = Dictionary(uniqueKeysWithValues: visibleNodes().map {
+            ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        })
+        guard let clip = model.copySelection(visibleCenters: centers),
+              let data = try? JSONEncoder().encode(clip) else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setData(data, forType: Self.groupPasteboardType)
+    }
+    @objc func copy(_ sender: Any?) { _ = copySelection(to: .general) }
+
+    @discardableResult
+    func pasteSelection(from pasteboard: NSPasteboard, at point: CGPoint) -> Bool {
+        guard let data = pasteboard.data(forType: Self.groupPasteboardType),
+              data.count <= MapModel.maxSavedJSONBytes,
+              let clip = try? JSONDecoder().decode(MapSelectionClip.self, from: data) else { return false }
+        commitEditing()
+        let world = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
+        guard model.pasteSelection(clip, at: world) else { return false }
+        changed()
+        return true
+    }
     @objc func paste(_ sender: Any?) {
         let board = NSPasteboard.general
+        if board.availableType(from: [Self.groupPasteboardType]) != nil {
+            _ = pasteSelection(from: board, at: blankPastePoint ?? CGPoint(x: bounds.midX, y: bounds.midY))
+            return
+        }
         if board.availableType(from: [.png, .init("public.jpeg"), .init("public.heic"),
                                       .init("public.heif"), .tiff]) != nil {
             _ = pasteImageFromPasteboard(board)
+        } else if board.availableType(from: [.fileURL, .init("public.mpeg-4"),
+                                               .init("com.apple.quicktime-movie"), .init("public.m4v")]) != nil {
+            _ = pasteVideoFromPasteboard(board)
         } else if let text = board.string(forType: .string) {
             beginEditing()
             editor?.currentEditor()?.insertText(text)
@@ -869,7 +1096,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if model.arrange(at: positions) { changed(); _ = fitMapInView() }
     }
     func contextMenu(for id: UUID?) -> NSMenu {
-        if let id { selectNode(id) } else { commitEditing() }
+        if let id, !model.selectedIDs.contains(id) { selectNode(id) } else { commitEditing() }
         let menu = NSMenu()
         func add(_ title: String, _ tag: Int) {
             let item = menu.addItem(withTitle: t(title), action: #selector(contextCommand(_:)), keyEquivalent: "")
@@ -877,7 +1104,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             item.tag = tag
         }
         if let node = visibleNodes().first(where: { $0.node.id == id }) {
+            if model.selectedIDs.count == 2 { add("Create Relationship", 30) }
             add("Edit Title", 0)
+            add("Copy", 21)
             add("Font…", 16)
             add("New Child", 1)
             if node.parent != nil { add("New Sibling", 2) }
@@ -897,15 +1126,59 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             custom.tag = 15
             menu.addItem(withTitle: t("Node Width"), action: nil, keyEquivalent: "").submenu = widthMenu
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
-        } else { add("New Main Node", 3) }
+        } else { add("New Main Node", 3); add("Paste", 22) }
         menu.addItem(.separator())
         add("Arrange Map", 20)
         return menu
     }
+    private func relationshipMenu(for id: UUID) -> NSMenu {
+        selectedRelationshipID = id
+        needsDisplay = true
+        let edge = model.relationships.first { $0.id == id }!
+        let menu = NSMenu()
+        func add(_ into: NSMenu, _ title: String, _ tag: Int, state: NSControl.StateValue = .off) {
+            let item = into.addItem(withTitle: t(title), action: #selector(relationshipCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            item.tag = tag
+            item.state = state
+        }
+        let styles = NSMenu()
+        add(styles, "Solid", 31, state: edge.style == .solid ? .on : .off)
+        add(styles, "Dashed", 32, state: edge.style == .dashed ? .on : .off)
+        add(styles, "Dotted", 33, state: edge.style == .dotted ? .on : .off)
+        menu.addItem(withTitle: t("Line Style"), action: nil, keyEquivalent: "").submenu = styles
+        add(menu, "Start Arrow", 34, state: edge.startArrow ? .on : .off)
+        add(menu, "End Arrow", 35, state: edge.endArrow ? .on : .off)
+        menu.addItem(.separator())
+        add(menu, "Delete Relationship", 36)
+        return menu
+    }
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
-        let id = previewGeometry().nodes.last(where: { screen($0.frame).contains(point) })?.node.id
+        let nodes = previewGeometry().nodes
+        let id = nodes.last(where: { screen($0.frame).contains(point) })?.node.id
+        if id == nil, let relation = relationAt(point, nodes: nodes) { return relationshipMenu(for: relation) }
+        if id == nil { blankPastePoint = point }
         return contextMenu(for: id)
+    }
+    @objc private func relationshipCommand(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID,
+              let current = model.relationships.first(where: { $0.id == id }) else { return }
+        if item.tag == 36 {
+            if model.removeRelationship(id) { selectedRelationshipID = nil; changed() }
+            return
+        }
+        var edge = current
+        switch item.tag {
+        case 31: edge.style = .solid
+        case 32: edge.style = .dashed
+        case 33: edge.style = .dotted
+        case 34: edge.startArrow.toggle()
+        case 35: edge.endArrow.toggle()
+        default: return
+        }
+        if model.setRelationship(edge) { selectedRelationshipID = id; changed() }
     }
     @objc private func contextCommand(_ item: NSMenuItem) {
         switch item.tag {
@@ -921,6 +1194,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if model.setWidth(width) { changed() }
         case 16: showFontPanel()
         case 20: arrangeMap()
+        case 21: copy(nil)
+        case 22: paste(nil)
+        case 30: createRelationship(nil)
         case 15:
             commitEditing()
             let dialog = NSAlert()
@@ -936,6 +1212,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                let value = Double(field.stringValue), model.setWidth(CGFloat(value)) { changed() }
         default: break
         }
+    }
+
+    @objc func createRelationship(_ sender: Any?) {
+        commitEditing()
+        guard model.selectedIDs.count == 2 else { return }
+        let ids = visibleNodes().map(\.node.id).filter { model.selectedIDs.contains($0) }
+        guard ids.count == 2 else { return }
+        let edge = MapRelationship(from: ids[0], to: ids[1])
+        if model.setRelationship(edge) { selectedRelationshipID = edge.id; changed() }
     }
 
     func showFontPanel() {
@@ -984,14 +1269,20 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         case 53 where handTool:
             handTool = false; marquee = nil; dragOrigin = nil
             window?.invalidateCursorRects(for: self); needsDisplay = true
-        case 53 where dragSource != nil || marquee != nil:
-            stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil; needsDisplay = true
+        case 53 where dragSource != nil || marquee != nil || relationshipDrag != nil || selectedRelationshipID != nil:
+            stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
+            relationshipDrag = nil; selectedRelationshipID = nil; needsDisplay = true
         case 48 where event.modifierFlags.contains(.option): addParent()
         case 48: addChild()                         // Tab
         case 36, 76:
             if event.modifierFlags.contains(.shift) { addMainNode() }
             else { addSibling(before: event.modifierFlags.contains(.option)) }
-        case 51, 117: commitEditing(); if model.remove() { changed() }
+        case 51, 117:
+            commitEditing()
+            if let id = selectedRelationshipID {
+                if model.removeRelationship(id) { selectedRelationshipID = nil; changed() }
+                else { selectedRelationshipID = nil; needsDisplay = true }
+            } else if model.remove() { changed() }
         case 49: toggleFold() // Optional Space
         case 47 where event.modifierFlags.contains(.option): toggleFold() // Static original menu: Option+period
         case 123, 124, 125, 126: moveSelection(event.keyCode)
@@ -1044,6 +1335,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         stopSpring()
         dragSource = nil
         dragPoint = nil
+        relationshipDrag = nil
         resize = nil
         marquee = nil
         if wasPresented { needsDisplay = true } // A no-hit click must not leave stale spring paint or AX.
@@ -1059,6 +1351,20 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
+           let id = selectedRelationshipID,
+           let edge = model.relationships.first(where: { $0.id == id }),
+           let curve = relationGeometry(edge, nodes: hitNodes) {
+            for (first, handle) in [(true, curve.control1), (false, curve.control2)] {
+                let center = screen(handle)
+                if hypot(point.x - center.x, point.y - center.y) <= 11 {
+                    relationshipDrag = (id, first, CGPoint(x: point.x - center.x, y: point.y - center.y), center)
+                    dragOrigin = nil
+                    window?.makeFirstResponder(self)
+                    return
+                }
+            }
+        }
+        if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
            let selected = hitNodes.first(where: { model.selectedIDs.contains($0.node.id) &&
                abs(point.x - resizeHandlePoint($0).x) <= 11 &&
                abs(point.y - resizeHandlePoint($0).y) <= 11 }) {
@@ -1069,6 +1375,24 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             needsDisplay = true
             return
         }
+        if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
+           let mediaNode = hitNodes.last(where: { videoRect($0)?.contains(point) == true }) {
+            model.selectOnly(mediaNode.node.id)
+            _ = playVideo(mediaNode.node.id)
+            dragOrigin = nil
+            needsDisplay = true
+            return
+        }
+        if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
+           !hitNodes.contains(where: { screen($0.frame).contains(point) }),
+           let relation = relationAt(point, nodes: hitNodes) {
+            selectedRelationshipID = relation
+            dragOrigin = nil
+            needsDisplay = true
+            window?.makeFirstResponder(self)
+            return
+        }
+        selectedRelationshipID = nil
         if let node = hitNodes.last(where: { screen($0.frame).contains(point) }) {
             if event.clickCount == 1 && event.modifierFlags.contains(.command) {
                 model.toggleSelection(node.node.id)
@@ -1090,7 +1414,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             dragGrab = CGPoint(x: point.x - box.minX, y: point.y - box.minY)
             needsDisplay = true
             if event.clickCount == 2 { beginEditing() }
-        } else { model.selectOnly(model.selected); needsDisplay = true }
+        } else {
+            blankPastePoint = point
+            model.selectOnly(model.selected)
+            needsDisplay = true
+        }
         if editor == nil { window?.makeFirstResponder(self) }
     }
     private func pan(to point: CGPoint) {
@@ -1121,6 +1449,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if handTool { pan(to: point); return }
+        if var drag = relationshipDrag {
+            drag.point = CGPoint(x: point.x - drag.grab.x, y: point.y - drag.grab.y)
+            relationshipDrag = drag
+            needsDisplay = true
+            return
+        }
         if var resize {
             resize.currentWidth = min(1000, max(60, resize.startWidth + (point.x - resize.startX) / zoom))
             self.resize = resize
@@ -1142,7 +1476,18 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; needsDisplay = true }
+        defer { stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
+        if let drag = relationshipDrag,
+           let edge = model.relationships.first(where: { $0.id == drag.id }),
+           let preview = relationGeometry(edge, nodes: visibleNodes()) {
+            var changedEdge = edge
+            let anchor = drag.first ? preview.start : preview.end
+            let point = world(drag.point)
+            let value = SIMD2(Double(point.x - anchor.x), Double(point.y - anchor.y))
+            if drag.first { changedEdge.control1 = value } else { changedEdge.control2 = value }
+            if model.setRelationship(changedEdge) { changed() }
+            return
+        }
         if let marquee {
             _ = model.selectNodes(Set(visibleNodes().filter { screen($0.frame).intersects(marquee) }.map { $0.node.id }))
             return
@@ -1155,6 +1500,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                let selected = selectedNode(), let image = selected.node.image {
                 let width = min(1000, max(60, image.displaySize(width: selected.node.imageWidth).width + delta))
                 if model.setImageWidth(width) { resize = nil; changed() }
+            } else if model.selectedIDs.count == 1,
+                      let selected = selectedNode(), let video = selected.node.video {
+                let width = min(1000, max(60, video.displaySize(width: selected.node.videoWidth).width + delta))
+                if model.setVideoWidth(width) { resize = nil; changed() }
             } else if model.resizeSelected(by: delta, visibleWidths: handle.visibleWidths) {
                 resize = nil; changed()
             }
@@ -1251,7 +1600,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var inspector: StyleInspector!
     private var splitController: NSSplitViewController!
     private var fileURL: URL?
+    private var importedMindNode: MindNodeDetailedImport?
     private var savedRoots: [MapNode] = []
+    private var savedRelationships: [MapRelationship] = []
     private var dirty = false
     private var closeApproved = false
     private var settingsWindow: NSWindow?
@@ -1283,6 +1634,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         canvas.onImageError = { [weak self] error in
             self?.alert("Could not import image", detail: error.localizedDescription)
         }
+        canvas.onVideoError = { [weak self] error in
+            self?.alert("Could not import video", detail: error.localizedDescription)
+        }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -1310,8 +1664,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         closeApproved || confirmDiscardOrSave() ? .terminateNow : .terminateCancel
     }
     private func syncDirty() {
-        // ponytail: O(nodes) comparison per edit; use revision IDs if large-map editing becomes slow.
-        dirty = canvas.model.roots != savedRoots
+        // ponytail: compares embedded video bytes on each edit; use revision IDs if large maps stutter.
+        dirty = canvas.model.roots != savedRoots || canvas.model.relationships != savedRelationships
         updateTitle()
     }
     private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("MindMap"))" }
@@ -1353,17 +1707,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             return
         }
         do {
-            _ = try readOwnJSON(url) // Reject invalid files without prompting to discard edits.
+            _ = try readOwnDocument(url) // Reject invalid files without prompting to discard edits.
             guard confirmDiscardOrSave() else { return }
             // Saving may have changed this same path; never install the pre-save tree.
-            let roots = try readOwnJSON(url)
-            canvas.model = MapModel(roots: roots, selected: roots.first?.id ?? UUID())
+            let document = try readOwnDocument(url)
+            canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID())
+            canvas.model.relationships = document.relationships
             canvas.branchStyles = [:]
             canvas.nativePresentation = [:]
             canvas.embeddedTheme = nil
+            importedMindNode = nil
             outline.reloadMap()
             fileURL = url
-            savedRoots = roots
+            savedRoots = document.roots
+            savedRelationships = document.relationships
             dirty = false
             updateTitle()
             canvas.fitMapInView()
@@ -1394,14 +1751,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             canvas.branchStyles = imported.styles
             canvas.embeddedTheme = imported.theme
             canvas.nativePresentation = imported.presentation
+            importedMindNode = imported
             outline.reloadMap()
             fileURL = nil // Never save into the source package.
             savedRoots = imported.roots
+            savedRelationships = []
             dirty = false
             updateTitle()
             canvas.fitMapInView()
             refreshFindResults(navigate: false)
             window.makeFirstResponder(canvas)
+            if imported.hasUnimportedConnections || imported.hasUnimportedAttachments ||
+               imported.hasUnimportedRichTitles || imported.theme != nil || imported.hasUnimportedTheme {
+                alert("MindNode content not imported", detail:
+                    "This source has connections, attachments, rich titles or a theme that cannot be fully saved in .mindmap.json. The source remains unchanged.")
+            }
         } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
@@ -1437,6 +1801,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             }
             try canvas.insertImageData(data)
         } catch { alert("Could not import image", detail: error.localizedDescription) }
+    }
+    @objc private func insertVideoFile(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, UTType(filenameExtension: "m4v") ?? .movie]
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        #endif
+        do { try canvas.insertVideoFile(url) }
+        catch { alert("Could not import video", detail: error.localizedDescription) }
+    }
+    @objc private func exportMindNodeCopy(_ sender: Any?) {
+        canvas.commitEditing()
+        let panel = NSSavePanel()
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        panel.directoryURL = directory
+        #endif
+        panel.allowedContentTypes = [UTType(filenameExtension: "mindnode") ?? .data]
+        panel.nameFieldStringValue = "MindMap-Copy.mindnode"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #if HEADLESS_TEST
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        #endif
+        do {
+            try MindNodeWriter.write(canvas.model.roots, to: url,
+                                     imported: importedMindNode,
+                                     relationships: canvas.model.relationships)
+        } catch { alert("Could not export MindNode copy", detail: error.localizedDescription) }
     }
     @objc private func exportPDF(_ sender: Any?) { export(.pdf, extension: "pdf", type: .pdf) }
     @objc private func exportPNG(_ sender: Any?) { export(.png, extension: "png", type: .png) }
@@ -1487,9 +1884,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             #if HEADLESS_TEST
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
             #endif
-            try writeOwnJSON(canvas.model.roots, to: url)
+            try writeOwnDocument(OwnMapDocument(roots: canvas.model.roots,
+                                                relationships: canvas.model.relationships), to: url)
             fileURL = url
             savedRoots = canvas.model.roots
+            savedRelationships = canvas.model.relationships
             dirty = false
             updateTitle()
             return true
@@ -1508,6 +1907,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
     @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
     @objc private func showNodeFont(_ sender: Any?) { canvas.showFontPanel() }
+    @objc private func createNodeRelationship(_ sender: Any?) { canvas.createRelationship(sender) }
     @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
     private func togglePane(at index: Int) {
         let window = splitController.view.window
@@ -1741,6 +2141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         fileMenu.addItem(withTitle: t("Save"), action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: t("Insert Image…"), action: #selector(insertImageFile(_:)), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: t("Insert Video…"), action: #selector(insertVideoFile(_:)), keyEquivalent: "").target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: t("Experimental MindNode v9 Plain-Tree Copy…"),
+                         action: #selector(exportMindNodeCopy(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         for (title, selector) in [("Export PDF…", #selector(exportPDF(_:))),
                                   ("Export PNG…", #selector(exportPNG(_:))),
@@ -1801,6 +2205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             item.target = self
         }
         nodeMenu.addItem(withTitle: t("Font…"), action: #selector(showNodeFont(_:)), keyEquivalent: "t").target = self
+        nodeMenu.addItem(withTitle: t("Create Relationship"), action: #selector(createNodeRelationship(_:)), keyEquivalent: "").target = self
         node.submenu = nodeMenu
         main.addItem(node)
         NSApp.mainMenu = main

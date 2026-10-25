@@ -11,12 +11,13 @@ import AppKit
         _ = delegate.makeWorkbench(canvas: canvas)
         delegate.installMenu()
         let file = NSApp.mainMenu!.item(withTitle: "File")!.submenu!
-        for title in ["Insert Image…", "Export PDF…", "Export PNG…", "Export JPG…", "Export Markdown…"] {
+        for title in ["Insert Image…", "Insert Video…", "Experimental MindNode v9 Plain-Tree Copy…",
+                      "Export PDF…", "Export PNG…", "Export JPG…", "Export Markdown…"] {
             guard let action = file.item(withTitle: title), action.target != nil,
                   action.action != nil else { fatalError("Missing native File menu action: \(title)") }
         }
         assert(NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Paste") != nil,
                "Canvas should receive native Edit → Paste while it is first responder")
-        print("native image import and full-map PDF/PNG/JPG/Markdown menu actions passed")
+        print("native image/video import, experimental v9 copy, and full-map export menu actions passed")
     }
 }

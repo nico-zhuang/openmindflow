@@ -54,16 +54,35 @@ enum MindNodeImporterTests {
         let rootID = UUID(), childID = UUID()
         let child: [String: Any] = ["nodeID": childID.uuidString, "title": ["text": "<p>Hello &amp; world</p>"], "subnodes": [], "hasFoldedSubnodes": true]
         let root: [String: Any] = ["nodeID": rootID.uuidString, "title": ["text": "<p>Root</p>"], "subnodes": [child], "hasFoldedSubnodes": false]
-        func write(_ maps: [[String: Any]], version: Any = 9, format: PropertyListSerialization.PropertyListFormat = .binary) throws {
-            let plist: [String: Any] = ["version": version, "canvas": ["mindMaps": maps.map { ["mainNode": $0] }]]
+        func write(_ maps: [[String: Any]], version: Any = 9, format: PropertyListSerialization.PropertyListFormat = .binary,
+                   connections: [[String: Any]] = []) throws {
+            let plist: [String: Any] = ["version": version, "canvas": ["mindMaps": maps.map { ["mainNode": $0] },
+                                                                  "crossConnections": connections]]
             try PropertyListSerialization.data(fromPropertyList: plist, format: format, options: 0)
                 .write(to: package.appendingPathComponent("contents.xml"), options: .atomic)
         }
         func rejects() -> Bool { (try? MindNodeImporter.load(package)) == nil }
+        try write([root], connections: [["connectionID": UUID().uuidString,
+            "endPoints": ["startNodeID": rootID.uuidString, "endNodeID": childID.uuidString]]])
+        let withConnections = try MindNodeImporter.loadDetailed(package)
+        assert(withConnections.hasUnimportedConnections,
+               "Imported source relationships cannot silently vanish when only nodes are decoded")
+        try write([root])
+        let withoutConnections = try MindNodeImporter.loadDetailed(package)
+        assert(!withoutConnections.hasUnimportedConnections)
+        var richRoot = root
+        var inlineChild = child
+        inlineChild["title"] = ["text": "<p>base <b>bold</b></p>"]
+        richRoot["subnodes"] = [inlineChild]
+        try write([richRoot])
+        let richImport = try MindNodeImporter.loadDetailed(package)
+        assert(richImport.hasUnimportedRichTitles,
+               "Inline v9 rich text cannot be silently exported as plain text")
         try write([root])
         let nodes = try MindNodeImporter.load(package)
         var styledChild = child
         styledChild["pathStyle"] = ["strokeStyle": ["color": "{0.1, 0.2, 0.3, 1}", "width": 5.0]]
+        styledChild["attachment"] = ["type": "image", "fileName": "synthetic.png"]
         var styledRoot = root
         styledRoot["subnodes"] = [styledChild]
         try write([styledRoot])
@@ -95,6 +114,8 @@ enum MindNodeImporterTests {
         try PropertyListSerialization.data(fromPropertyList: themeIdentity, format: .xml, options: 0)
             .write(to: themeDirectory.appendingPathComponent("metadata.plist"))
         let detailed = try MindNodeImporter.loadDetailed(package)
+        assert(detailed.hasUnimportedAttachments && !detailed.hasUnimportedConnections,
+               "Unknown original node attachments must never be silently treated as imported media")
         assert(detailed.roots[0].children[0].title == "Hello" && detailed.styles[childID]?.width == 5)
         assert(detailed.presentation[childID]?.location?.x == -120.5 && detailed.presentation[childID]?.location?.y == 42)
         assert(detailed.roots[0].children[0].location == SIMD2(-120.5, 42),
@@ -121,7 +142,8 @@ enum MindNodeImporterTests {
         assert(sanitized.presentation[childID]?.font == nil && sanitized.presentation[childID]?.maxWidth == nil && sanitized.presentation[childID]?.allowToShrinkWidth == nil)
         try Data([0, 1, 2]).write(to: themeURL, options: .atomic)
         let malformedTheme = try MindNodeImporter.loadDetailed(package)
-        assert(malformedTheme.theme == nil)
+        assert(malformedTheme.theme == nil && malformedTheme.hasUnimportedTheme,
+               "A present but unreadable v9 theme must block an apparent lossless new copy")
         _ = unlinkat(packageFD, "style.mindnodestyle/contents.xml", 0)
         assert(symlinkat("../contents.xml", packageFD, "style.mindnodestyle/contents.xml") == 0)
         assert((try? MindNodeImporter.loadDetailed(package))?.theme == nil)

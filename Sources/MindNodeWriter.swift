@@ -26,7 +26,12 @@ enum MindNodeWriter {
               !parent.pathComponents.contains(where: { $0.lowercased().hasSuffix(".mindnode") }) else {
             throw WriterError.invalidDestination
         }
-        guard imported?.theme == nil, relationships.isEmpty else { throw WriterError.unsupported }
+        guard imported?.theme == nil,
+              imported?.hasUnimportedConnections != true,
+              imported?.hasUnimportedAttachments != true,
+              imported?.hasUnimportedRichTitles != true,
+              imported?.hasUnimportedTheme != true,
+              relationships.isEmpty else { throw WriterError.unsupported }
         let parentFD = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         guard parentFD >= 0 else { throw WriterError.invalidDestination }
         defer { _ = close(parentFD) }
@@ -93,6 +98,7 @@ enum MindNodeWriter {
         func render(_ node: MapNode, depth: Int) throws -> [String: Any] {
             guard depth <= 200, count < 10_000, seen.insert(node.id).inserted,
                   node.image == nil, node.imageWidth == nil,
+                   node.video == nil, node.videoWidth == nil,
                   node.strokeStyle == nil else { throw WriterError.unsupported }
             count += 1
             let meta = imported?.presentation[node.id]

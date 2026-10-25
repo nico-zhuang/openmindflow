@@ -24,6 +24,8 @@ import Foundation
               L10n.text("Save changes to this map?", defaults: defaults) == "保存对此导图的更改？",
               L10n.text("Map outline", defaults: defaults) == "导图大纲",
               L10n.text("Connection line style", defaults: defaults) == "连接线样式",
+               L10n.text("Create Relationship", defaults: defaults) == "创建关联线",
+               L10n.text("Insert Video…", defaults: defaults) == "插入视频…",
               L10n.text("Untranslated user node", defaults: defaults) == "Untranslated user node" else {
             fail("Simplified Chinese selection must persist and translate known UI keys only")
         }

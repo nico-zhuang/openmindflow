@@ -3,7 +3,14 @@
 Build on macOS with Swift command-line tools: `bash build.sh`. Run with `open build/MindMap.app`.
 No Xcode project or third-party dependencies are required for a development build; distributable previews are independently ad-hoc signed.
 
-## First release candidate (2026-10-24)
+## Second release: development branch only (not shipped)
+
+- Marquee selections copy/paste entire subtrees at a blank canvas point; both selected parent and child appear only once. Only internal cross-node relationships are cloned with new IDs, and the whole paste has one Undo. Editable Bézier relationships support two draggable control handles, solid/dashed/dotted lines and independent start/end arrows. `.mindmap.json` saves nodes **and** relationships; older root-array files remain readable.
+- Video nodes accept MOV/MP4/M4V from File or clipboard, play in a native inline player with a seek/progress control, support proportional resizing and a title below the frame, and embed their bytes so playback survives deletion of the original file. Each video is limited to **16 MiB**, and the entire JSON to **32 MiB**. Static PDF/PNG/JPG exports draw a video still, while Markdown explicitly notes omitted video and cross-node relationships.
+- File → Experimental MindNode v9 Plain-Tree Copy… writes **only** a separate basic v9 node tree. Unsupported themes (including unreadable source themes), inline rich titles, source attachments, source connections, edited relationships, images and video are rejected before writing rather than silently lost. Synthetic packages round-trip with **our importer only**; the original MindNode app has **not** accepted a newly written package in an independent check. This is not completion of full `.mindnode` compatibility, nor a second signed/user-facing release. An original v9 import warns when attachments, connections, inline rich titles or themes would be omitted from a separate JSON save; its source is always read-only.
+- Focused checks: `swiftc -D HEADLESS_TEST Sources/*.swift Tests/VideoCanvasTests.swift -framework AppKit -framework AVKit -framework AVFoundation -o /tmp/mindmap-video-check && /tmp/mindmap-video-check` (offscreen synthetic media). Independent visible/key/frontmost second-release GUI acceptance remains pending; do not run a focus-stealing synthetic probe while another user app is frontmost.
+
+## First release candidate (2026-10-24; signed preview unchanged)
 
 - Start with both sidebars closed. Drag a main/root node to move its whole branch rather than pan; drag blank canvas to marquee-select. Hold middle mouse to pan, press H to use the hand tool, and press V or Escape to return to selection. The main window uses native `.resizable` AppKit style; **physical mouse edge/corner dragging is not yet independently verified** (the safe global-event probe stopped when desktop focus switched to other apps).
 - Right-click blank canvas → Arrange Map (整理布局) runs the existing layout on the entire tree, including folded descendants; one Undo restores stored positions. Edit → Find… (⌘F) searches all titles, can navigate folded matches and refreshes after document changes.
@@ -24,13 +31,10 @@ Historical development notes below describe their *earlier* previews; where they
 Run assertion tests:
 
 ```sh
-swiftc Sources/MapModel.swift Tests/MapModelTests.swift -o /tmp/mindmap-model-tests && /tmp/mindmap-model-tests
-swiftc Sources/MapModel.swift Sources/Layout.swift Tests/LayoutTests.swift -framework AppKit -o /tmp/mindmap-layout-tests && /tmp/mindmap-layout-tests
-swiftc Sources/MapModel.swift Sources/OwnJSON.swift Tests/OwnJSONTests.swift -o /tmp/mindmap-ownjson-tests && /tmp/mindmap-ownjson-tests
-swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Tests/MindNodeImporterTests.swift -o /tmp/mindmap-importer-tests && /tmp/mindmap-importer-tests
-swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Sources/MindNodePackage.swift Tests/MindNodePackageTests.swift -o /tmp/mindmap-package-tests && /tmp/mindmap-package-tests # synthetic new-copy title/fold edit; not wired to Save
-# /tmp/mindmap-package-tests --keep-fixture # explicitly retain one 0700 synthetic source/edited pair under owned dist/ for original-app inspection; manually remove after checking ownership
-swiftc Sources/MapModel.swift Sources/MindNodeImporter.swift Sources/MindNodeTitlePatch.swift Tests/MindNodeTitlePatchTests.swift -o /tmp/mindmap-title-patch-tests && /tmp/mindmap-title-patch-tests # internal plist transform only; not wired to Save
+for suite in MapModelTests LayoutTests OwnJSONTests MindNodeImporterTests MindNodePackageTests MindNodeTitlePatchTests; do
+  swiftc -D HEADLESS_TEST Sources/*.swift "Tests/$suite.swift" -framework AppKit -o "/tmp/mindmap-$suite" && "/tmp/mindmap-$suite" || exit 1
+done
+# /tmp/mindmap-MindNodePackageTests --keep-fixture # retain only the owned 0700 synthetic source/edited pair for original-app inspection
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/CanvasCommandTests.swift -framework AppKit -o /tmp/mindmap-canvas-tests && /tmp/mindmap-canvas-tests
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/BranchStyleTests.swift -framework AppKit -o /tmp/mindmap-branch-tests && /tmp/mindmap-branch-tests
 swiftc -D HEADLESS_TEST Sources/*.swift Tests/NativeImportVisualTests.swift -framework AppKit -o /tmp/mindmap-native-import-tests && /tmp/mindmap-native-import-tests

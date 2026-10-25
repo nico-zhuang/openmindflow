@@ -59,6 +59,34 @@ enum MindNodeWriterTests {
         catch MindNodeWriter.WriterError.destinationExists { }
         assert((try? Data(contentsOf: payload)) == before)
 
+        var unimported = detailed
+        unimported.hasUnimportedConnections = true
+        let omittedConnection = scratch.appendingPathComponent("omitted-connection.mindnode")
+        do { try MindNodeWriter.write(roots, to: omittedConnection, imported: unimported, relationships: [])
+             fatalError("Silently lost original import connections") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: omittedConnection.path))
+        unimported.hasUnimportedConnections = false
+        unimported.hasUnimportedAttachments = true
+        let omittedMedia = scratch.appendingPathComponent("omitted-original-media.mindnode")
+        do { try MindNodeWriter.write(roots, to: omittedMedia, imported: unimported, relationships: [])
+             fatalError("Silently lost original import attachments") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: omittedMedia.path))
+        unimported.hasUnimportedAttachments = false
+        unimported.hasUnimportedRichTitles = true
+        let omittedRichTitle = scratch.appendingPathComponent("omitted-rich-title.mindnode")
+        do { try MindNodeWriter.write(roots, to: omittedRichTitle, imported: unimported, relationships: [])
+             fatalError("Silently lost original bold/italic rich-text styling") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: omittedRichTitle.path))
+        unimported.hasUnimportedRichTitles = false
+        unimported.hasUnimportedTheme = true
+        let unreadableTheme = scratch.appendingPathComponent("unreadable-theme.mindnode")
+        do { try MindNodeWriter.write(roots, to: unreadableTheme, imported: unimported, relationships: [])
+             fatalError("Silently omitted unreadable original theme package") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: unreadableTheme.path))
         let importedCopy = scratch.appendingPathComponent("imported-copy.mindnode", isDirectory: true)
         try MindNodeWriter.write(detailed.roots, to: importedCopy, imported: detailed, relationships: [])
         let copied = try MindNodeImporter.loadDetailed(importedCopy)
@@ -112,6 +140,12 @@ enum MindNodeWriterTests {
         do { try MindNodeWriter.write([unsupported], to: media, relationships: []); fatalError("Silently lost image property") }
         catch MindNodeWriter.WriterError.unsupported { }
         assert(!fm.fileExists(atPath: media.path))
+        unsupported = child
+        unsupported.videoWidth = 220 // This field is not represented in verified v9 export yet.
+        let video = scratch.appendingPathComponent("video.mindnode")
+        do { try MindNodeWriter.write([unsupported], to: video, relationships: []); fatalError("Silently lost video size") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: video.path))
         let relations = scratch.appendingPathComponent("relations.mindnode")
         let edge = MapRelationship(from: root.id, to: child.id)
         do { try MindNodeWriter.write(roots, to: relations, relationships: [edge]); fatalError("Silently lost relationship") }

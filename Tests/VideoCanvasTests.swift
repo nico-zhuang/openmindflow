@@ -54,6 +54,9 @@ enum VideoCanvasTests {
         assert(model.roots[0].children[0].id == childID)
         assert(model.roots[0].children[0].video == video && model.roots[0].children[0].image == nil)
         assert(model.roots[0].children[0].title.isEmpty, "Video caption is optional")
+        assert(exportMarkdown(model.roots).contains("[Video omitted]") &&
+               exportMarkdown(model.roots).contains("not embedded"),
+               "Markdown must explicitly disclose that titleless video bytes are not in the export")
         assert(model.undo() && model.roots == [root] && model.selected == rootID,
                "Add video child and select it in one undo step")
         assert(model.redo() && model.selected == childID)
@@ -69,6 +72,17 @@ enum VideoCanvasTests {
         assert(model.undo() && model.roots[0].children[0].title.isEmpty)
         assert(model.redo() && model.roots[0].children[0].title == "行程影片 🎬")
 
+        let fileModel = MapModel(roots: [root], selected: rootID)
+        let fileCanvas = MapCanvas(model: fileModel)
+        try fileCanvas.insertVideoFile(source)
+        assert(fileModel.roots[0].children[0].video == video, "File import must embed bytes, not an external path")
+        let board = NSPasteboard(name: .init("local.mindmap.synthetic-video-\(UUID().uuidString)"))
+        board.clearContents()
+        assert(board.setString(source.absoluteString, forType: .fileURL))
+        let pasteModel = MapModel(roots: [root], selected: rootID)
+        let pasteCanvas = MapCanvas(model: pasteModel)
+        assert(pasteCanvas.pasteVideoFromPasteboard(board) && pasteModel.roots[0].children[0].video == video,
+               "Pasting a video file URL must also embed validated bytes")
         let document = OwnMapDocument(roots: model.roots)
         let url = folder.appendingPathComponent("media.mindmap.json")
         try writeOwnDocument(document, to: url)
@@ -83,8 +97,20 @@ enum VideoCanvasTests {
         }
         try FileManager.default.removeItem(at: source) // The persisted document must own its video bytes.
         let reopenedModel = MapModel(roots: reopened.roots, selected: childID)
+        var untitledVideo = reopened.roots
+        untitledVideo[0].children[0].title = ""
+        let mediaOutline = MapOutlineView(canvas: MapCanvas(model: MapModel(roots: untitledVideo, selected: childID)))
+        let mediaRow = mediaOutline.outlineView.item(atRow: 1)!
+        let mediaLabel = mediaOutline.outlineView(mediaOutline.outlineView, viewFor: nil, item: mediaRow) as! NSTextField
+        assert(mediaLabel.stringValue == L10n.text("Video"),
+               "Untitled video must be identifiable in native outline rather than mislabeled New idea")
         let canvas = MapCanvas(model: reopenedModel)
         canvas.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let stillOutput = folder.appendingPathComponent("saved-video-still.png")
+        try exportMap(canvas, as: .png, to: stillOutput)
+        let still = NSBitmapImageRep(data: try Data(contentsOf: stillOutput))
+        assert((still?.pixelsWide ?? 0) > 0 && (still?.pixelsHigh ?? 0) > 0,
+               "Detached full-map PNG must export saved video without an original MOV file")
         let media = canvas.mediaRect(for: childID)!
         let caption = canvas.mediaTitleRect(for: childID)!
         assert(abs(media.width / media.height - 2) < 0.01 && media.width >= 240)
@@ -118,6 +144,6 @@ enum VideoCanvasTests {
         let oversized = MapModel(roots: [oversizedRoot], selected: oversizedRoot.id)
         assert(!oversized.addVideoChild(video) && oversized.roots == [oversizedRoot],
                "A video cannot create an unsavable >32 MiB document or partial undo")
-        print("video node RED contract: atomic add, resize, caption, JSON reopen, native player and budget (offscreen)")
+        print("video node add, resize, caption, file/clipboard import, JSON reopen, native player and budget passed (offscreen)")
     }
 }

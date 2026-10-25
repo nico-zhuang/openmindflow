@@ -52,6 +52,9 @@ enum OwnDocumentTests {
         invalid.relationships = [edge]
         invalid.relationships[0].control1 = SIMD2(1_000_001, 0)
         rejects { try writeOwnDocument(invalid, to: url) }
+        var badVideo = roots
+        badVideo[0].videoWidth = 200
+        rejects { try writeOwnDocument(OwnMapDocument(roots: badVideo, relationships: [edge]), to: url) }
         let afterRejectedWrite = try Data(contentsOf: url)
         assert(afterRejectedWrite == saved, "Rejected write must leave previous file untouched")
         let bad = folder.appendingPathComponent("bad.mindmap.json")
