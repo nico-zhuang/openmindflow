@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import CoreGraphics
+import ImageIO
 
 @main
 enum MapExportTests {
@@ -66,6 +67,8 @@ enum MapExportTests {
             }
         }
         assert(hasRedMediaPixel, "Embedded image must be drawn in the exported full map")
+        var pdfSize = CGSize.zero
+        var rasterPaths: [MapExportFormat: URL] = [:]
         for (format, name) in [(MapExportFormat.png, "whole.png"), (.jpeg, "whole.jpg"), (.pdf, "whole.pdf"), (.markdown, "whole.md")] {
             let output = scratch.appendingPathComponent(name)
             try exportMap(canvas, as: format, to: output)
@@ -75,8 +78,10 @@ enum MapExportTests {
                 guard let document = CGPDFDocument(CGDataProvider(data: bytes as CFData)!), let page = document.page(at: 1) else {
                     fatalError("Not a PDF")
                 }
-                assert(page.getBoxRect(.mediaBox).width > 1_800 && page.getBoxRect(.mediaBox).height > 850)
+                pdfSize = page.getBoxRect(.mediaBox).size
+                assert(pdfSize.width > 1_800 && pdfSize.height > 850)
             } else if format != .markdown {
+                rasterPaths[format] = output
                 guard let bitmap = NSBitmapImageRep(data: bytes) else { fatalError("Not an image") }
                 assert(bitmap.pixelsWide > 1_800 && bitmap.pixelsHigh > 850)
                 let corner = bitmap.colorAt(x: 0, y: 0)!.usingColorSpace(.deviceRGB)!
@@ -84,6 +89,21 @@ enum MapExportTests {
             }
             do { try exportMap(canvas, as: format, to: output); fatalError("Overwrote existing export") }
             catch MapExportError.destinationExists { }
+        }
+        for format in [MapExportFormat.png, .jpeg] {
+            let path = rasterPaths[format]!
+            let bytes = try Data(contentsOf: path)
+            let bitmap = NSBitmapImageRep(data: bytes)!
+            assert(abs(CGFloat(bitmap.pixelsWide) - pdfSize.width * 2) < 3)
+            assert(abs(CGFloat(bitmap.pixelsHigh) - pdfSize.height * 2) < 3)
+            assert(abs(bitmap.size.width - pdfSize.width) < 3)
+            assert(abs(bitmap.size.height - pdfSize.height) < 3)
+            let source = CGImageSourceCreateWithData(bytes as CFData, nil)!
+            let metadata = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary
+            let dpiX = metadata[kCGImagePropertyDPIWidth] as? NSNumber
+            let dpiY = metadata[kCGImagePropertyDPIHeight] as? NSNumber
+            assert((140...148).contains(dpiX?.doubleValue ?? 0))
+            assert((140...148).contains(dpiY?.doubleValue ?? 0))
         }
         var importedRoot = root
         importedRoot.children[0].location = nil // Import metadata is authoritative only without saved own-JSON location.
@@ -95,6 +115,15 @@ enum MapExportTests {
         let importedBytes = try Data(contentsOf: importedOutput)
         let importedImage = NSBitmapImageRep(data: importedBytes)!
         assert(importedImage.pixelsWide > 5_000 && importedImage.pixelsHigh > 1_450)
+        let importedPDF = scratch.appendingPathComponent("imported-far.pdf")
+        try exportMap(importedCanvas, as: .pdf, to: importedPDF)
+        let importedPage = CGPDFDocument(CGDataProvider(data: try Data(contentsOf: importedPDF) as CFData)!)!.page(at: 1)!
+        let importedPoints = importedPage.getBoxRect(.mediaBox).size
+        let importedScale = CGFloat(importedImage.pixelsWide) / importedPoints.width
+        assert(importedScale >= 1 && importedScale < 2)
+        assert(importedImage.pixelsWide <= 8192 && importedImage.pixelsHigh <= 8192)
+        assert(importedImage.pixelsWide * importedImage.pixelsHigh <= 32_000_000)
+        assert(abs(importedImage.size.width - importedPoints.width) < 3)
         canvas.appearance = NSAppearance(named: .darkAqua)
         let darkOutput = scratch.appendingPathComponent("dark.jpg")
         try exportMap(canvas, as: .jpeg, to: darkOutput)

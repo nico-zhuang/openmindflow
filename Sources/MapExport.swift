@@ -103,11 +103,18 @@ func exportMap(_ canvas: MapCanvas, as format: MapExportFormat, to url: URL) thr
             data = snapshot.dataWithPDF(inside: snapshot.bounds)
         } else {
             let width = Int(ceil(snapshot.bounds.width)), height = Int(ceil(snapshot.bounds.height))
-            guard let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            let scale = min(2, 8192 / CGFloat(width), 8192 / CGFloat(height),
+                            sqrt(32_000_000 / CGFloat(width * height)))
+            let pixelsWide = Int(CGFloat(width) * scale), pixelsHigh = Int(CGFloat(height) * scale)
+            guard pixelsWide > 0, pixelsHigh > 0, pixelsWide * pixelsHigh <= 32_000_000 else {
+                throw MapExportError.tooLarge
+            }
+            guard let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixelsWide, pixelsHigh: pixelsHigh,
                 bitsPerSample: 8, samplesPerPixel: 4,
                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                bytesPerRow: 0, bitsPerPixel: 0),
-                  let context = NSGraphicsContext(bitmapImageRep: image) else { throw MapExportError.renderFailed }
+                bytesPerRow: 0, bitsPerPixel: 0) else { throw MapExportError.renderFailed }
+            image.size = snapshot.bounds.size // Physical size stays in points; pixels encode the real DPI.
+            guard let context = NSGraphicsContext(bitmapImageRep: image) else { throw MapExportError.renderFailed }
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = context
             snapshot.displayIgnoringOpacity(snapshot.bounds, in: context)
