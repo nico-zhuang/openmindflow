@@ -136,8 +136,13 @@ final class MapOutlineView: NSScrollView, NSOutlineViewDataSource, NSOutlineView
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard !reloading, outlineView.selectedRow >= 0,
-              let row = outlineView.item(atRow: outlineView.selectedRow) as? Row else { return }
+        guard !reloading else { return }
+        guard outlineView.selectedRow >= 0,
+              let row = outlineView.item(atRow: outlineView.selectedRow) as? Row else {
+            _ = canvas.commitEditing()
+            syncSelection()
+            return
+        }
         let id = row.id
         guard canvas.selectNode(id) else { syncSelection(); return }
         if window != nil { window?.makeFirstResponder(outlineView) }

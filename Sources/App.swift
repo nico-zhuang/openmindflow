@@ -1040,7 +1040,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let compact = localizationDefaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
                 localizationDefaults.bool(forKey: "shrinkNewNodesToFitContent")
             guard model.rename(title, initialWidth: compact ? min(320, max(60, ceil(longest) + 24)) : nil) else {
-                if let window = field.window, window.firstResponder !== field {
+                if let window = field.window, window.firstResponder !== field,
+                   window.firstResponder !== field.currentEditor() {
                     field.delegate = nil // Avoid reentrant controlTextDidEndEditing while returning focus.
                     _ = window.makeFirstResponder(field)
                     field.delegate = self

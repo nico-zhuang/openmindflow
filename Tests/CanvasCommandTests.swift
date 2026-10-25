@@ -73,6 +73,13 @@ enum CanvasCommandTests {
                budgetField.superview === budgetCanvas &&
                budgetField.stringValue == rejectedTitle,
                "Rejected outline selection restores model row and inline field focus")
+        budgetOutline.outlineView.allowsEmptySelection = true
+        budgetOutline.outlineView.deselectAll(nil)
+        if budgetOutline.outlineView.selectedRow != 0 || budgetModel.selected != budgetRoot.id ||
+           (budgetWindow.firstResponder !== budgetField && budgetWindow.firstResponder !== budgetField.currentEditor()) {
+            fputs("Rejected outline deselection must restore row and title focus\n", stderr)
+            exit(1)
+        }
         let relation = MapRelationship(from: budgetRoot.id, to: sibling.id)
         budgetModel.relationships = [relation] // Seed an existing edge without a budgeted model write.
         let relationAction = NSMenuItem(title: "Delete Relationship", action: NSSelectorFromString("relationshipCommand:"), keyEquivalent: "")
@@ -83,13 +90,19 @@ enum CanvasCommandTests {
         assert(budgetModel.relationships == [relation] && budgetField.superview === budgetCanvas &&
                (budgetWindow.firstResponder === budgetField || budgetWindow.firstResponder === budgetField.currentEditor()),
                "Relationship action must abort rejected title")
+        budgetModel.relationships = []
+        var styledRoot = budgetRoot
+        styledRoot.strokeStyle = "dashed"
+        assert((try! JSONEncoder().encode([styledRoot])).count <= MapModel.maxSavedJSONBytes,
+               "An unguarded inspector style mutation must fit; budget rejection cannot mask the bypass")
         let budgetInspector = StyleInspector(canvas: budgetCanvas)
         budgetInspector.strokeStylePopup.selectItem(withTitle: "Dashed")
         budgetInspector.changeStrokeStyle(budgetInspector.strokeStylePopup)
-        assert(budgetModel.roots == [budgetRoot] && budgetField.superview === budgetCanvas &&
-               (budgetWindow.firstResponder === budgetField || budgetWindow.firstResponder === budgetField.currentEditor()),
-               "Inspector setter must abort rejected title")
-        budgetModel.relationships = []
+        if budgetModel.roots != [budgetRoot] || budgetField.superview !== budgetCanvas ||
+           (budgetWindow.firstResponder !== budgetField && budgetWindow.firstResponder !== budgetField.currentEditor()) {
+            fputs("Inspector setter must abort rejected title\n", stderr)
+            exit(1)
+        }
         budgetField.stringValue = "Short"
         assert(budgetCanvas.commitEditing() && budgetModel.roots[0].title == "Short" &&
                budgetModel.undo() && budgetModel.roots == [budgetRoot] && !budgetModel.undo(),
