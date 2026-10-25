@@ -42,6 +42,68 @@ enum MapExportTests {
         let sourceBytes = try Data(contentsOf: source)
 
         assert(exportMarkdown(model.roots) == "- Root \\*plan\\*\n  - Far<br>child &lt;&amp;&gt;\n    - Hidden \\[leaf\\]\n")
+        var noted = root
+        noted.note = "Private context omitted from Markdown"
+        let noteMarkdown = exportMarkdown([noted])
+        assert(noteMarkdown.contains("Notes are not included in this Markdown export."))
+        assert(!noteMarkdown.contains("Private context omitted"))
+        func colorComponents(_ color: NSColor?) -> [CGFloat] {
+            guard let rgb = color else { return [] }
+            return [rgb.redComponent, rgb.greenComponent, rgb.blueComponent]
+        }
+        func close(_ actual: NSColor?, _ expected: NSColor, tolerance: CGFloat = 0.04) -> Bool {
+            let a = colorComponents(actual), b = colorComponents(expected)
+            return a.count == 3 && b.count == 3 && zip(a, b).allSatisfy { abs($0 - $1) < tolerance }
+        }
+        let small = MapCanvas(model: MapModel(roots: [MapNode(id: UUID(), title: "Ink", children: [], folded: false)], selected: UUID()))
+        small.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        small.appearance = NSAppearance(named: .aqua)
+        func screenCorner() -> NSColor? {
+            let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 400, pixelsHigh: 300,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let previous = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: image)
+            small.effectiveAppearance.performAsCurrentDrawingAppearance { small.draw(small.bounds) }
+            NSGraphicsContext.current = previous
+            return image.colorAt(x: 0, y: 0)
+        }
+        func pdfCorner(_ bytes: Data) -> NSColor? {
+            guard let page = CGPDFDocument(CGDataProvider(data: bytes as CFData)!)?.page(at: 1) else { return nil }
+            let rect = page.getBoxRect(.mediaBox)
+            let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(rect.width), pixelsHigh: Int(rect.height),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let context = NSGraphicsContext(bitmapImageRep: image)!.cgContext
+            context.drawPDFPage(page)
+            context.flush()
+            return image.colorAt(x: 0, y: 0)
+        }
+        for appearance: NSAppearance.Name in [.aqua, .darkAqua] {
+          small.appearance = NSAppearance(named: appearance)
+          for hex in ["#102030FF", "#10203080"] {
+            assert(small.model.setCanvasColor(hex))
+            var system = NSColor.white
+            small.effectiveAppearance.performAsCurrentDrawingAppearance {
+                system = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .white
+            }
+            let foreground = NSColor(srgbRed: 16/255, green: 32/255, blue: 48/255,
+                                     alpha: hex.hasSuffix("80") ? 128/255 : 1)
+            let alpha = foreground.alphaComponent
+            let expected = NSColor(srgbRed: foreground.redComponent * alpha + system.redComponent * (1 - alpha),
+                green: foreground.greenComponent * alpha + system.greenComponent * (1 - alpha),
+                blue: foreground.blueComponent * alpha + system.blueComponent * (1 - alpha), alpha: 1)
+            assert(close(screenCorner(), expected), "Screen backdrop must composite over effective system appearance")
+            for (format, suffix) in [(MapExportFormat.png, "png"), (.jpeg, "jpg"), (.pdf, "pdf")] {
+                let output = scratch.appendingPathComponent("canvas-\(appearance.rawValue)-\(hex)-\(suffix).\(suffix)")
+                try exportMap(small, as: format, to: output)
+                let bytes = try Data(contentsOf: output)
+                let corner = format == .pdf ? pdfCorner(bytes) : NSBitmapImageRep(data: bytes)?.colorAt(x: 0, y: 0)
+                assert(close(corner, expected, tolerance: format == .jpeg ? 0.07 : 0.04),
+                       "\(appearance.rawValue) \(hex) \(suffix) canvas differs from screen: \(colorComponents(corner)) vs \(colorComponents(expected))")
+            }
+          }
+        }
         let pictureRep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 12, pixelsHigh: 12,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!

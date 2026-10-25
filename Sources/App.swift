@@ -362,23 +362,44 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             ?? NSFont(name: "STSongti-SC-Regular", size: size)
             ?? NSFont.systemFont(ofSize: size)
     }
-    private func titleColor(for id: UUID, isRoot: Bool) -> NSColor {
-        let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font?.color : embeddedTheme?.baseSubnode?.font?.color
-        guard let rgba = nativePresentation[id]?.font?.color ?? inherited, rgba.count == 4 else { return .labelColor }
-        let color = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
-        var background: NSColor?
+    private func composite(_ foreground: NSColor, over background: NSColor) -> NSColor {
+        let front = foreground.usingColorSpace(.deviceRGB)!, back = background.usingColorSpace(.deviceRGB)!
+        let alpha = front.alphaComponent
+        return NSColor(srgbRed: front.redComponent * alpha + back.redComponent * (1 - alpha),
+                       green: front.greenComponent * alpha + back.greenComponent * (1 - alpha),
+                       blue: front.blueComponent * alpha + back.blueComponent * (1 - alpha), alpha: 1)
+    }
+    private var canvasBackground: NSColor {
+        var system = NSColor.windowBackgroundColor
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            background = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB)
+            system = NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .windowBackgroundColor
         }
-        if !isRoot, let background {
-            func lightness(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> CGFloat {
-                0.2126 * red + 0.7152 * green + 0.0722 * blue
-            }
-            let difference = abs(lightness(CGFloat(rgba[0]), CGFloat(rgba[1]), CGFloat(rgba[2])) -
-                                 lightness(background.redComponent, background.greenComponent, background.blueComponent))
-            if difference < 0.4 { return .labelColor } // Keep original dark-theme branch text legible on system Light.
+        let imported = embeddedTheme?.backgroundColor.flatMap { rgba -> NSColor? in
+            guard rgba.count == 4 else { return nil }
+            return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
         }
-        return color
+        return composite(model.canvasColor.flatMap(strokeColor) ?? imported ?? system, over: system)
+    }
+    private func rootFill(for node: MapNode) -> NSColor {
+        if let hex = node.rootFillColor ?? InspectorTheme(rawValue: model.theme ?? "")?.rootFill,
+           let color = strokeColor(hex) { return color }
+        if let rgba = nativePresentation[node.id]?.fillColor ?? embeddedTheme?.mainNodes.first?.fillColor,
+           rgba.count == 4 { return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3]) }
+        return .controlBackgroundColor
+    }
+    private func titleColor(for node: MapNode, isRoot: Bool) -> NSColor {
+        let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font?.color : embeddedTheme?.baseSubnode?.font?.color
+        let rgba = nativePresentation[node.id]?.font?.color ?? inherited
+        let candidate: NSColor = rgba?.count == 4
+            ? NSColor(srgbRed: rgba![0], green: rgba![1], blue: rgba![2], alpha: rgba![3]) : .labelColor
+        let background = isRoot ? composite(rootFill(for: node), over: canvasBackground) : canvasBackground
+        let foreground = composite(candidate, over: background).usingColorSpace(.deviceRGB)!
+        let backdrop = background.usingColorSpace(.deviceRGB)!
+        func luminance(_ color: NSColor) -> CGFloat {
+            0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+        }
+        if abs(luminance(foreground) - luminance(backdrop)) >= 0.4 { return candidate }
+        return luminance(backdrop) > 0.5 ? .black : .white
     }
     private func strokeColor(_ hex: String) -> NSColor? {
         guard hex.count == 9, hex.first == "#", let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
@@ -715,7 +736,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
+        canvasBackground.setFill()
         bounds.fill()
         let (nodes, drop) = previewGeometry()
         if nodes.isEmpty {
@@ -733,6 +754,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             NSColor(srgbRed: 0.949, green: 0.812, blue: 0.400, alpha: 1)
         ]
         var depth: [UUID: Int] = [:], color: [UUID: NSColor] = [:]
+        let theme = InspectorTheme(rawValue: model.theme ?? "")
         var branches = 0
         for item in nodes {
             let parentDepth = item.parent.flatMap { depth[$0] } ?? -1
@@ -740,10 +762,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             depth[item.node.id] = level
             if level == 0 { color[item.node.id] = .secondaryLabelColor }
             else if level == 1 {
-                color[item.node.id] = palette[branches % palette.count]
+                color[item.node.id] = theme.flatMap { strokeColor($0.branchColors[branches % $0.branchColors.count]) }
+                    ?? palette[branches % palette.count]
                 branches += 1
             } else { color[item.node.id] = item.parent.flatMap { color[$0] } ?? .systemTeal }
-            if let rgba = branchStyles[item.node.id]?.rgba, rgba.count == 4 {
+            if theme == nil, let rgba = branchStyles[item.node.id]?.rgba, rgba.count == 4 {
                 color[item.node.id] = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
             }
             if let hex = item.node.branchStrokeColor, let stroke = strokeColor(hex) {
@@ -812,11 +835,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
             let active = item.node.id == model.selected || hovered
             if item.parent == nil {
-                let shape = NSBezierPath(roundedRect: box, xRadius: 9 * zoom, yRadius: 9 * zoom)
-                if let rgba = nativePresentation[item.node.id]?.fillColor ?? embeddedTheme?.mainNodes.first?.fillColor,
-                   rgba.count == 4 {
-                    NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3]).setFill()
-                } else { NSColor.controlBackgroundColor.setFill() }
+                let radius: CGFloat = item.node.rootShape == "rectangle" ? 0 : 9 * zoom
+                let shape = NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius)
+                rootFill(for: item.node).setFill()
                 shape.fill()
                 (active ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
                 shape.lineWidth = active ? max(2, 2 * zoom) : max(1, zoom)
@@ -878,7 +899,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font(for: item.node, isRoot: item.parent == nil, zoom: zoom),
                 .paragraphStyle: paragraph,
-                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : titleColor(for: item.node.id, isRoot: item.parent == nil)
+                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : titleColor(for: item.node, isRoot: item.parent == nil)
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
             let height = ceil((label as NSString).boundingRect(
@@ -964,7 +985,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let field = NSTextField(frame: editorFrame(node))
         field.stringValue = node.node.title
         field.font = font(for: node.node, isRoot: node.parent == nil, zoom: max(zoom, 0.8))
-        field.textColor = titleColor(for: node.node.id, isRoot: node.parent == nil)
+        field.textColor = titleColor(for: node.node, isRoot: node.parent == nil)
         switch node.node.textAlignment ?? nativePresentation[node.node.id]?.font?.alignment ?? "left" {
         case "center": field.alignment = .center
         case "right": field.alignment = .right
@@ -1005,10 +1026,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else { needsDisplay = true }
     }
     private func changed() { revealSelection(); needsDisplay = true; onChange?() }
-    func addChild() { commitEditing(); model.addChild(); changed(); beginEditing() }
+    func addChild() { commitEditing(); let old = model.selected; model.addChild(); if old != model.selected { changed(); beginEditing() } }
     func addSibling(before: Bool = false) { commitEditing(); let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
     func addParent() { commitEditing(); let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
-    func addMainNode() { commitEditing(); model.addMainNode(); changed(); beginEditing() }
+    func addMainNode() { commitEditing(); let old = model.selected; model.addMainNode(); if old != model.selected { changed(); beginEditing() } }
     func insertImageData(_ data: Data) throws {
         let image = try MapImage(data: data)
         commitEditing()
@@ -1696,6 +1717,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var importedMindNode: MindNodeDetailedImport?
     private var savedRoots: [MapNode] = []
     private var savedRelationships: [MapRelationship] = []
+    private var savedTheme: String?
+    private var savedCanvasColor: String?
     private var dirty = false
     private var closeApproved = false
     private var settingsWindow: NSWindow?
@@ -1758,7 +1781,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     private func syncDirty() {
         // ponytail: compares embedded video bytes on each edit; use revision IDs if large maps stutter.
-        dirty = canvas.model.roots != savedRoots || canvas.model.relationships != savedRelationships
+        dirty = canvas.model.roots != savedRoots || canvas.model.relationships != savedRelationships ||
+            canvas.model.theme != savedTheme || canvas.model.canvasColor != savedCanvasColor
         updateTitle()
     }
     private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("MindMap"))" }
@@ -1804,7 +1828,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard confirmDiscardOrSave() else { return }
             // Saving may have changed this same path; never install the pre-save tree.
             let document = try readOwnDocument(url)
-            canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID())
+            canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID(),
+                                    theme: document.theme, canvasColor: document.canvasColor)
             canvas.model.relationships = document.relationships
             canvas.branchStyles = [:]
             canvas.nativePresentation = [:]
@@ -1814,6 +1839,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             fileURL = url
             savedRoots = document.roots
             savedRelationships = document.relationships
+            savedTheme = document.theme
+            savedCanvasColor = document.canvasColor
             dirty = false
             updateTitle()
             canvas.fitMapInView()
@@ -1849,6 +1876,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             fileURL = nil // Never save into the source package.
             savedRoots = imported.roots
             savedRelationships = []
+            savedTheme = nil
+            savedCanvasColor = nil
             dirty = false
             updateTitle()
             canvas.fitMapInView()
@@ -1925,7 +1954,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do {
             try MindNodeWriter.write(canvas.model.roots, to: url,
                                      imported: importedMindNode,
-                                     relationships: canvas.model.relationships)
+                                     relationships: canvas.model.relationships,
+                                     theme: canvas.model.theme, canvasColor: canvas.model.canvasColor)
         } catch { alert("Could not export MindNode copy", detail: error.localizedDescription) }
     }
     @objc private func exportPDF(_ sender: Any?) { export(.pdf, extension: "pdf", type: .pdf) }
@@ -1978,10 +2008,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
             #endif
             try writeOwnDocument(OwnMapDocument(roots: canvas.model.roots,
-                                                relationships: canvas.model.relationships), to: url)
+                                                relationships: canvas.model.relationships,
+                                                theme: canvas.model.theme,
+                                                canvasColor: canvas.model.canvasColor), to: url)
             fileURL = url
             savedRoots = canvas.model.roots
             savedRelationships = canvas.model.relationships
+            savedTheme = canvas.model.theme
+            savedCanvasColor = canvas.model.canvasColor
             dirty = false
             updateTitle()
             return true

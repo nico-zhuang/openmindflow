@@ -31,8 +31,12 @@ func exportMarkdown(_ roots: [MapNode], relationships: [MapRelationship] = []) -
     func containsMedia(_ nodes: [MapNode]) -> Bool {
         nodes.contains { $0.image != nil || $0.video != nil || containsMedia($0.children) }
     }
+    func containsNotes(_ nodes: [MapNode]) -> Bool {
+        nodes.contains { $0.note != nil || containsNotes($0.children) }
+    }
     var output = containsMedia(roots) ? "> Images and other media are not embedded in this Markdown export.\n\n" : ""
     if !relationships.isEmpty { output += "> Cross-node relationships are not embedded in this Markdown export.\n\n" }
+    if containsNotes(roots) { output += "> Notes are not included in this Markdown export.\n\n" }
     func append(_ nodes: [MapNode], depth: Int) {
         for node in nodes {
             let text = node.title.replacingOccurrences(of: "\r\n", with: "\n")
@@ -73,7 +77,8 @@ func exportMap(_ canvas: MapCanvas, as format: MapExportFormat, to url: URL) thr
     } else {
         // Render on a detached canvas: no viewport, selection, model, or source file is modified.
         let roots = canvas.model.roots
-        let snapshot = MapCanvas(model: MapModel(roots: roots, selected: UUID()))
+        let snapshot = MapCanvas(model: MapModel(roots: roots, selected: UUID(),
+            theme: canvas.model.theme, canvasColor: canvas.model.canvasColor))
         snapshot.model.relationships = canvas.model.relationships
         snapshot.branchStyles = canvas.branchStyles
         snapshot.nativePresentation = canvas.nativePresentation

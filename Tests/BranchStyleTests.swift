@@ -158,6 +158,76 @@ import AppKit
             fputs("Editing must keep invisible hit geometry without restoring a card or text-field box\n", stderr)
             exit(1)
         }
+        // Real paint, not inspector state: explicit node > selected palette > imported style.
+        var themedRoot = root
+        themedRoot.rootShape = "rectangle"
+        let themed = MapCanvas(model: MapModel(roots: [themedRoot], selected: UUID()))
+        themed.frame = canvas.frame
+        themed.branchStyles = [child.id: MindNodeVisualStyle(rgba: [0.9, 0.1, 0.1, 1], width: 5),
+                               nearbyChild.id: MindNodeVisualStyle(rgba: [0.1, 0.1, 0.9, 1], width: 5)]
+        func paintTheme() -> NSBitmapImageRep {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 400,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let previous = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            themed.effectiveAppearance.performAsCurrentDrawingAppearance { themed.draw(themed.bounds) }
+            NSGraphicsContext.current = previous
+            return bitmap
+        }
+        func branchPixel(_ bitmap: NSBitmapImageRep, _ item: LaidOutNode) -> NSColor? {
+            let x = Int(item.frame.maxX + 80 - 18), y = Int(item.frame.maxY + 90 - 7)
+            return bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)
+        }
+        let imported = paintTheme()
+        assert(similar(branchPixel(imported, nodes[1]), NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1), tolerance: 0.1))
+        assert(similar(branchPixel(imported, nodes[2]), NSColor(srgbRed: 0.1, green: 0.1, blue: 0.9, alpha: 1), tolerance: 0.1))
+        assert(themed.model.setTheme("rainbow"))
+        themed.needsDisplay = true
+        let rainbow = paintTheme()
+        assert(similar(branchPixel(rainbow, nodes[1]), NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1), tolerance: 0.1) == false)
+        assert(similar(branchPixel(rainbow, nodes[1]), NSColor(srgbRed: 124/255, green: 207/255, blue: 141/255, alpha: 1), tolerance: 0.1))
+        assert(similar(branchPixel(rainbow, nodes[2]), NSColor(srgbRed: 169/255, green: 166/255, blue: 240/255, alpha: 1), tolerance: 0.1))
+        assert(themed.model.setBranchStroke(width: nil, color: "#DE2244FF", style: nil) == false) // No node is selected.
+        themed.model.selected = child.id
+        assert(themed.model.setBranchStroke(width: nil, color: "#DE2244FF", style: nil))
+        themed.needsDisplay = true
+        assert(similar(branchPixel(paintTheme(), nodes[1]), NSColor(srgbRed: 222/255, green: 34/255, blue: 68/255, alpha: 1), tolerance: 0.1))
+        themed.model.selected = UUID()
+        for appearance: NSAppearance.Name in [.aqua, .darkAqua] {
+            themed.appearance = NSAppearance(named: appearance)
+            let bitmap = paintTheme(), box = nodes[0].frame
+            let fill = bitmap.colorAt(x: Int(box.minX + 82), y: bitmap.pixelsHigh - Int(box.minY + 92) - 1)
+            assert(similar(fill, .white, tolerance: 0.07), "Rainbow root fill is white even in Dark mode")
+            let textPixels = (Int(box.minX + 94)..<Int(box.maxX + 68)).flatMap { x in
+                (Int(box.minY + 105)..<Int(box.maxY + 75)).compactMap { y in
+                    bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)
+                }
+            }
+            assert(textPixels.contains { rgba($0).allSatisfy { $0 < 0.55 } }, "Root text must contrast against its actual white fill")
+        }
+        themed.embeddedTheme = MindNodeThemeMetadata(identifier: nil, backgroundColor: [0.13, 0.27, 0.41, 1],
+            allowNodeStrokeColorVariation: nil, baseSubnode: nil, mainNodes: [], subnodeLevels: [])
+        assert(similar(paintTheme().colorAt(x: 2, y: 2), NSColor(srgbRed: 0.13, green: 0.27, blue: 0.41, alpha: 1)))
+        assert(themed.model.setCanvasColor("#CCBB88FF"))
+        themed.needsDisplay = true
+        assert(similar(paintTheme().colorAt(x: 2, y: 2), NSColor(srgbRed: 0.8, green: 187/255, blue: 136/255, alpha: 1)))
+        themed.nativePresentation[child.id] = MindNodePresentation(location: nil, maxWidth: nil,
+            allowToShrinkWidth: nil, font: MindNodeFontMetadata(family: nil, pointSize: nil,
+                color: [0.1, 0.1, 0.1, 1], alignment: nil, alignmentCode: nil, bold: nil, italic: nil),
+            styleChangedByUser: nil, fillColor: nil)
+        func childTextBrightness() -> [CGFloat] {
+            let bitmap = paintTheme(), box = nodes[1].frame
+            return (Int(box.minX + 96)..<Int(box.maxX + 65)).flatMap { x in
+                (Int(box.maxY + 90 - 36)..<Int(box.maxY + 90 - 12)).compactMap { y in
+                    rgba(bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)).first
+                }
+            }
+        }
+        assert(childTextBrightness().contains { $0 < 0.25 }, "Legible imported child font stays dark on light canvas")
+        assert(themed.model.setCanvasColor("#101820FF"))
+        themed.needsDisplay = true
+        assert(childTextBrightness().contains { $0 > 0.8 }, "Imported child font must contrast against actual dark document canvas")
         print("borderless branch line, native editor, dark/light and AX hit geometry passed")
     }
 }
