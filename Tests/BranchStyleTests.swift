@@ -179,6 +179,13 @@ import AppKit
             let x = Int(item.frame.maxX + 80 - 18), y = Int(item.frame.maxY + 90 - 7)
             return bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)
         }
+        func rootTextPixels(_ bitmap: NSBitmapImageRep, _ box: CGRect) -> [[CGFloat]] {
+            (Int(box.minX + 94)..<Int(box.maxX + 68)).flatMap { x in
+                (Int(box.minY + 105)..<Int(box.maxY + 75)).map { y in
+                    rgba(bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1))
+                }
+            }
+        }
         let imported = paintTheme()
         assert(similar(branchPixel(imported, nodes[1]), NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1), tolerance: 0.1))
         assert(similar(branchPixel(imported, nodes[2]), NSColor(srgbRed: 0.1, green: 0.1, blue: 0.9, alpha: 1), tolerance: 0.1))
@@ -199,13 +206,27 @@ import AppKit
             let bitmap = paintTheme(), box = nodes[0].frame
             let fill = bitmap.colorAt(x: Int(box.minX + 82), y: bitmap.pixelsHigh - Int(box.minY + 92) - 1)
             assert(similar(fill, .white, tolerance: 0.07), "Rainbow root fill is white even in Dark mode")
-            let textPixels = (Int(box.minX + 94)..<Int(box.maxX + 68)).flatMap { x in
-                (Int(box.minY + 105)..<Int(box.maxY + 75)).compactMap { y in
-                    bitmap.colorAt(x: x, y: bitmap.pixelsHigh - y - 1)
-                }
-            }
-            assert(textPixels.contains { rgba($0).allSatisfy { $0 < 0.55 } }, "Root text must contrast against its actual white fill")
+            assert(rootTextPixels(bitmap, box).contains { $0.count == 3 && $0.allSatisfy { $0 < 0.55 } },
+                   "Root text must contrast against its actual white fill")
         }
+        themed.appearance = NSAppearance(named: .darkAqua)
+        var blankRoot = themedRoot
+        blankRoot.title = ""
+        themed.model.roots = [blankRoot]
+        themed.needsDisplay = true
+        let blankBitmap = paintTheme(), blankBox = mapLayout([blankRoot])[0].frame
+        assert(similar(blankBitmap.colorAt(x: Int(blankBox.minX + 82),
+                                          y: blankBitmap.pixelsHigh - Int(blankBox.minY + 92) - 1), .white, tolerance: 0.07))
+        assert(rootTextPixels(blankBitmap, blankBox).contains { $0.count == 3 && $0.allSatisfy { $0 < 0.4 } },
+               "Dark Rainbow blank root placeholder must render dark text inside its white fill")
+        themed.model.roots = [themedRoot]
+        themed.nativePresentation[root.id] = MindNodePresentation(location: nil, maxWidth: nil,
+            allowToShrinkWidth: nil, font: MindNodeFontMetadata(family: nil, pointSize: nil,
+                color: [136.0/255, 136.0/255, 136.0/255, 1], alignment: nil, alignmentCode: nil, bold: nil, italic: nil),
+            styleChangedByUser: nil, fillColor: nil)
+        themed.needsDisplay = true
+        assert(rootTextPixels(paintTheme(), nodes[0].frame).contains { $0.count == 3 && $0.allSatisfy { $0 < 0.4 } },
+               "Imported #888888 root title must become near-black on white theme fill")
         themed.embeddedTheme = MindNodeThemeMetadata(identifier: nil, backgroundColor: [0.13, 0.27, 0.41, 1],
             allowNodeStrokeColorVariation: nil, baseSubnode: nil, mainNodes: [], subnodeLevels: [])
         assert(similar(paintTheme().colorAt(x: 2, y: 2), NSColor(srgbRed: 0.13, green: 0.27, blue: 0.41, alpha: 1)))
@@ -225,9 +246,13 @@ import AppKit
             }
         }
         assert(childTextBrightness().contains { $0 < 0.25 }, "Legible imported child font stays dark on light canvas")
-        assert(themed.model.setCanvasColor("#101820FF"))
+        themed.nativePresentation[child.id] = MindNodePresentation(location: nil, maxWidth: nil,
+            allowToShrinkWidth: nil, font: MindNodeFontMetadata(family: nil, pointSize: nil,
+                color: [176.0/255, 176.0/255, 176.0/255, 1], alignment: nil, alignmentCode: nil, bold: nil, italic: nil),
+            styleChangedByUser: nil, fillColor: nil)
+        assert(themed.model.setCanvasColor("#484848FF"))
         themed.needsDisplay = true
-        assert(childTextBrightness().contains { $0 > 0.8 }, "Imported child font must contrast against actual dark document canvas")
+        assert(childTextBrightness().contains { $0 > 0.8 }, "Imported borderline child font must become white on explicit dark canvas")
         print("borderless branch line, native editor, dark/light and AX hit geometry passed")
     }
 }

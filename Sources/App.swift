@@ -387,19 +387,24 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
            rgba.count == 4 { return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3]) }
         return .controlBackgroundColor
     }
-    private func titleColor(for node: MapNode, isRoot: Bool) -> NSColor {
+    private func titleColor(for node: MapNode, isRoot: Bool, placeholder: Bool = false) -> NSColor {
         let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font?.color : embeddedTheme?.baseSubnode?.font?.color
         let rgba = nativePresentation[node.id]?.font?.color ?? inherited
         let candidate: NSColor = rgba?.count == 4
-            ? NSColor(srgbRed: rgba![0], green: rgba![1], blue: rgba![2], alpha: rgba![3]) : .labelColor
+            ? NSColor(srgbRed: rgba![0], green: rgba![1], blue: rgba![2], alpha: rgba![3])
+            : (placeholder ? .secondaryLabelColor : .labelColor)
         let background = isRoot ? composite(rootFill(for: node), over: canvasBackground) : canvasBackground
-        let foreground = composite(candidate, over: background).usingColorSpace(.deviceRGB)!
-        let backdrop = background.usingColorSpace(.deviceRGB)!
         func luminance(_ color: NSColor) -> CGFloat {
-            0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+            let rgb = color.usingColorSpace(.sRGB)!
+            let channels = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { value in
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
         }
-        if abs(luminance(foreground) - luminance(backdrop)) >= 0.4 { return candidate }
-        return luminance(backdrop) > 0.5 ? .black : .white
+        let foreground = luminance(composite(candidate, over: background))
+        let backdrop = luminance(background)
+        if (max(foreground, backdrop) + 0.05) / (min(foreground, backdrop) + 0.05) >= 4.5 { return candidate }
+        return backdrop > 0.179 ? .black : .white
     }
     private func strokeColor(_ hex: String) -> NSColor? {
         guard hex.count == 9, hex.first == "#", let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
@@ -899,7 +904,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font(for: item.node, isRoot: item.parent == nil, zoom: zoom),
                 .paragraphStyle: paragraph,
-                .foregroundColor: item.node.title.isEmpty ? NSColor.secondaryLabelColor : titleColor(for: item.node, isRoot: item.parent == nil)
+                .foregroundColor: titleColor(for: item.node, isRoot: item.parent == nil, placeholder: item.node.title.isEmpty)
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
             let height = ceil((label as NSString).boundingRect(
