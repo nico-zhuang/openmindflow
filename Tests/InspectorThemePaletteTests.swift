@@ -14,8 +14,16 @@ enum InspectorThemePaletteTests {
         ]
         for (theme, fill, colors) in legacy {
             assert(theme.rootFill == fill && theme.branchColors == colors, "Existing theme result changed")
-            assert(theme.canvasBackground == nil, "Existing themes retain native background")
         }
+        assert(InspectorTheme.rainbow.canvasBackground == nil && InspectorTheme.candyland.canvasBackground == nil,
+               "Rainbow and Candyland retain their native background")
+        assert(InspectorTheme.tropical.canvasBackground != nil,
+               "Tropical now needs an explicit light background even in DarkAqua")
+        let featured: [InspectorTheme] = [.tropical, .teal, .slate, .coffee]
+        assert(featured.count == 4 &&
+               featured.filter { ($0.canvasBackground.map(luminance) ?? 0) >= 0.75 } == [.tropical, .teal] &&
+               featured.filter { ($0.canvasBackground.map(luminance) ?? 1) <= 0.18 } == [.slate, .coffee],
+               "Four featured themes must have two genuinely light and two dark canvases")
         for theme in InspectorTheme.allCases {
             assert(MapNode.validColor(theme.rootFill) && theme.branchColors.count >= 3)
             assert(theme.branchColors.allSatisfy(MapNode.validColor))
@@ -23,7 +31,7 @@ enum InspectorThemePaletteTests {
             assert(theme.rootTitleColor.map(MapNode.validColor) ?? true)
             assert(theme.branchTitleColor.map(MapNode.validColor) ?? true)
         }
-        assert(Set(InspectorTheme.allCases.compactMap(\.canvasBackground)).count == 3)
+        assert(Set(InspectorTheme.allCases.compactMap(\.canvasBackground)).count == 4)
 
         // Independent category checks from the four-style reference screenshot: these do not
         // compare palette values to themselves or require pixel-perfect screenshot matching.
@@ -152,6 +160,28 @@ enum InspectorThemePaletteTests {
               lstat(scratch.path, &info) == 0, info.st_uid == getuid(),
               info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { fatalError("Unsafe test directory") }
         defer { try? FileManager.default.removeItem(at: scratch) }
+        func paintedLuminance(_ pixel: NSColor?) -> Double {
+            guard let color = pixel?.usingColorSpace(.deviceRGB) else { return 0 }
+            func linear(_ channel: CGFloat) -> Double {
+                let value = Double(channel)
+                return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(color.redComponent) +
+                   0.7152 * linear(color.greenComponent) +
+                   0.0722 * linear(color.blueComponent)
+        }
+        canvas.appearance = NSAppearance(named: .darkAqua)
+        assert(canvasModel.setTheme("tropical"))
+        let darkAppearancePainted = screen()
+        assert(paintedLuminance(darkAppearancePainted.colorAt(x: 0, y: 0)) >= 0.75,
+               "Tropical canvas must paint light under DarkAqua")
+        let darkAppearancePNG = scratch.appendingPathComponent("tropical-dark-appearance.png")
+        try! exportMap(canvas, as: .png, to: darkAppearancePNG)
+        let darkAppearanceExport = NSBitmapImageRep(data: try! Data(contentsOf: darkAppearancePNG))!
+        assert(paintedLuminance(darkAppearanceExport.colorAt(x: 0, y: 0)) >= 0.70,
+               "Tropical exported canvas must remain light under DarkAqua")
+        canvas.appearance = NSAppearance(named: .aqua)
+        assert(canvasModel.setTheme(nil))
         for theme in InspectorTheme.allCases {
             assert(canvasModel.setTheme(theme.rawValue))
             let painted = screen()

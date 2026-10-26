@@ -21,10 +21,11 @@ enum InspectorTheme: String, CaseIterable, Codable {
         }
     }
 
-    // nil preserves the original native system background for the three shipped themes.
+    // Legacy Rainbow and Candyland continue to follow the native system background.
     var canvasBackground: String? {
         switch self {
-        case .tropical, .rainbow, .candyland: nil
+        case .tropical: "#F5F3EFFF"
+        case .rainbow, .candyland: nil
         case .teal: "#D8F9FBFF"
         case .slate: "#455C68FF"
         case .coffee: "#1F1E1BFF"
