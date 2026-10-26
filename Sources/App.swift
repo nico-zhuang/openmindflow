@@ -161,6 +161,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         self.model = model
         announcedSelection = model.selectedIDs
         super.init(frame: .zero)
+        registerForDraggedTypes([.fileURL, .png, .init("public.jpeg"),
+                                 .init("public.heic"), .init("public.heif"),
+                                 .init("public.mpeg-4"), .init("com.apple.quicktime-movie"), .init("public.m4v")])
         videoPosters.totalCostLimit = 128 * 1024 * 1024
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
@@ -587,7 +590,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         for root in roots { add(root, isRoot: true) }
         return mapLayout(roots, overrides: overrides)
     }
-    private func selectedNode() -> LaidOutNode? { visibleNodes().first { $0.node.id == model.selected } }
+    private func selectedNode() -> LaidOutNode? {
+        guard model.selectedIDs.contains(model.selected) else { return nil }
+        return visibleNodes().first { $0.node.id == model.selected }
+    }
     private func validDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
         -> (target: LaidOutNode, parent: UUID, index: Int)? {
         let local = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
@@ -1171,17 +1177,55 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     func addSibling(before: Bool = false) { guard commitEditing() else { return }; let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
     func addParent() { guard commitEditing() else { return }; let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
     func addMainNode() { guard commitEditing() else { return }; let old = model.selected; model.addMainNode(); if old != model.selected { changed(); beginEditing() } }
+    private func worldPointForPaste(_ point: CGPoint? = nil) -> CGPoint {
+        let screenPoint = point ?? blankPastePoint ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        return CGPoint(x: (screenPoint.x - offset.x) / zoom, y: (screenPoint.y - offset.y) / zoom)
+    }
     func insertImageData(_ data: Data) throws {
         let image = try MapImage(data: data)
         guard commitEditing() else { throw OwnJSONError.tooLarge }
-        guard model.addImageChild(image) else { throw OwnJSONError.tooLarge }
+        let inserted = model.selectedIDs.isEmpty
+            ? model.insertRoot(title: "", image: image, at: worldPointForPaste())
+            : model.addImageChild(image)
+        guard inserted else { throw OwnJSONError.tooLarge }
         changed()
     }
     func insertVideoData(_ data: Data) throws {
         let video = try MapVideo(data: data)
         guard commitEditing() else { throw OwnJSONError.tooLarge }
-        guard model.addVideoChild(video) else { throw OwnJSONError.tooLarge }
+        let inserted = model.selectedIDs.isEmpty
+            ? model.insertRoot(title: "", video: video, at: worldPointForPaste())
+            : model.addVideoChild(video)
+        guard inserted else { throw OwnJSONError.tooLarge }
         changed()
+    }
+    private enum ImportedMedia {
+        case image(MapImage)
+        case video(MapVideo)
+    }
+    private func mediaFile(at url: URL) throws -> ImportedMedia {
+        let ext = url.pathExtension.lowercased()
+        let isImage = ["png", "jpg", "jpeg", "heic", "heif"].contains(ext)
+        let isVideo = ["mov", "mp4", "m4v"].contains(ext)
+        guard url.isFileURL, isImage || isVideo else { throw MapImageError.invalidFormat }
+        let limit = isImage ? 8 * 1024 * 1024 : MapVideo.maxEmbeddedBytes
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true else { throw MapImageError.invalidFormat }
+        guard let length = values.fileSize, length <= limit else {
+            if isImage { throw MapImageError.tooLarge }
+            throw MapVideoError.tooLarge
+        }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var bytes = Data()
+        while let chunk = try file.read(upToCount: limit + 1 - bytes.count), !chunk.isEmpty {
+            bytes.append(chunk)
+            if bytes.count > limit {
+                if isImage { throw MapImageError.tooLarge }
+                throw MapVideoError.tooLarge
+            }
+        }
+        return isImage ? .image(try MapImage(data: bytes)) : .video(try MapVideo(data: bytes))
     }
     func insertVideoFile(_ url: URL) throws {
         guard url.isFileURL, ["mov", "mp4", "m4v"].contains(url.pathExtension.lowercased()) else {
@@ -1195,6 +1239,73 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard data.count <= MapVideo.maxEmbeddedBytes else { throw MapVideoError.tooLarge }
         }
         try insertVideoData(data)
+    }
+    @discardableResult
+    func pasteMediaFileFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        guard let source = pasteboard.string(forType: .fileURL), let url = URL(string: source) else { return false }
+        do {
+            switch try mediaFile(at: url) {
+            case .image(let image): try insertImageData(image.data)
+            case .video(let video): try insertVideoData(video.data)
+            }
+            return true
+        } catch {
+            if ["mov", "mp4", "m4v"].contains(url.pathExtension.lowercased()) { onVideoError?(error) }
+            else { onImageError?(error) }
+            return false
+        }
+    }
+    @discardableResult
+    func acceptDroppedMedia(from board: NSPasteboard, at point: CGPoint) -> Bool {
+        let imported: ImportedMedia
+        do {
+            if let source = board.string(forType: .fileURL), let url = URL(string: source) {
+                imported = try mediaFile(at: url)
+            } else if let data = [NSPasteboard.PasteboardType.png, .init("public.jpeg"),
+                                  .init("public.heic"), .init("public.heif")]
+                        .compactMap({ board.data(forType: $0) }).first {
+                imported = .image(try MapImage(data: data))
+            } else if let data = ["public.mpeg-4", "com.apple.quicktime-movie", "public.m4v"]
+                        .compactMap({ board.data(forType: .init($0)) }).first {
+                imported = .video(try MapVideo(data: data))
+            } else { return false }
+        } catch {
+            let fileIsVideo = board.string(forType: .fileURL).flatMap(URL.init(string:))
+                .map { ["mov", "mp4", "m4v"].contains($0.pathExtension.lowercased()) } ?? false
+            if fileIsVideo || board.availableType(from: [.init("public.mpeg-4"),
+                .init("com.apple.quicktime-movie"), .init("public.m4v")]) != nil { onVideoError?(error) }
+            else { onImageError?(error) }
+            return false
+        }
+        let target = visibleNodes().last { screen($0.frame).contains(point) }
+        guard commitEditing() else { return false }
+        let inserted: Bool
+        switch imported {
+        case .image(let image):
+            inserted = target.map { model.addImageChild(image, to: $0.node.id) }
+                ?? model.insertRoot(title: "", image: image, at: worldPointForPaste(point))
+        case .video(let video):
+            inserted = target.map { model.addVideoChild(video, to: $0.node.id) }
+                ?? model.insertRoot(title: "", video: video, at: worldPointForPaste(point))
+        }
+        guard inserted else { return false }
+        changed()
+        return true
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let board = sender.draggingPasteboard
+        if let file = board.string(forType: .fileURL), let url = URL(string: file) {
+            return ["png", "jpg", "jpeg", "heic", "heif", "mov", "mp4", "m4v"]
+                .contains(url.pathExtension.lowercased()) ? .copy : []
+        }
+        return board.availableType(from: [.png, .init("public.jpeg"), .init("public.heic"),
+                                          .init("public.heif"), .init("public.mpeg-4"),
+                                          .init("com.apple.quicktime-movie"), .init("public.m4v")]) != nil ? .copy : []
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        acceptDroppedMedia(from: sender.draggingPasteboard,
+                           at: convert(sender.draggingLocation, from: nil))
     }
     @discardableResult
     func pasteVideoFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
@@ -1255,23 +1366,31 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         changed()
         return true
     }
-    @objc func paste(_ sender: Any?) {
-        let board = NSPasteboard.general
+    @discardableResult
+    func paste(from board: NSPasteboard) -> Bool {
         if board.availableType(from: [Self.groupPasteboardType]) != nil {
-            _ = pasteSelection(from: board, at: blankPastePoint ?? CGPoint(x: bounds.midX, y: bounds.midY))
-            return
+            return pasteSelection(from: board, at: blankPastePoint ?? CGPoint(x: bounds.midX, y: bounds.midY))
         }
         if board.availableType(from: [.png, .init("public.jpeg"), .init("public.heic"),
-                                      .init("public.heif"), .tiff]) != nil {
-            _ = pasteImageFromPasteboard(board)
-        } else if board.availableType(from: [.fileURL, .init("public.mpeg-4"),
-                                               .init("com.apple.quicktime-movie"), .init("public.m4v")]) != nil {
-            _ = pasteVideoFromPasteboard(board)
-        } else if let text = board.string(forType: .string) {
-            beginEditing()
-            editor?.currentEditor()?.insertText(text)
+                                       .init("public.heif"), .tiff]) != nil {
+            return pasteImageFromPasteboard(board)
         }
+        if board.availableType(from: [.fileURL]) != nil { return pasteMediaFileFromPasteboard(board) }
+        if board.availableType(from: [.init("public.mpeg-4"), .init("com.apple.quicktime-movie"),
+                                      .init("public.m4v")]) != nil {
+            return pasteVideoFromPasteboard(board)
+        }
+        guard let text = board.string(forType: .string) else { return false }
+        if model.selectedIDs.isEmpty {
+            guard commitEditing(), model.insertRoot(title: text, at: worldPointForPaste()) else { return false }
+            changed()
+            return true
+        }
+        beginEditing()
+        editor?.currentEditor()?.insertText(text)
+        return editor != nil
     }
+    @objc func paste(_ sender: Any?) { _ = paste(from: .general) }
     func detachSelected() { guard commitEditing() else { return }; if model.detachSelected() { changed() } }
     func undo() { guard commitEditing() else { return }; if model.undo() { changed() } }
     func redo() { guard commitEditing() else { return }; if model.redo() { changed() } }
@@ -1435,7 +1554,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard commitEditing() else { return nil }
             return relationshipMenu(for: relation)
         }
-        if id == nil { blankPastePoint = point }
+        if id == nil {
+            guard commitEditing() else { return nil }
+            blankPastePoint = point
+            model.clearSelection()
+            selectedRelationshipID = nil
+            needsDisplay = true
+        }
         return contextMenu(for: id)
     }
     @objc private func relationshipCommand(_ item: NSMenuItem) {
@@ -1603,7 +1728,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
 
     private func moveSelection(_ key: UInt16) {
-        guard commitEditing() else { return }
+        guard commitEditing(), model.selectedIDs.contains(model.selected) else { return }
         let nodes = visibleNodes()
         guard let current = nodes.first(where: { $0.node.id == model.selected }) else { return }
         let target: LaidOutNode?
@@ -1723,7 +1848,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if event.clickCount == 2 { beginEditing() }
         } else {
             blankPastePoint = point
-            model.selectOnly(model.selected)
+            model.clearSelection()
             needsDisplay = true
         }
         if editor == nil { window?.makeFirstResponder(self) }

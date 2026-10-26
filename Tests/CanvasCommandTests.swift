@@ -351,15 +351,18 @@ enum CanvasCommandTests {
                "Command-N should add and edit one main/root node")
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
-        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "style", "undo", "redo"])
+        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "style"])
+        let allowed = appDelegate.toolbarAllowedItemIdentifiers(toolbar)
+        assert(allowed.contains(.init("undo")) && allowed.contains(.init("redo")),
+               "Undo and Redo stay available as customizable toolbar items")
         for (index, pair) in zip(identifiers,
-                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "toggleStyle:", "undoEdit:", "redoEdit:"]).enumerated() {
+                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "toggleStyle:"]).enumerated() {
             let (identifier, action) = pair
             let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
                                            willBeInsertedIntoToolbar: true)!
             assert(item.target as AnyObject? === appDelegate)
             assert(item.action.map(NSStringFromSelector) == action)
-            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Show/Hide Style", "Undo", "Redo"][index])
+            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Show/Hide Style"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
         func selectedAppearance(_ menu: NSMenu) -> [String] {
@@ -844,13 +847,17 @@ enum CanvasCommandTests {
                 fputs("Escape must cancel attached drag and clear its spring\n", stderr); exit(1)
             }
             springCanvas.mouseUp(with: mouse(.leftMouseUp, blank))
-            let canonicalPaint = image(springCanvas)
+            let previouslySelectedPaint = image(springCanvas)
             springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))
             springCanvas.mouseDragged(with: mouse(.leftMouseDragged, springGap))
             _ = springCanvas.frameForAccessibility(leftChild.id)
-            springCanvas.mouseDown(with: mouse(.leftMouseDown, blank)) // Interrupt with a canonical-layout miss.
-            if springCanvas.frameForAccessibility(leftChild.id)! != origin || image(springCanvas) != canonicalPaint {
-                fputs("A no-hit mousedown must clear cached spring presentation and repaint canonical geometry\n", stderr); exit(1)
+            springCanvas.mouseDown(with: mouse(.leftMouseDown, blank)) // Interrupt and deselect on a canonical-layout miss.
+            let deselectedPaint = image(springCanvas)
+            springCanvas.needsDisplay = true
+            if springCanvas.frameForAccessibility(leftChild.id)! != origin ||
+               !springModel.selectedIDs.isEmpty || deselectedPaint == previouslySelectedPaint ||
+               image(springCanvas) != deselectedPaint {
+                fputs("A no-hit mousedown must clear spring geometry and repaint the deselected canonical map\n", stderr); exit(1)
             }
             springCanvas.mouseUp(with: mouse(.leftMouseUp, blank))
             springCanvas.mouseDown(with: mouse(.leftMouseDown, springStart))

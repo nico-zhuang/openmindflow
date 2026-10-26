@@ -346,7 +346,12 @@ final class MapModel {
 
     @discardableResult
     func addImageChild(_ image: MapImage) -> Bool {
-        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected) else { return false }
+        return addImageChild(image, to: selected)
+    }
+    @discardableResult
+    func addImageChild(_ image: MapImage, to parentID: UUID) -> Bool {
+        guard let path = Self.path(to: parentID, in: roots) else { return false }
         let parent = Self.node(at: path[...], in: roots)
         let child = MapNode(id: UUID(), title: "", children: [], folded: false,
                             fontFamily: parent.fontFamily, fontSize: parent.fontSize,
@@ -365,7 +370,12 @@ final class MapModel {
 
     @discardableResult
     func addVideoChild(_ video: MapVideo) -> Bool {
-        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected) else { return false }
+        return addVideoChild(video, to: selected)
+    }
+    @discardableResult
+    func addVideoChild(_ video: MapVideo, to parentID: UUID) -> Bool {
+        guard let path = Self.path(to: parentID, in: roots) else { return false }
         let parent = Self.node(at: path[...], in: roots)
         let child = MapNode(id: UUID(), title: "", children: [], folded: false,
                             fontFamily: parent.fontFamily, fontSize: parent.fontSize,
