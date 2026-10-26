@@ -31,7 +31,7 @@ import AppKit
         inspector.frame = CGRect(x: 0, y: 0, width: 280, height: 550)
         let otherID = UUID()
         var other = MapNode(id: otherID, title: "Other", children: [], folded: false)
-        other.location = SIMD2(550, 150)
+        other.location = SIMD2(550, 350)
         var relationRoot = root
         relationRoot.location = SIMD2(130, 150)
         let relationModel = MapModel(roots: [relationRoot, other], selected: rootID)
@@ -56,6 +56,12 @@ import AppKit
                relationInspector.colorPopup.titleOfSelectedItem == "Blue")
         assert(relationModel.undo() && relationModel.relationships[0].color == nil &&
                relationModel.roots[0].branchStrokeColor == "#FF0000FF")
+        relationCanvas.undo() // Undo creation through the canvas, not directly through the model.
+        assert(relationModel.relationships.isEmpty && relationCanvas.selectedRelationshipID == nil &&
+               relationInspector.tabs.isEnabled(forSegment: 1) &&
+               relationInspector.colorPopup.titleOfSelectedItem == "Mixed",
+               "Undoing creation must restore the multi-node color action and enable Notes")
+        relationCanvas.redo()
         relationInspector.refresh()
         assert(relationCanvas.selectNode(rootID) && relationCanvas.selectedRelationshipID == nil &&
                relationInspector.tabs.isEnabled(forSegment: 1) && relationInspector.colorPopup.titleOfSelectedItem == "Custom")
@@ -66,6 +72,36 @@ import AppKit
         relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
         assert(relationSelections == beforeReplace, "Model replacement must not refresh inspector before appearance metadata")
         relationInspector.refresh() // AppDelegate performs this after installing import metadata.
+        relationCanvas.needsDisplay = true // Final post-import fit invalidates after metadata installation.
+        assert(relationSelections == beforeReplace + 1,
+               "Changed selected UUID must emit exactly one deferred selection notification")
+        relationCanvas.needsDisplay = true
+        assert(relationSelections == beforeReplace + 1)
+        relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
+        assert(relationSelections == beforeReplace + 1)
+        relationInspector.refresh()
+        relationCanvas.needsDisplay = true
+        assert(relationSelections == beforeReplace + 1,
+               "Replacing a model with the same selected UUID relies on explicit inspector refresh")
+        assert(relationCanvas.model.toggleSelection(rootID))
+        relationCanvas.createRelationship(nil)
+        let arrow = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{f701}",
+            charactersIgnoringModifiers: "\u{f701}", isARepeat: false, keyCode: 125)!
+        relationCanvas.keyDown(with: arrow)
+        assert(relationCanvas.selectedRelationshipID == nil && relationCanvas.model.selected == otherID &&
+               relationInspector.tabs.isEnabled(forSegment: 1) &&
+               relationInspector.colorPopup.titleOfSelectedItem == "Default",
+               "Arrow navigation to a node must leave relationship editing")
+        assert(relationCanvas.model.toggleSelection(rootID))
+        relationCanvas.createRelationship(nil)
+        let previousEdge = relationCanvas.model.relationships.last!
+        assert(relationCanvas.selectedRelationshipID == previousEdge.id)
+        let replacement = MapModel(roots: [relationRoot, other], selected: rootID)
+        replacement.relationships = [previousEdge] // Even a reused UUID belongs to the new document.
+        relationCanvas.model = replacement
+        assert(relationCanvas.selectedRelationshipID == nil && replacement.relationships[0].id == previousEdge.id,
+               "Replacing the document must discard an old relationship target even if its UUID recurs")
         do {
         let model = MapModel(roots: [root], selected: rootID)
         let noteCanvas = MapCanvas(model: model)

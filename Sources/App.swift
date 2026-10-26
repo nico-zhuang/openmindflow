@@ -68,7 +68,7 @@ private enum NodeShortcuts {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { replacingModel = true; stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; revealSelection(); needsDisplay = true; replacingModel = false } }
+    var model: MapModel { didSet { replacingModel = true; stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = false } }
     private var replacingModel = false
     private(set) var selectedRelationshipID: UUID? {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
@@ -95,7 +95,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             for (id, element) in accessibleNodes {
                 element.setAccessibilitySelected(model.selectedIDs.contains(id) && visibleIDs.contains(id))
             }
-            if replacingModel { announcedSelection = model.selectedIDs; return }
+            if replacingModel { return }
             guard announcedSelection != model.selectedIDs else { return }
             announcedSelection = model.selectedIDs
             NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
@@ -1072,7 +1072,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else { endEditingWithoutSaving(); needsDisplay = true }
         return true
     }
-    private func changed() { revealSelection(); needsDisplay = true; onChange?() }
+    private func changed() {
+        if let id = selectedRelationshipID, !model.relationships.contains(where: { $0.id == id }) {
+            selectedRelationshipID = nil
+        }
+        revealSelection(); needsDisplay = true; onChange?()
+    }
     func addChild() { guard commitEditing() else { return }; let old = model.selected; model.addChild(); if old != model.selected { changed(); beginEditing() } }
     func addSibling(before: Bool = false) { guard commitEditing() else { return }; let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
     func addParent() { guard commitEditing() else { return }; let old = model.selected; model.addParent(); if old != model.selected { changed(); beginEditing() } }
@@ -1507,7 +1512,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                     return aScore < bScore
                 }
         }
-        if let target { model.selected = target.node.id; revealSelection(); needsDisplay = true }
+        if let target { selectedRelationshipID = nil; model.selected = target.node.id; revealSelection(); needsDisplay = true }
     }
 
     override func mouseMoved(with event: NSEvent) {
