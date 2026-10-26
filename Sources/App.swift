@@ -82,7 +82,7 @@ private enum NodeShortcuts {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; clearDragCandidate(); stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
+    var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
     var replacingModel = false
     private(set) var selectedRelationshipID: UUID? {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
@@ -149,6 +149,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var previewCache: (nodes: [LaidOutNode], drop: (target: LaidOutNode, parent: UUID, index: Int)?)?
     private var dragCandidate: (source: UUID, target: UUID, parent: UUID, index: Int, selection: Set<UUID>)?
     private var dragCandidateFrame: CGRect?
+    private var dragPresentedFrames: [UUID: CGRect] = [:]
     private var springPositions: [UUID: (point: CGPoint, velocity: CGPoint)] = [:]
     private var springTargets: [UUID: CGPoint] = [:]
     private var springTimer: Timer?
@@ -644,9 +645,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
            nodes.contains(where: { $0.node.id == held.parent }),
            model.canMoveNode(source, to: held.parent, at: held.index) {
             let painted = dragCandidateFrame ?? target.frame
-            let displayed = screen(painted), canonical = screen(target.frame)
+            let displayed = screen(painted)
             let nearPainted = displayed.insetBy(dx: -36, dy: -36).contains(point)
-            let nearCanonical = canonical.insetBy(dx: -36, dy: -36).contains(point)
             var childOverlap = true
             if held.parent == held.target, let sourceFrame = nodes.first(where: { $0.node.id == source })?.frame {
                 let dragged = CGRect(x: (point.x - dragGrab.x - offset.x) / zoom,
@@ -656,18 +656,25 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 childOverlap = !overlap.isNull && overlap.width * overlap.height /
                     min(dragged.width * dragged.height, painted.width * painted.height) >= childOverlapThreshold
             }
-            if childOverlap, (nearPainted || nearCanonical),
-               (fresh == nil || fresh?.target.node.id == held.target || displayed.contains(point)) {
+            let sameTarget = fresh?.target.node.id == held.target
+            let changedPlacement = sameTarget && (fresh?.parent != held.parent || fresh?.index != held.index)
+            let otherPainted = fresh.flatMap { dragPresentedFrames[$0.target.node.id] }.map(screen)
+                ?? fresh.map { screen($0.target.frame) }
+            let otherVisible = fresh != nil && !sameTarget && otherPainted?.contains(point) == true
+            if childOverlap, nearPainted, !changedPlacement, !otherVisible,
+               (fresh == nil || sameTarget || displayed.contains(point)) {
                 return (target, held.parent, held.index)
             }
         }
         if let fresh {
+            let sameTarget = dragCandidate?.target == fresh.target.node.id
+            let painted = dragPresentedFrames[fresh.target.node.id] ?? fresh.target.frame
             dragCandidate = (source, fresh.target.node.id, fresh.parent, fresh.index, model.selectedIDs)
-            dragCandidateFrame = fresh.target.frame
+            if !sameTarget { dragCandidateFrame = painted }
         } else { clearDragCandidate() }
         return fresh
     }
-    private func repelNearby(_ nodes: [LaidOutNode], moving: Set<UUID>, childTarget: UUID?) -> [LaidOutNode] {
+    private func repelNearby(_ nodes: [LaidOutNode], moving: Set<UUID>, pinnedTarget: UUID?) -> [LaidOutNode] {
         guard !moving.isEmpty else { return nodes }
         var frames = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame) })
         let dragged = nodes.filter { moving.contains($0.node.id) }.map(\.frame)
@@ -701,7 +708,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         let movingMidY = dragged.reduce(CGRect.null) { $0.union($1) }.midY
         for ids in groups {
-            if let childTarget, ids.contains(childTarget) { continue } // Deliberate large-overlap child hover.
+            if let pinnedTarget, ids.contains(pinnedTarget) { continue } // The acquired visual drop target stays under the pointer.
             let box = ids.reduce(CGRect.null) { $0.union(frames[$1]!) }
             let below = box.midY >= movingMidY
             var dy: CGFloat = 0
@@ -769,11 +776,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return LaidOutNode(node: item.node,
                 frame: CGRect(origin: point, size: item.frame.size), parent: item.parent)
         }
-        let child = cached.drop.flatMap { $0.parent == $0.target.node.id ? $0.parent : nil }
-        cached.nodes = repelNearby(cached.nodes, moving: draggedIDs, childTarget: child)
+        cached.nodes = repelNearby(cached.nodes, moving: draggedIDs, pinnedTarget: cached.drop?.target.node.id)
         if let id = dragCandidate?.target {
             dragCandidateFrame = cached.nodes.first(where: { $0.node.id == id })?.frame
         }
+        dragPresentedFrames = Dictionary(uniqueKeysWithValues: cached.nodes.map { ($0.node.id, $0.frame) })
         previewCache = cached
         if springPositions.allSatisfy({ id, motion in motion.point == springTargets[id] }) { pauseSpring() }
         springTick = true; needsDisplay = true; springTick = false
@@ -811,13 +818,21 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
+        let pinnedID = drop?.target.node.id
+        if let id = pinnedID, let frame = dragCandidateFrame,
+           let index = nodes.firstIndex(where: { $0.node.id == id }) {
+            let item = nodes[index]
+            nodes[index] = LaidOutNode(node: item.node, frame: frame, parent: item.parent)
+            springPositions.removeValue(forKey: id)
+            springTargets.removeValue(forKey: id)
+        }
         if drop != nil, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             let present = Set(nodes.map { $0.node.id })
             springPositions = springPositions.filter { present.contains($0.key) && !draggedIDs.contains($0.key) }
             springTargets.removeAll()
             for index in nodes.indices {
                 let item = nodes[index], id = item.node.id
-                guard !draggedIDs.contains(id) else { continue }
+                guard !draggedIDs.contains(id), id != pinnedID else { continue }
                 let target = item.frame.origin
                 if springPositions[id] == nil, let origin = committed[id], origin != target {
                     springPositions[id] = (origin, .zero)
@@ -836,11 +851,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 springTimer = timer
             }
         } else { stopSpring() }
-        let child = drop.flatMap { $0.parent == $0.target.node.id ? $0.parent : nil }
-        nodes = repelNearby(nodes, moving: draggedIDs, childTarget: child)
+        nodes = repelNearby(nodes, moving: draggedIDs, pinnedTarget: pinnedID)
         if let id = dragCandidate?.target {
             dragCandidateFrame = nodes.first(where: { $0.node.id == id })?.frame
         }
+        dragPresentedFrames = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame) })
         previewCache = (nodes, drop)
         return (nodes, drop)
     }
@@ -1211,6 +1226,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private func changed(reveal: Bool = true) {
         clearDragCandidate()
+        dragPresentedFrames.removeAll()
         if let id = selectedRelationshipID, !model.relationships.contains(where: { $0.id == id }) {
             selectedRelationshipID = nil
         }
@@ -1751,7 +1767,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             handTool = false; marquee = nil; dragOrigin = nil
             window?.invalidateCursorRects(for: self); needsDisplay = true
         case 53 where dragSource != nil || marquee != nil || relationshipDrag != nil || selectedRelationshipID != nil:
-            clearDragCandidate(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
+            clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
             relationshipDrag = nil; selectedRelationshipID = nil; needsDisplay = true
         case 51, 117:
             guard commitEditing() else { return }
@@ -1809,6 +1825,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let wasPresented = !springPositions.isEmpty
         let hitNodes = wasPresented ? previewGeometry().nodes : visibleNodes()
         clearDragCandidate()
+        dragPresentedFrames.removeAll()
         stopSpring()
         dragSource = nil
         dragPoint = nil
@@ -1959,7 +1976,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        defer { clearDragCandidate(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
+        defer { clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
         if let drag = relationshipDrag,
            let edge = model.relationships.first(where: { $0.id == drag.id }) {
             let nodes = visibleNodes()
