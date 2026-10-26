@@ -588,32 +588,33 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         (Self.color(theme.canvasBackground ?? "#FFFFFFFF") ?? .white).setFill()
         NSRect(x: 0, y: 0, width: 392, height: 292).fill()
-        let root = NSBezierPath(roundedRect: NSRect(x: 24, y: 126, width: 108, height: 44),
+        let branchInk = Self.color(theme.branchTitleColor ?? "#252D2CFF") ?? .black
+        for index in 0..<6 {
+            let left = index < 3
+            let y = CGFloat(236 - (index % 3) * 91)
+            let stroke = Self.color(theme.branchColors[index % theme.branchColors.count]) ?? .systemTeal
+            stroke.setStroke()
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: left ? 142 : 250, y: 148))
+            line.curve(to: NSPoint(x: left ? 92 : 300, y: y),
+                       controlPoint1: NSPoint(x: left ? 113 : 279, y: 148),
+                       controlPoint2: NSPoint(x: left ? 116 : 276, y: y))
+            line.line(to: NSPoint(x: left ? 20 : 372, y: y))
+            line.lineWidth = 4
+            line.lineCapStyle = .round
+            line.stroke()
+            ("Idea" as NSString).draw(at: NSPoint(x: left ? 30 : 330, y: y + 8), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: branchInk
+            ])
+        }
+        let root = NSBezierPath(roundedRect: NSRect(x: 142, y: 126, width: 108, height: 44),
                                 xRadius: 8, yRadius: 8)
         (Self.color(theme.rootFill) ?? .white).setFill()
         root.fill()
         let rootInk = Self.color(theme.rootTitleColor ?? "#252D2CFF") ?? .black
-        ("Central" as NSString).draw(at: NSPoint(x: 51, y: 140), withAttributes: [
+        ("Central" as NSString).draw(at: NSPoint(x: 169, y: 140), withAttributes: [
             .font: NSFont.boldSystemFont(ofSize: 12), .foregroundColor: rootInk
         ])
-        let branchInk = Self.color(theme.branchTitleColor ?? "#252D2CFF") ?? .black
-        for index in 0..<6 {
-            let y = CGFloat(252 - index * 41)
-            let stroke = Self.color(theme.branchColors[index % theme.branchColors.count]) ?? .systemTeal
-            stroke.setStroke()
-            let line = NSBezierPath()
-            line.move(to: NSPoint(x: 132, y: 148))
-            line.curve(to: NSPoint(x: 293, y: y),
-                       controlPoint1: NSPoint(x: 210, y: 148),
-                       controlPoint2: NSPoint(x: 207, y: y))
-            line.line(to: NSPoint(x: 374, y: y))
-            line.lineWidth = 4
-            line.lineCapStyle = .round
-            line.stroke()
-            ("Idea" as NSString).draw(at: NSPoint(x: 329, y: y + 7), withAttributes: [
-                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: branchInk
-            ])
-        }
         NSGraphicsContext.current = previous
         bitmap.size = NSSize(width: 392, height: 292)
         let image = NSImage(size: bitmap.size)

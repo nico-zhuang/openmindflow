@@ -277,12 +277,13 @@ import AppKit
             let card = button.image!.representations.compactMap { $0 as? NSBitmapImageRep }.first!
             guard card.pixelsWide == 392 && card.pixelsHigh == 292,
                   matches(card.colorAt(x: 8, y: 8), hex: theme.canvasBackground!),
-                  matches(card.colorAt(x: 70, y: 147), hex: theme.rootFill),
+                  matches(card.colorAt(x: 196, y: 130), hex: theme.rootFill),
+                  !matches(card.colorAt(x: 70, y: 125), hex: theme.rootFill),
                   (0..<6).allSatisfy({ branch in
-                      matches(card.colorAt(x: 350, y: 39 + branch * 41),
+                      matches(card.colorAt(x: branch < 3 ? 50 : 350, y: 55 + (branch % 3) * 91),
                                hex: theme.branchColors[branch % theme.branchColors.count])
                   }) else {
-                fputs("Theme card must show real background, left root and six ordered branch colors: \(theme)\n", stderr)
+                fputs("Theme card must show centered root and three ordered palette branches on each side: \(theme)\n", stderr)
                 exit(1)
             }
             func borderPixel() -> NSColor {
