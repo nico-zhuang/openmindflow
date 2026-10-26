@@ -88,6 +88,7 @@ struct MapNode: Codable, Equatable {
     var note: String? = nil
     var rootShape: String? = nil
     var rootFillColor: String? = nil
+    var branchSide: String? = nil // Only first-level children may explicitly choose left or right.
 }
 
 struct MapSelectionClip: Codable {
@@ -162,7 +163,10 @@ final class MapModel {
               abs(anchor.x) <= 1_000_000, abs(anchor.y) <= 1_000_000,
               !clip.roots.isEmpty, let first = clip.roots.first?.location,
               (try? JSONEncoder().encode(clip).count).map({ $0 <= Self.maxSavedJSONBytes }) ?? false else { return false }
-        guard let oldIDs = try? checkOwnJSONNodes(clip.roots),
+        // Clipboard roots become new main nodes: their former first-level side has no meaning here.
+        var normalizedRoots = clip.roots
+        for index in normalizedRoots.indices { normalizedRoots[index].branchSide = nil }
+        guard let oldIDs = try? checkOwnJSONNodes(normalizedRoots),
               sanitizeRelationships(clip.relationships, nodeIDs: oldIDs).count == clip.relationships.count else { return false }
         let delta = SIMD2(Double(anchor.x) - first.x, Double(anchor.y) - first.y)
         var idMap: [UUID: UUID] = [:]
@@ -185,7 +189,7 @@ final class MapModel {
             return result
         }
         var copies: [MapNode] = []
-        for root in clip.roots {
+        for root in normalizedRoots {
             guard let next = clone(root) else { return false }
             copies.append(next)
         }
@@ -298,6 +302,24 @@ final class MapModel {
         return changed
     }
 
+    @discardableResult
+    func setRootBranchSide(_ side: String, for id: UUID) -> Bool {
+        guard side == "left" || side == "right",
+              let path = Self.path(to: id, in: roots), path.count == 2,
+              Self.node(at: path[...], in: roots).branchSide != side else { return false }
+        var updated = roots
+        Self.edit(&updated, at: path[...]) { nodes, index in
+            nodes[index].branchSide = side
+            Self.clearLocations(&nodes[index])
+        }
+        return commit(updated)
+    }
+
+    private static func clearLocations(_ node: inout MapNode) {
+        node.location = nil
+        for index in node.children.indices { clearLocations(&node.children[index]) }
+    }
+
     func addChild() {
         if roots.isEmpty {
             let root = MapNode(id: UUID(), title: "", children: [], folded: false)
@@ -359,7 +381,9 @@ final class MapModel {
     func addSibling(before: Bool = false) {
         if roots.isEmpty { addChild(); return }
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
-        let sibling = MapNode(id: UUID(), title: "", children: [], folded: false)
+        let inheritedSide = path.count == 2 ? Self.node(at: path[...], in: roots).branchSide : nil
+        let sibling = MapNode(id: UUID(), title: "", children: [], folded: false,
+                              branchSide: inheritedSide)
         var updated = roots
         Self.edit(&updated, at: path[...]) { nodes, index in
             nodes.insert(sibling, at: index + (before ? 0 : 1))
@@ -371,8 +395,11 @@ final class MapModel {
 
     func addParent() {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
-        let previous = Self.node(at: path[...], in: roots)
-        let parent = MapNode(id: UUID(), title: "", children: [previous], folded: false)
+        var previous = Self.node(at: path[...], in: roots)
+        let inheritedSide = path.count == 2 ? previous.branchSide : nil
+        if path.count == 2 { previous.branchSide = nil }
+        let parent = MapNode(id: UUID(), title: "", children: [previous], folded: false,
+                             branchSide: inheritedSide)
         var updated = roots
         Self.edit(&updated, at: path[...]) { nodes, index in nodes[index] = parent }
         guard commit(updated) else { return }
@@ -421,6 +448,7 @@ final class MapModel {
         let sameParent = sourcePath.dropLast().elementsEqual(targetPath)
         let destinationIndex = index - (sameParent && sourcePath.last! < index ? 1 : 0)
         var moving = Self.node(at: sourcePath[...], in: roots)
+        if targetPath.count != 1 { moving.branchSide = nil }
         if let location {
             if let old = moving.location {
                 let dx = Double(location.x) - old.x, dy = Double(location.y) - old.y
@@ -461,6 +489,9 @@ final class MapModel {
               locations.map({ Set($0.keys) == Set(paths.map { Self.node(at: $0[...], in: roots).id }) }) ?? true
         else { return false }
         var moving = paths.map { Self.node(at: $0[...], in: roots) }
+        if targetPath.count != 1 {
+            for position in moving.indices { moving[position].branchSide = nil }
+        }
         if let locations {
             for position in moving.indices {
                 let point = locations[moving[position].id]!
@@ -552,7 +583,8 @@ final class MapModel {
     @discardableResult
     func detachSelected() -> Bool {
         guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
-        let moving = Self.node(at: path[...], in: roots)
+        var moving = Self.node(at: path[...], in: roots)
+        moving.branchSide = nil
         var updated = roots
         Self.edit(&updated, at: path[...]) { nodes, index in nodes.remove(at: index) }
         updated.insert(moving, at: path[0] + 1)

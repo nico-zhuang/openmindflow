@@ -72,9 +72,12 @@ private func checkOwnJSONPath(_ url: URL) throws {
 
 func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
     var ids = Set<UUID>()
-    func visit(_ nodes: [MapNode], root: Bool) throws {
+    func visit(_ nodes: [MapNode], depth: Int) throws {
         for node in nodes {
             guard ids.insert(node.id).inserted else { throw OwnJSONError.duplicateID }
+            if let side = node.branchSide,
+               (depth != 1 || (side != "left" && side != "right")) { throw OwnJSONError.invalidStyle }
+            let root = depth == 0
             if let note = node.note, note.utf8.count > 65_536 { throw OwnJSONError.invalidNote }
             if let shape = node.rootShape, (!root || !["rectangle", "rounded"].contains(shape)) {
                 throw OwnJSONError.invalidAppearance
@@ -116,10 +119,10 @@ func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
                     throw OwnJSONError.invalidLocation
                 }
             }
-            try visit(node.children, root: false)
+            try visit(node.children, depth: depth + 1)
         }
     }
-    try visit(roots, root: true)
+    try visit(roots, depth: 0)
     return ids
 }
 
