@@ -78,7 +78,23 @@ import Darwin
               inspector.noteTextView.string == "Visible synthetic note" else {
             finish("FAIL theme Undo or persisted Notes", code: 6)
         }
+        inspector.tabs.selectedSegment = 0
+        guard app.sendAction(inspector.tabs.action!, to: inspector.tabs.target, from: inspector.tabs),
+              !inspector.styleScroll.isHidden, inspector.colorPopup.isEnabled,
+              inspector.colorPopup.item(withTitle: "More…") != nil else {
+            finish("FAIL visible Style color selector", code: 7)
+        }
+        let rootsBeforePanel = canvas.model.roots
+        inspector.colorPopup.selectItem(withTitle: "More…")
+        let openedPanel = app.sendAction(inspector.colorPopup.action!, to: inspector.colorPopup.target,
+                                         from: inspector.colorPopup)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let panel = NSColorPanel.shared
+        let panelPassed = openedPanel && panel.isVisible && canvas.model.roots == rootsBeforePanel &&
+            canvas.model.theme == nil && canvas.model.roots[0].note == "Visible synthetic note"
+        panel.orderOut(nil)
+        guard panelPassed else { finish("FAIL More native color panel or unchanged model", code: 8) }
         window.orderOut(nil)
-        finish("PASS visible=true key=true frontmost=true tabs=3 noteContext=true noteCommit=true themeUndo=true sidebar260to320=true")
+        finish("PASS visible=true key=true frontmost=true tabs=3 noteContext=true noteCommit=true themeUndo=true sidebar260to320=true moreNativePanel=true")
     }
 }

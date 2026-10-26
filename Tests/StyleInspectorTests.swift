@@ -312,12 +312,12 @@ import AppKit
               importedModel.roots == [unavailable] else {
             fputs("Unavailable imported font and custom color must remain intact on refresh\n", stderr); exit(1)
         }
-        inspector.colorPopup.selectItem(withTitle: "More…")
-        inspector.changeColorSelection(inspector.colorPopup)
-        guard NSColorPanel.shared.isVisible, model.roots == [root], changes == 9 else {
-            fputs("Only explicit More must open the native color panel without changing model\n", stderr); exit(1)
+        guard inspector.colorPopup.item(withTitle: "More…")?.representedObject as? String == "More…",
+              inspector.colorPopup.action == #selector(StyleInspector.changeColorSelection(_:)),
+              inspector.colorPopup.target === inspector,
+              model.roots == [root], changes == 9 else {
+            fputs("More must remain wired without opening a panel or changing the model\n", stderr); exit(1)
         }
-        NSColorPanel.shared.orderOut(nil)
         defaults.setVolatileDomain(["language": "zh-Hans"], forName: UserDefaults.argumentDomain)
         let unchangedRoots = model.roots, beforeLanguageChange = changes
         inspector.localize()
@@ -346,7 +346,7 @@ import AppKit
                inspector.backgroundPopup.itemTitles == ["跟随系统", "浅色", "深色", "更多…"],
               inspector.strokeWidthPopup.item(withTitle: "粗")?.representedObject as? String == "Bold",
               inspector.strokeStylePopup.item(withTitle: "虚线")?.representedObject as? String == "Dashed",
-              !NSColorPanel.shared.isVisible, model.roots == unchangedRoots,
+              !NSApp.windows.contains(where: { $0 is NSColorPanel && $0.isVisible }), model.roots == unchangedRoots,
               changes == beforeLanguageChange else {
             fputs("Chinese inspector must relabel visible rows, menus, placeholders, and AX without changing model or opening panels\n", stderr)
             exit(1)
