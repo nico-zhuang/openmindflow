@@ -786,8 +786,13 @@ enum CanvasCommandTests {
                 fputs("Attached preview must initially ease siblings without lagging dragged subtree or mutating model\n", stderr); exit(1)
             }
             let layoutsBeforeTick = mapLayoutInvocations
-            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
-            let intermediate = springCanvas.frameForAccessibility(leftChild.id)!
+            let tickDeadline = ProcessInfo.processInfo.systemUptime + 0.5
+            var intermediate = initial
+            while ProcessInfo.processInfo.systemUptime < tickDeadline &&
+                  abs(intermediate.midY - initial.midY) < 0.1 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                intermediate = springCanvas.frameForAccessibility(leftChild.id)!
+            }
             if abs(intermediate.midY - targetY) >= abs(initial.midY - targetY) ||
                abs(intermediate.midY - targetY) < 0.1 || mapLayoutInvocations != layoutsBeforeTick {
                 fputs("Spring tick must advance AX/painted sibling toward target without recomputing layout: initial=\(initial.midY), next=\(intermediate.midY), target=\(targetY), layouts=\(mapLayoutInvocations - layoutsBeforeTick)\n", stderr); exit(1)
