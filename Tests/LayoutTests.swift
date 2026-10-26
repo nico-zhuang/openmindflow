@@ -63,6 +63,11 @@ enum LayoutTests {
         let roots = [root, secondRoot]
         let first = mapLayout(roots)
         assert(first.map(\.frame) == mapLayout(roots).map(\.frame), "Layout must be deterministic")
+        assert(first.map(\.frame) == [CGRect(x: 0, y: 34.5, width: 170, height: 55),
+                                     CGRect(x: 230, y: 0, width: 170, height: 50),
+                                     CGRect(x: 230, y: 74, width: 170, height: 50),
+                                     CGRect(x: 0, y: 148, width: 170, height: 55)],
+               "Default all-right frames must retain exact legacy coordinates: \(first.map(\.frame))")
         assert(first.map(\.node.id) == [root.id, root.children[0].id, root.children[1].id, secondRoot.id])
         assert(first[1].frame.maxY < first[2].frame.minY, "Children must not overlap")
         assert(first[2].frame.minY - first[1].frame.maxY == 24,

@@ -77,6 +77,18 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         let original = mapLayout(roots)
         let originalFrames = Dictionary(uniqueKeysWithValues: original.map { ($0.node.id, $0.frame) })
         var placed: [UUID: CGRect] = [:]
+        // An explicit side switch clears model locations, but nativePresentation is immutable.
+        // Do not let its old centers re-pin any member of that switched subtree.
+        var switchedSides: [UUID: Bool] = [:]
+        func recordSwitched(_ node: MapNode, left: Bool) {
+            switchedSides[node.id] = left
+            for child in node.children { recordSwitched(child, left: left) }
+        }
+        for root in roots {
+            for child in root.children where child.branchSide != nil {
+                recordSwitched(child, left: child.branchSide == "left")
+            }
+        }
         return original.map { item in
             let node = item.node
             let saved = overrides[node.id]
@@ -88,14 +100,106 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             if let parent = item.parent, let actual = placed[parent], let baseline = originalFrames[parent] {
                 parentShift = CGSize(width: actual.midX - baseline.midX, height: actual.midY - baseline.midY)
             } else { parentShift = .zero }
-            let center = node.location.map { CGPoint(x: $0.x, y: $0.y) } ?? saved?.location
-                ?? CGPoint(x: item.frame.midX + parentShift.width,
-                                                      y: item.frame.midY + parentShift.height)
+            let inheritedCenter = CGPoint(x: item.frame.midX + parentShift.width,
+                                          y: item.frame.midY + parentShift.height)
+            let automaticX: CGFloat
+            if let left = switchedSides[node.id], let parent = item.parent, let actual = placed[parent] {
+                automaticX = left ? actual.minX - 60 - width / 2 : actual.maxX + 60 + width / 2
+            } else {
+                automaticX = inheritedCenter.x
+            }
+            let center = node.location.map { CGPoint(x: $0.x, y: $0.y) }
+                ?? (switchedSides[node.id] == nil ? saved?.location : nil)
+                ?? CGPoint(x: automaticX, y: inheritedCenter.y)
             let frame = CGRect(x: center.x - width / 2, y: center.y - height / 2,
                                width: width, height: height)
             placed[node.id] = frame
             return LaidOutNode(node: node, frame: frame, parent: item.parent)
         }
+    }
+    // Keep the right-only algorithm byte-for-byte stable for existing maps.
+    if roots.contains(where: { !$0.folded && $0.children.contains(where: { $0.branchSide == "left" }) }) {
+        let gap: CGFloat = 24
+        var sizes: [UUID: CGSize] = [:]
+        var heights: [UUID: CGFloat] = [:]
+        var leftWidths: [CGFloat] = [0]
+        var rightWidths: [CGFloat] = []
+        func groupHeight(_ children: [MapNode]) -> CGFloat {
+            children.reduce(CGFloat(0)) { $0 + heights[$1.id]! }
+                + CGFloat(max(0, children.count - 1)) * gap
+        }
+        @discardableResult
+        func measure(_ node: MapNode, depth: Int, left: Bool) -> CGFloat {
+            let size = mapNodeSize(node, font: mapFont(isRoot: depth == 0, node: node), isRoot: depth == 0)
+            sizes[node.id] = size
+            if left {
+                while leftWidths.count <= depth { leftWidths.append(0) }
+                leftWidths[depth] = max(leftWidths[depth], size.width)
+            } else {
+                while rightWidths.count <= depth { rightWidths.append(0) }
+                rightWidths[depth] = max(rightWidths[depth], size.width)
+            }
+            let children = node.folded ? [] : node.children
+            for child in children {
+                measure(child, depth: depth + 1, left: depth == 0 ? child.branchSide == "left" : left)
+            }
+            let childHeight: CGFloat
+            if depth == 0 {
+                childHeight = max(groupHeight(children.filter { $0.branchSide == "left" }),
+                                  groupHeight(children.filter { $0.branchSide != "left" }))
+            } else {
+                childHeight = groupHeight(children)
+            }
+            let height = max(size.height, childHeight)
+            heights[node.id] = height
+            return height
+        }
+        let rootHeights = roots.map { measure($0, depth: 0, left: false) }
+        var rightX: [CGFloat] = []
+        var nextX: CGFloat = 0
+        for width in rightWidths {
+            rightX.append(nextX)
+            nextX += width + 60
+        }
+        var leftX: [CGFloat] = [0]
+        var edge: CGFloat = 0
+        for width in leftWidths.dropFirst() {
+            edge -= width + 60
+            leftX.append(edge)
+        }
+        var result: [LaidOutNode] = []
+        func place(_ node: MapNode, depth: Int, left: Bool, parent: UUID?, top: CGFloat) {
+            let size = sizes[node.id]!, height = heights[node.id]!
+            let frame = CGRect(x: left ? leftX[depth] : rightX[depth],
+                               y: top + (height - size.height) / 2, width: size.width, height: size.height)
+            result.append(LaidOutNode(node: node, frame: frame, parent: parent))
+            let children = node.folded ? [] : node.children
+            let leftHeight = depth == 0 ? groupHeight(children.filter { $0.branchSide == "left" }) : 0
+            let rightHeight = depth == 0 ? groupHeight(children.filter { $0.branchSide != "left" }) : 0
+            var leftTop = top + (height - leftHeight) / 2
+            var rightTop = top + (height - (depth == 0 ? rightHeight : groupHeight(children))) / 2
+            if depth == 0, children.count == 1, let child = children.first,
+               child.branchSide != "left" {
+                rightTop = frame.midY - (heights[child.id]! + sizes[child.id]!.height) / 2 + 7
+            }
+            for child in children {
+                let childLeft = depth == 0 ? child.branchSide == "left" : left
+                let childTop = depth == 0 && childLeft ? leftTop : rightTop
+                place(child, depth: depth + 1, left: childLeft, parent: node.id, top: childTop)
+                if depth == 0 && childLeft { leftTop += heights[child.id]! + gap }
+                else { rightTop += heights[child.id]! + gap }
+            }
+        }
+        var top: CGFloat = 0
+        for (root, height) in zip(roots, rootHeights) {
+            if !root.folded, root.children.count == 1, let child = root.children.first,
+               child.branchSide != "left" {
+                top += max(0, (heights[child.id]! + sizes[child.id]!.height - height) / 2 - 7)
+            }
+            place(root, depth: 0, left: false, parent: nil, top: top)
+            top += height + gap
+        }
+        return result
     }
     let gap: CGFloat = 24
     var sizes: [UUID: CGSize] = [:]

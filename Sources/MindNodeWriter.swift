@@ -101,7 +101,7 @@ enum MindNodeWriter {
             guard depth <= 200, count < 10_000, seen.insert(node.id).inserted,
                   node.image == nil, node.imageWidth == nil,
                    node.video == nil, node.videoWidth == nil,
-                  node.strokeStyle == nil,
+                  node.strokeStyle == nil, node.branchSide != "left",
                    node.note.map({ $0.isEmpty }) ?? true,
                    node.rootShape == nil, node.rootFillColor == nil else { throw WriterError.unsupported }
             count += 1

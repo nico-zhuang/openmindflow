@@ -42,6 +42,15 @@ enum MindNodeWriterTests {
         child.branchStrokeWidth = 4
         let root = MapNode(id: UUID(), title: "Synthetic root", children: [child], folded: false)
         let roots = [root]
+        var leftRoot = root
+        leftRoot.children[0].branchSide = "left"
+        let leftOutput = scratch.appendingPathComponent("left-rejected.mindnode")
+        do { try MindNodeWriter.write([leftRoot], to: leftOutput, relationships: [])
+             fatalError("Silently exported a left branch without v9 direction support") }
+        catch MindNodeWriter.WriterError.unsupported { }
+        assert(!fm.fileExists(atPath: leftOutput.path), "Left rejection must not create a destination")
+        let entriesAfterLeft = try fm.contentsOfDirectory(atPath: scratch.path)
+        assert(entriesAfterLeft.isEmpty, "Left rejection must happen before staging a .mindnode package")
         let output = scratch.appendingPathComponent("created.mindnode", isDirectory: true)
         try MindNodeWriter.write(roots, to: output, relationships: [])
         let detailed = try MindNodeImporter.loadDetailed(output)
