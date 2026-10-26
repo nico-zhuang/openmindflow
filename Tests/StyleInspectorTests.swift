@@ -196,11 +196,20 @@ import AppKit
                "Card/image must fill the 260pt inspector (\(narrowCard.frame.width)/\(narrowCard.image!.size.width))")
         assert(narrowCard.image!.size.width * narrowCard.image!.size.height >=
                0.80 * narrowCard.bounds.width * narrowCard.bounds.height)
+        assert(narrowCard.bounds.height >= 175,
+               "260pt sidebar must provide a physically tall card")
+        assert(narrowCard.image!.size.height >= 145,
+               "Visible preview must be at least 145pt high at 260pt sidebar width")
+        let narrowAspect = narrowCard.image!.size.width / narrowCard.image!.size.height
+        assert((1.15...1.6).contains(narrowAspect), "Preview image must have reference-like aspect ratio")
         let narrowWidth = narrowCard.image!.size.width
+        let narrowHeight = narrowCard.image!.size.height
         inspectorWidth.constant = 320
         offscreenWindow.setContentSize(NSSize(width: 320, height: 250))
         inspector.layoutSubtreeIfNeeded()
-        assert(narrowCard.image!.size.width > narrowWidth + 45,
+        assert(narrowCard.image!.size.width > narrowWidth + 45 &&
+               narrowCard.image!.size.height > narrowHeight + 35 &&
+               narrowCard.bounds.height > 210,
                "Image must grow with inspector content width, not merely stretch the card")
         inspectorWidth.constant = 260
         offscreenWindow.setContentSize(NSSize(width: 260, height: 250))
@@ -266,12 +275,14 @@ import AppKit
         for (index, theme) in featured.enumerated() {
             let button = inspector.themeButtons[index]
             let card = button.image!.representations.compactMap { $0 as? NSBitmapImageRep }.first!
-            guard matches(card.colorAt(x: 8, y: 8), hex: theme.canvasBackground!),
-                  matches(card.colorAt(x: 190, y: 78), hex: theme.rootFill),
-                  theme.branchColors.prefix(3).allSatisfy({ hex in
-                      (0..<card.pixelsHigh).contains { y in matches(card.colorAt(x: 320, y: y), hex: hex) }
+            guard card.pixelsWide == 392 && card.pixelsHigh == 292,
+                  matches(card.colorAt(x: 8, y: 8), hex: theme.canvasBackground!),
+                  matches(card.colorAt(x: 70, y: 147), hex: theme.rootFill),
+                  (0..<6).allSatisfy({ branch in
+                      matches(card.colorAt(x: 350, y: 39 + branch * 41),
+                               hex: theme.branchColors[branch % theme.branchColors.count])
                   }) else {
-                fputs("Theme card must show real background, root and three branches: \(theme)\n", stderr)
+                fputs("Theme card must show real background, left root and six ordered branch colors: \(theme)\n", stderr)
                 exit(1)
             }
             func borderPixel() -> NSColor {
