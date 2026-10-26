@@ -80,6 +80,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             stack.bottomAnchor.constraint(equalTo: styleDocument.bottomAnchor, constant: -12)
         ])
         notesScroll.documentView = noteTextView
+        notesScroll.contentInsets.bottom = 24
         noteTextView.isRichText = false
         noteTextView.isAutomaticQuoteSubstitutionEnabled = false
         noteTextView.isAutomaticTextReplacementEnabled = false

@@ -1879,6 +1879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             canvas.embeddedTheme = nil
             importedMindNode = nil
             outline.reloadMap()
+            inspector.refresh()
             fileURL = url
             savedRoots = document.roots
             savedRelationships = document.relationships
@@ -1917,6 +1918,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             canvas.nativePresentation = imported.presentation
             importedMindNode = imported
             outline.reloadMap()
+            inspector.refresh()
             fileURL = nil // Never save into the source package.
             savedRoots = imported.roots
             savedRelationships = []

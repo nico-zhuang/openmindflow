@@ -36,6 +36,10 @@ import AppKit
         })
         assert(inspector.backgroundPopup.itemTitles == ["Follow System", "Light", "Dark", "More…"])
         assert(inspector.styleScroll.hasVerticalScroller && inspector.notesScroll.hasVerticalScroller)
+        if inspector.notesScroll.contentInsets.bottom < inspector.noteStatus.intrinsicContentSize.height + 5 {
+            fputs("Notes editor must reserve bottom space above its validation status\n", stderr)
+            exit(1)
+        }
         assert(inspector.themeButtons.count == 3)
         inspector.selectNotes(for: rootID)
         inspector.noteTextView.string = "One note"
@@ -126,6 +130,11 @@ import AppKit
         assert(reopened[0].note == "Original root + newest keystroke" && model.undo())
         inspector.refresh()
         assert(inspector.noteTextView.string == "Original root")
+        var reloadedRoot = root
+        reloadedRoot.note = "Externally newer note"
+        noteCanvas.model = MapModel(roots: [reloadedRoot], selected: rootID)
+        inspector.refresh() // File Open calls this after its appearance metadata is installed.
+        assert(inspector.noteTextView.string == "Externally newer note")
         }
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
