@@ -144,6 +144,61 @@ import AppKit
                 modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                 eventNumber: 1, clickCount: 1, pressure: 1)!
         }
+        // Folded descendants are absent from Layout.visibleNodes and must stay unmaterialized.
+        for side in ["left", "right"] {
+            for delta in [-40.0, 40.0] {
+                let hidden = MapNode(id: UUID(), title: "hidden", children: [], folded: false)
+                let branch = MapNode(id: UUID(), title: "folded", children: [hidden], folded: true)
+                let root = MapNode(id: UUID(), title: "root", children: [branch], folded: false)
+                let model = MapModel(roots: [root], selected: branch.id)
+                let canvas = MapCanvas(model: model)
+                canvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 750)
+                let branchX: CGFloat = side == "left" ? 320 : 500
+                let rootX: CGFloat = side == "left" ? 650 : 150
+                func presentation(_ x: CGFloat) -> MindNodePresentation {
+                    MindNodePresentation(location: CGPoint(x: x, y: 320), maxWidth: nil,
+                        allowToShrinkWidth: true, font: nil, styleChangedByUser: nil, fillColor: nil)
+                }
+                canvas.nativePresentation = [root.id: presentation(rootX), branch.id: presentation(branchX)]
+                var changes = 0
+                canvas.onChange = { changes += 1 }
+                func box() -> CGRect { canvas.frameForAccessibility(branch.id)! }
+                let before = box()
+                let edge = side == "left" ? before.minX : before.maxX
+                let handle = CGPoint(x: edge + (side == "left" ? 6 : -6), y: before.minY + 5)
+                let end = CGPoint(x: handle.x + CGFloat(delta) * (side == "left" ? -1 : 1), y: handle.y)
+                canvas.mouseDown(with: send(canvas, .leftMouseDown, handle))
+                canvas.mouseDragged(with: send(canvas, .leftMouseDragged, end))
+                let preview = box()
+                let fixedBefore = side == "left" ? before.maxX : before.minX
+                let fixedPreview = side == "left" ? preview.maxX : preview.minX
+                guard near(preview.width, before.width + delta), near(fixedPreview, fixedBefore),
+                      model.roots == [root] else {
+                    fail("folded \(side) \(delta) preview anchor or width: \(before) -> \(preview)")
+                }
+                canvas.mouseUp(with: send(canvas, .leftMouseUp, end))
+                let after = box()
+                let fixedAfter = side == "left" ? after.maxX : after.minX
+                guard near(after.width, preview.width), near(fixedAfter, fixedBefore),
+                      model.roots[0].children[0].location != nil,
+                      model.roots[0].children[0].children[0].location == nil,
+                      changes == 1, model.undo(), model.roots == [root], !model.undo() else {
+                    fail("folded \(side) \(delta) commit/undo differs from preview: \(preview) -> \(after), changes=\(changes)")
+                }
+            }
+        }
+        // Direct callers can supply only the visible selected center, not hidden descendants.
+        let hidden = MapNode(id: UUID(), title: "hidden", children: [], folded: false)
+        let folded = MapNode(id: UUID(), title: "folded", children: [hidden], folded: true)
+        let foldedRoot = MapNode(id: UUID(), title: "root", children: [folded], folded: false)
+        let foldedModel = MapModel(roots: [foldedRoot], selected: folded.id)
+        guard foldedModel.resizeSelected(by: 40, visibleWidths: [folded.id: 170],
+                  visibleCenters: [folded.id: CGPoint(x: 320, y: 320)], renderedLeft: [folded.id]),
+              foldedModel.roots[0].children[0].location == SIMD2(300, 320),
+              foldedModel.roots[0].children[0].children[0].location == nil,
+              foldedModel.undo(), foldedModel.roots == [foldedRoot], !foldedModel.undo() else {
+            fail("direct folded resize must accept missing hidden center without materializing it")
+        }
         for side in ["left", "right"] {
             for delta in [-40.0, 40.0] {
                 let grandchild = MapNode(id: UUID(), title: "grandchild", children: [], folded: false)
@@ -193,6 +248,20 @@ import AppKit
                       changes == 1, model.undo(), model.roots == [root], !model.undo() else {
                     fail("\(side) \(delta) commit differs from preview or mutates source/history: \(preview) -> \(after), descendant \(grandPreview) -> \(grandAfter)")
                 }
+            }
+        }
+        for located in [false, true] {
+            let leaf = MapNode(id: UUID(), title: "boundary leaf", children: [], folded: false,
+                               location: located ? SIMD2(999_990, 320) : nil)
+            let branch = MapNode(id: UUID(), title: "boundary branch", children: [leaf], folded: false)
+            let root = MapNode(id: UUID(), title: "root", children: [branch], folded: false)
+            let model = MapModel(roots: [root], selected: branch.id)
+            let centers = [branch.id: CGPoint(x: 320, y: 320),
+                           leaf.id: CGPoint(x: 999_990, y: 320)]
+            guard !model.resizeSelected(by: 40, visibleWidths: [branch.id: 170],
+                                        visibleCenters: centers),
+                  model.roots == [root], !model.undo() else {
+                fail("displaced \(located ? "located" : "supplied") boundary must reject atomically")
             }
         }
         let invalidLeaf = MapNode(id: UUID(), title: "native leaf", children: [], folded: false)

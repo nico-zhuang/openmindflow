@@ -673,9 +673,8 @@ final class MapModel {
             if let point = node.location {
                 guard point.x.isFinite && point.y.isFinite,
                       abs(point.x + displacement) <= 1_000_000 else { return false }
-            } else if displacement != 0, !visibleCenters.isEmpty {
-                guard let center = visibleCenters[node.id],
-                      abs(center.x + displacement) <= 1_000_000 else { return false }
+            } else if displacement != 0, let center = visibleCenters[node.id] {
+                guard abs(center.x + displacement) <= 1_000_000 else { return false }
             }
             return node.children.allSatisfy { safe($0, ancestor: ancestor + own) }
         }
