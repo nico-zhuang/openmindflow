@@ -137,7 +137,7 @@ import AppKit
                                      control2: SIMD2(-60, 160), startArrow: true, endArrow: true)
         assert(distant.setRelationship(curved))
         let fitted = wideCanvas.fitMapInView()
-        let worldWidth = mapNodeSize(a, font: mapFont(isRoot: true, node: a)).width
+        let worldWidth = mapNodeSize(a, font: mapFont(isRoot: true, node: a), isRoot: true).width
         let fittedFirst = wideCanvas.frameForAccessibility(a.id)!
         let factor = fittedFirst.width / worldWidth
         let wideGeometry = relationshipGeometry(curved, from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
