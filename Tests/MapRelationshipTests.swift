@@ -48,7 +48,30 @@ enum MapRelationshipTests {
                aimed.start.y == upper.minY && aimed.end.y == horizontal.maxY,
                "Dragging either Bézier control past a node corner slides its arrow anchor onto the facing edge")
         let decoded = try JSONDecoder().decode(MapRelationship.self, from: JSONEncoder().encode(edge))
-        assert(decoded == edge)
+        assert(decoded == edge && decoded.color == nil, "Older colorless relationship JSON must still decode")
+        let model = MapModel(roots: [MapNode(id: left, title: "left", children: [], folded: false),
+                                     MapNode(id: right, title: "right", children: [], folded: false)], selected: left)
+        var colored = edge
+        colored.color = "#11AA33CC"
+        assert(model.setRelationship(colored))
+        let document = OwnMapDocument(roots: model.roots, relationships: model.relationships)
+        let reopened = try JSONDecoder().decode(OwnMapDocument.self, from: JSONEncoder().encode(document))
+        assert(reopened.relationships == [colored], "Color must survive own document JSON roundtrip")
+        assert(model.undo() && model.relationships.isEmpty && !model.undo(), "Color creation must undo in one step")
+        for bad in ["#123", "#GG0000FF", "12345678", "#123456789"] {
+            colored.color = bad
+            assert(!validRelationship(colored, nodeIDs: ids) && !model.setRelationship(colored),
+                   "Reject invalid relationship color in shared model validity")
+            let badDocument = OwnMapDocument(roots: model.roots, relationships: [colored])
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("invalid-edge-\(UUID()).mindmap.json")
+            do { try writeOwnDocument(badDocument, to: url); assertionFailure("Invalid color was saved") }
+            catch OwnJSONError.invalidRelationship { } catch { assertionFailure("Wrong invalid color error: \(error)") }
+        }
+        colored.color = "#3478F6FF"
+        assert(model.setRelationship(colored))
+        colored.color = "#14B8A6FF"
+        assert(model.setRelationship(colored) && model.undo() && model.relationships[0].color == "#3478F6FF" &&
+               model.undo() && model.relationships.isEmpty, "Changing relationship color must undo atomically")
         var manuallyAimed = edge
         manuallyAimed.control1Aim = SIMD2(-250, 20)
         manuallyAimed.control2Aim = SIMD2(300, -80)

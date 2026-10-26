@@ -29,6 +29,43 @@ import AppKit
         defaults.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
         let inspector = StyleInspector(canvas: canvas, defaults: defaults)
         inspector.frame = CGRect(x: 0, y: 0, width: 280, height: 550)
+        let otherID = UUID()
+        var other = MapNode(id: otherID, title: "Other", children: [], folded: false)
+        other.location = SIMD2(550, 150)
+        var relationRoot = root
+        relationRoot.location = SIMD2(130, 150)
+        let relationModel = MapModel(roots: [relationRoot, other], selected: rootID)
+        let relationCanvas = MapCanvas(model: relationModel)
+        relationCanvas.frame = CGRect(x: 0, y: 0, width: 900, height: 500)
+        let relationInspector = StyleInspector(canvas: relationCanvas, defaults: defaults)
+        var relationSelections = 0
+        relationCanvas.onSelectionChange = { relationSelections += 1; relationInspector.refresh() }
+        assert(relationModel.toggleSelection(otherID))
+        relationCanvas.createRelationship(nil)
+        let relationID = relationModel.relationships[0].id
+        assert(relationCanvas.selectedRelationshipID == relationID && relationInspector.colorPopup.isEnabled &&
+               relationInspector.colorPopup.titleOfSelectedItem == "Default" &&
+               !relationInspector.familyPopup.isEnabled && !relationInspector.strokeWidthPopup.isEnabled &&
+               !relationInspector.rootFillPopup.isEnabled &&
+               !relationInspector.tabs.isEnabled(forSegment: 1) && !relationInspector.selectNotes(for: rootID))
+        let windowsBeforeRelation = NSApp.windows.count
+        relationInspector.colorPopup.selectItem(withTitle: "Blue")
+        relationInspector.changeColorSelection(relationInspector.colorPopup)
+        assert(NSApp.windows.count == windowsBeforeRelation && relationModel.relationships[0].color == "#3478F6FF" &&
+               relationModel.roots[0].branchStrokeColor == "#FF0000FF" &&
+               relationInspector.colorPopup.titleOfSelectedItem == "Blue")
+        assert(relationModel.undo() && relationModel.relationships[0].color == nil &&
+               relationModel.roots[0].branchStrokeColor == "#FF0000FF")
+        relationInspector.refresh()
+        assert(relationCanvas.selectNode(rootID) && relationCanvas.selectedRelationshipID == nil &&
+               relationInspector.tabs.isEnabled(forSegment: 1) && relationInspector.colorPopup.titleOfSelectedItem == "Custom")
+        relationInspector.colorPopup.selectItem(withTitle: "Teal")
+        relationInspector.changeColorSelection(relationInspector.colorPopup)
+        assert(relationModel.roots[0].branchStrokeColor == "#14B8A6FF" && relationModel.relationships[0].color == nil)
+        let beforeReplace = relationSelections
+        relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
+        assert(relationSelections == beforeReplace, "Model replacement must not refresh inspector before appearance metadata")
+        relationInspector.refresh() // AppDelegate performs this after installing import metadata.
         do {
         let model = MapModel(roots: [root], selected: rootID)
         let noteCanvas = MapCanvas(model: model)

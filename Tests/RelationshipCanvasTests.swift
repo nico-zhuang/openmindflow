@@ -47,6 +47,13 @@ import AppKit
         assert(canvas.selectedRelationshipID == id && model.selectedIDs == [a.id, b.id],
                "Selecting curve cannot also begin marquee or select a node")
         let menu = canvas.menu(for: event(.rightMouseDown, middle))!
+        guard let colors = menu.item(withTitle: label("Color"))?.submenu,
+              ["Teal", "Blue", "Coral", "Gold", "Gray", "More…"].allSatisfy({ colors.item(withTitle: label($0)) != nil }),
+              let blue = colors.item(withTitle: label("Blue")),
+              let more = colors.item(withTitle: label("More…")), more.target === canvas,
+              more.action != nil, NSApp.windows.isEmpty else {
+            fputs("RED: Relationship color submenu must contain five presets and More\n", stderr); exit(1)
+        }
         guard let style = menu.item(withTitle: label("Line Style"))?.submenu,
               let dotted = style.item(withTitle: label("Dotted")),
               let startArrow = menu.item(withTitle: label("Start Arrow")),
@@ -54,6 +61,9 @@ import AppKit
               let remove = menu.item(withTitle: label("Delete Relationship")) else {
             fputs("RED: Curve right-click must expose style, both arrows and deletion\n", stderr); exit(1)
         }
+        action(blue)
+        assert(model.relationships[0].color == "#3478F6FF" && model.roots == [a, b] && model.undo() &&
+               model.relationships[0].color == nil, "Preset color changes only relation and undoes in one step")
         action(dotted)
         assert(model.relationships[0].style == .dotted)
         action(startArrow)
@@ -158,6 +168,66 @@ import AppKit
         assert(abs(movedWide.control1.x - wideGeometry.control1.x - 20 / factor) < 1 &&
                abs(movedWide.control1.y - wideGeometry.control1.y) < 1,
                "At reduced zoom the actual handle must move twenty screen points, independent of its sliding anchor")
+        let paintModel = MapModel(roots: [a, b], selected: a.id)
+        let paintCanvas = MapCanvas(model: paintModel)
+        paintCanvas.frame = canvas.frame
+        assert(paintModel.toggleSelection(b.id))
+        paintCanvas.createRelationship(nil)
+        var paintEdge = paintModel.relationships[0]
+        paintEdge.control1 = SIMD2(80, -130)
+        paintEdge.control2 = SIMD2(-70, 120)
+        paintEdge.endArrow = false
+        paintEdge.color = "#FF0000FF"
+        assert(paintModel.setRelationship(paintEdge))
+        let paintCurve = relationshipGeometry(paintEdge, from: worldBoxes[a.id]!, to: worldBoxes[b.id]!)!
+        let paintedFirst = paintCanvas.frameForAccessibility(a.id)!
+        func onPaintCanvas(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: point.x + paintedFirst.minX - worldBoxes[a.id]!.minX,
+                    y: point.y + paintedFirst.minY - worldBoxes[a.id]!.minY)
+        }
+        func bitmap() -> NSBitmapImageRep {
+            let result = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1000, pixelsHigh: 700,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            let previous = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: result)
+            paintCanvas.draw(paintCanvas.bounds)
+            NSGraphicsContext.current = previous
+            return result
+        }
+        func pixel(_ image: NSBitmapImageRep, _ point: CGPoint) -> NSColor {
+            image.colorAt(x: Int(point.x.rounded()), y: image.pixelsHigh - 1 - Int(point.y.rounded()))!
+                .usingColorSpace(.deviceRGB)!
+        }
+        let startGuide = onPaintCanvas(CGPoint(x: (paintCurve.start.x + paintCurve.control1.x) / 2,
+                                              y: (paintCurve.start.y + paintCurve.control1.y) / 2))
+        let endGuide = onPaintCanvas(CGPoint(x: (paintCurve.end.x + paintCurve.control2.x) / 2,
+                                            y: (paintCurve.end.y + paintCurve.control2.y) / 2))
+        let selectedImage = bitmap()
+        assert(paintCanvas.selectNode(a.id) && paintCanvas.selectedRelationshipID == nil)
+        let unselectedImage = bitmap()
+        for point in [startGuide, endGuide] {
+            let selectedPixel = pixel(selectedImage, point), unselectedPixel = pixel(unselectedImage, point)
+            assert(abs(selectedPixel.redComponent - unselectedPixel.redComponent) +
+                   abs(selectedPixel.greenComponent - unselectedPixel.greenComponent) +
+                   abs(selectedPixel.blueComponent - unselectedPixel.blueComponent) > 0.2,
+                   "Only selected relationship paints its own anchor-to-control guide")
+        }
+        let curveMidpoint = onPaintCanvas(CGPoint(x: (paintCurve.start.x + 3 * paintCurve.control1.x +
+            3 * paintCurve.control2.x + paintCurve.end.x) / 8,
+            y: (paintCurve.start.y + 3 * paintCurve.control1.y + 3 * paintCurve.control2.y + paintCurve.end.y) / 8))
+        func hasStroke(_ image: NSBitmapImageRep, red: Bool) -> Bool {
+            (-4...4).contains { dx in (-4...4).contains { dy in
+                let color = pixel(image, CGPoint(x: curveMidpoint.x + CGFloat(dx), y: curveMidpoint.y + CGFloat(dy)))
+                return red ? color.redComponent > 0.8 && color.greenComponent < 0.2 :
+                    color.greenComponent > 0.6 && color.redComponent < 0.2
+            } }
+        }
+        assert(hasStroke(selectedImage, red: true) && hasStroke(unselectedImage, red: true),
+               "Selected and unselected cubic strokes must keep the actual red color")
+        paintEdge.color = "#00EE00FF"
+        assert(paintModel.setRelationship(paintEdge) && hasStroke(bitmap(), red: false),
+               "A changed edge color must paint the unselected cubic green")
         let menuModel = MapModel(roots: [a, b], selected: a.id)
         let menuCanvas = MapCanvas(model: menuModel)
         let delegate = AppDelegate()

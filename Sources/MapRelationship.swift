@@ -11,6 +11,7 @@ struct MapRelationship: Codable, Equatable {
     var control1Aim: SIMD2<Double>? // Manually aimed handle, relative to start node center.
     var control2Aim: SIMD2<Double>? // Manually aimed handle, relative to end node center.
     var style: MapRelationshipStyle
+    var color: String? = nil
     var startArrow: Bool
     var endArrow: Bool
 
@@ -32,6 +33,7 @@ struct MapRelationship: Codable, Equatable {
 
 func validRelationship(_ edge: MapRelationship, nodeIDs: Set<UUID>) -> Bool {
     nodeIDs.contains(edge.from) && nodeIDs.contains(edge.to) && edge.from != edge.to &&
+        (edge.color.map(MapNode.validColor) ?? true) &&
         ([edge.control1.x, edge.control1.y, edge.control2.x, edge.control2.y] +
          [edge.control1Aim?.x, edge.control1Aim?.y, edge.control2Aim?.x, edge.control2Aim?.y].compactMap { $0 })
             .allSatisfy { $0.isFinite && abs($0) <= 1_000_000 }

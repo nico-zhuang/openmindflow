@@ -6,7 +6,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     private var labels: [String: NSTextField] = [:]
     private static let widths: [(String, CGFloat)] = [("Hairline", 0.75), ("Thin", 1.5),
                                                        ("Medium", 3), ("Bold", 5), ("Heavy", 8)]
-    private static let colors = [("Teal", "#14B8A6FF"), ("Blue", "#3478F6FF"),
+    static let colors = [("Teal", "#14B8A6FF"), ("Blue", "#3478F6FF"),
                                  ("Coral", "#F97373FF"), ("Gold", "#EAB308FF"),
                                  ("Gray", "#8B95A5FF")]
     let familyPopup = NSPopUpButton()
@@ -288,7 +288,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         refresh()
     }
 
-    private static func color(_ hex: String) -> NSColor? {
+    static func color(_ hex: String) -> NSColor? {
         guard hex.count == 9, hex.first == "#",
               let red = UInt8(hex.dropFirst().prefix(2), radix: 16),
               let green = UInt8(hex.dropFirst(3).prefix(2), radix: 16),
@@ -319,12 +319,15 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             }
             return
         }
-        let currentID = canvas.model.selectedIDs.count == 1 ? canvas.model.selected : nil
+        let relation = canvas.model.relationships.first { $0.id == canvas.selectedRelationshipID }
+        tabs.setEnabled(relation == nil, forSegment: 1)
+        if relation != nil && tabs.selectedSegment == 1 { tabs.selectedSegment = 0; showPage() }
+        let currentID = relation == nil && canvas.model.selectedIDs.count == 1 ? canvas.model.selected : nil
         if noteNodeID != currentID || noteTextView.string != loadedNote ||
            (currentID.flatMap { node($0, in: canvas.model.roots)?.note } ?? "") != loadedNote {
             loadNote(for: currentID)
         }
-        rootShapePopup.isEnabled = selectedNodes().count == 1 && selectedNodes().first?.1 == true
+        rootShapePopup.isEnabled = relation == nil && selectedNodes().count == 1 && selectedNodes().first?.1 == true
         rootFillPopup.isEnabled = rootShapePopup.isEnabled
         rootWidthPopup.isEnabled = rootShapePopup.isEnabled
         let root = selectedNodes().first?.0
@@ -342,8 +345,22 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         func text(_ key: String) -> String { L10n.text(key, defaults: defaults) }
         let nodes = selectedNodes()
         for control: NSControl in [familyPopup, fontSizeField, fontSizeStepper, alignmentControl,
-                                   colorPopup, strokeWidthPopup, strokeStylePopup] {
-            control.isEnabled = !nodes.isEmpty
+                                   strokeWidthPopup, strokeStylePopup] {
+            control.isEnabled = relation == nil && !nodes.isEmpty
+        }
+        colorPopup.isEnabled = relation != nil || !nodes.isEmpty
+        if let relation {
+            familyPopup.selectItem(withTitle: text("Mixed"))
+            fontPreview.stringValue = text("No selection")
+            fontSizeField.stringValue = ""
+            alignmentControl.selectedSegment = -1
+            strokeWidthPopup.selectItem(withTitle: text("Default"))
+            strokeStylePopup.selectItem(withTitle: text("Default"))
+            colorState.stringValue = relation.color == nil ? text("Default") : ""
+            colorPopup.selectItem(withTitle: text(relation.color.map { saved in
+                Self.colors.first(where: { $0.1 == saved.uppercased() })?.0 ?? "Custom"
+            } ?? "Default"))
+            return
         }
         guard let first = nodes.first else {
             familyPopup.selectItem(withTitle: text("Mixed"))
@@ -446,7 +463,8 @@ final class StyleInspector: NSView, NSTextViewDelegate {
 
     @discardableResult
     func selectNotes(for id: UUID) -> Bool {
-        guard canvas.commitEditing(), commitNoteEditing(), canvas.model.selectedIDs == [id] else { return false }
+        guard canvas.selectedRelationshipID == nil, canvas.commitEditing(), commitNoteEditing(),
+              canvas.model.selectedIDs == [id] else { return false }
         loadNote(for: id)
         tabs.selectedSegment = 1
         showPage()
@@ -486,7 +504,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
         changed(canvas.model.setCanvasColor(Self.hex(color)))
     }
-    private static func hex(_ color: NSColor) -> String {
+    static func hex(_ color: NSColor) -> String {
         "#" + [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
             .map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
     }
@@ -575,21 +593,29 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     }
 
     @objc func changeFontFamily(_ sender: Any?) {
-        guard ready() else { return }
+        guard canvas.selectedRelationshipID == nil, ready() else { return }
         guard let family = familyPopup.selectedItem?.representedObject as? String else { refresh(); return }
         changed(canvas.model.setFont(family: family))
     }
     @objc func changeFontSize(_ sender: Any?) {
-        guard ready() else { return }
+        guard canvas.selectedRelationshipID == nil, ready() else { return }
         if sender as? NSStepper === fontSizeStepper { fontSizeField.stringValue = "\(fontSizeStepper.doubleValue)" }
         guard let size = Double(fontSizeField.stringValue) else { refresh(); return }
         changed(canvas.model.setFont(size: size))
     }
     @objc func changeAlignment(_ sender: Any?) {
-        guard ready() else { return }
+        guard canvas.selectedRelationshipID == nil, ready() else { return }
         let names = ["left", "center", "right", "justify"]
         guard names.indices.contains(alignmentControl.selectedSegment) else { return }
         changed(canvas.model.setAlignment(names[alignmentControl.selectedSegment]))
+    }
+    private func setSelectedColor(_ hex: String?) -> Bool {
+        if let id = canvas.selectedRelationshipID {
+            guard var edge = canvas.model.relationships.first(where: { $0.id == id }) else { return false }
+            edge.color = hex
+            return canvas.model.setRelationship(edge)
+        }
+        return hex.map { canvas.model.setBranchStroke(color: $0) } ?? canvas.model.resetStrokeColor()
     }
     @objc func changeColorSelection(_ sender: Any?) {
         guard ready() else { return }
@@ -597,24 +623,25 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         if choice == "More…" {
             refresh() // Opening the color panel does not itself change the selection or create undo.
             let panel = NSColorPanel.shared
-            if let hex = selectedNodes().first?.0.branchStrokeColor, let color = Self.color(hex) { panel.color = color }
+            if let id = canvas.selectedRelationshipID {
+                panel.color = canvas.model.relationships.first(where: { $0.id == id })?.color.flatMap(Self.color)
+                    ?? .systemPurple
+            } else if let hex = selectedNodes().first?.0.branchStrokeColor,
+                      let color = Self.color(hex) { panel.color = color }
             panel.setTarget(self)
             panel.setAction(#selector(changeStrokeColor(_:)))
             panel.makeKeyAndOrderFront(nil)
-        } else if choice == "Default" { changed(canvas.model.resetStrokeColor()) }
+        } else if choice == "Default" { changed(setSelectedColor(nil)) }
         else if let hex = Self.colors.first(where: { $0.0 == choice })?.1 {
-            changed(canvas.model.setBranchStroke(color: hex))
+            changed(setSelectedColor(hex))
         } else { refresh() }
     }
     @objc func changeStrokeColor(_ sender: Any?) {
-        guard ready() else { return }
-        guard let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
-        let components = [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
-        let hex = "#" + components.map { String(format: "%02X", Int((min(1, max(0, $0)) * 255).rounded())) }.joined()
-        changed(canvas.model.setBranchStroke(color: hex))
+        guard ready(), let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
+        changed(setSelectedColor(Self.hex(color)))
     }
     @objc func changeStrokeWidth(_ sender: Any?) {
-        guard ready() else { return }
+        guard canvas.selectedRelationshipID == nil, ready() else { return }
         guard let choice = strokeWidthPopup.selectedItem?.representedObject as? String else { return }
         if choice == "Default" { changed(canvas.model.resetStrokeWidth()) }
         else if let width = Self.widths.first(where: { $0.0 == choice })?.1 {
@@ -622,7 +649,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         } else { refresh() }
     }
     @objc func changeStrokeStyle(_ sender: Any?) {
-        guard ready() else { return }
+        guard canvas.selectedRelationshipID == nil, ready() else { return }
         guard let value = (strokeStylePopup.selectedItem?.representedObject as? String)?.lowercased() else { return }
         if value == "default" { changed(canvas.model.resetStrokeStyle()) }
         else if value == "solid" || value == "dashed" {

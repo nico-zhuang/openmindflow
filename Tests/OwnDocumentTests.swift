@@ -32,7 +32,14 @@ enum OwnDocumentTests {
         var saved = try Data(contentsOf: url)
         assert(saved.first == UInt8(ascii: "{"))
         let reopened = try readOwnDocument(url)
-        assert(reopened.roots == roots && reopened.relationships == [edge])
+        assert(reopened.roots == roots && reopened.relationships == [edge] && reopened.relationships[0].color == nil)
+        var coloredEdge = edge
+        coloredEdge.color = "#22AA44CC"
+        try writeOwnDocument(OwnMapDocument(roots: roots, relationships: [coloredEdge]), to: url)
+        let reopenedColor = try readOwnDocument(url)
+        assert(reopenedColor.relationships == [coloredEdge], "Valid edge color must persist through file reopen")
+        try writeOwnDocument(document, to: url)
+        saved = try Data(contentsOf: url)
         do { _ = try readOwnJSON(url); fatalError("Legacy roots-only reader must not discard relationships") }
         catch OwnJSONError.requiresDocumentAPI { }
 
@@ -88,13 +95,16 @@ enum OwnDocumentTests {
         invalid.relationships = [edge]
         invalid.relationships[0].control1 = SIMD2(1_000_001, 0)
         rejects { try writeOwnDocument(invalid, to: url) }
+        invalid.relationships = [edge]
+        invalid.relationships[0].color = "#bad"
+        rejects { try writeOwnDocument(invalid, to: url) }
         var badVideo = roots
         badVideo[0].videoWidth = 200
         rejects { try writeOwnDocument(OwnMapDocument(roots: badVideo, relationships: [edge]), to: url) }
         let afterRejectedWrite = try Data(contentsOf: url)
         assert(afterRejectedWrite == saved, "Rejected write must leave previous file untouched")
         let bad = folder.appendingPathComponent("bad.mindmap.json")
-        for edges in [[MapRelationship(from: left, to: UUID())], [edge, edge]] {
+        for edges in [[MapRelationship(from: left, to: UUID())], [edge, edge], invalid.relationships] {
             let bytes = try JSONEncoder().encode(OwnMapDocument(roots: roots, relationships: edges))
             try bytes.write(to: bad)
             rejects { _ = try readOwnDocument(bad) }

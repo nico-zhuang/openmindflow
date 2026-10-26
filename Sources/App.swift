@@ -68,8 +68,12 @@ private enum NodeShortcuts {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; revealSelection(); needsDisplay = true } }
-    private(set) var selectedRelationshipID: UUID?
+    var model: MapModel { didSet { replacingModel = true; stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; revealSelection(); needsDisplay = true; replacingModel = false } }
+    private var replacingModel = false
+    private(set) var selectedRelationshipID: UUID? {
+        didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
+    }
+    private var relationshipColorPanelID: UUID?
     var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
     var nativePresentation: [UUID: MindNodePresentation] = [:] { didSet { needsDisplay = true } }
     var embeddedTheme: MindNodeThemeMetadata? { didSet { needsDisplay = true } }
@@ -91,6 +95,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             for (id, element) in accessibleNodes {
                 element.setAccessibilitySelected(model.selectedIDs.contains(id) && visibleIDs.contains(id))
             }
+            if replacingModel { announcedSelection = model.selectedIDs; return }
             guard announcedSelection != model.selectedIDs else { return }
             announcedSelection = model.selectedIDs
             NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
@@ -276,11 +281,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     @objc override func selectAll(_ sender: Any?) {
         guard commitEditing() else { return }
+        selectedRelationshipID = nil
         if model.selectNodes(Set(visibleNodes().map(\.node.id))) { needsDisplay = true }
     }
     @discardableResult
     func selectNode(_ id: UUID) -> Bool {
         guard commitEditing(), visibleNodes().contains(where: { $0.node.id == id }) else { return false }
+        selectedRelationshipID = nil
         model.selected = id
         revealSelection()
         needsDisplay = true
@@ -293,6 +300,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     func showSearchResult(_ id: UUID) {
         guard commitEditing() else { return }
+        selectedRelationshipID = nil
         let expanded = model.revealSearchResult(id)
         if expanded { changed() }
         else { revealSelection(); needsDisplay = true }
@@ -827,7 +835,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             case .dashed: path.setLineDash([8 * zoom, 5 * zoom], count: 2, phase: 0)
             case .dotted: path.setLineDash([1 * zoom, 5 * zoom], count: 2, phase: 0)
             }
-            (selectedRelationshipID == edge.id ? NSColor.controlAccentColor : .systemPurple).set()
+            (edge.color.flatMap(strokeColor) ?? .systemPurple).set()
             path.stroke()
             for head in [geometry.startArrowhead, geometry.endArrowhead].compactMap({ $0 }) {
                 let arrow = NSBezierPath()
@@ -838,6 +846,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 arrow.fill()
             }
             if selectedRelationshipID == edge.id {
+                let guides = NSBezierPath()
+                guides.move(to: screen(geometry.start))
+                guides.line(to: screen(geometry.control1))
+                guides.move(to: screen(geometry.end))
+                guides.line(to: screen(geometry.control2))
+                guides.lineWidth = 1.5
+                NSColor.controlAccentColor.setStroke()
+                guides.stroke()
                 for point in [geometry.control1, geometry.control2] {
                     let center = screen(point)
                     let handle = NSBezierPath(ovalIn: CGRect(x: center.x - 6, y: center.y - 6,
@@ -1228,6 +1244,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard selectNode(id) else { return NSMenu() }
         } else { guard commitEditing() else { return NSMenu() } }
         guard editor == nil else { return NSMenu() }
+        if id != nil { selectedRelationshipID = nil }
         let menu = NSMenu()
         func add(_ title: String, _ tag: Int) {
             let item = menu.addItem(withTitle: t(title), action: #selector(contextCommand(_:)), keyEquivalent: "")
@@ -1289,6 +1306,18 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         add(styles, "Dashed", 32, state: edge.style == .dashed ? .on : .off)
         add(styles, "Dotted", 33, state: edge.style == .dotted ? .on : .off)
         menu.addItem(withTitle: t("Line Style"), action: nil, keyEquivalent: "").submenu = styles
+        let colors = NSMenu()
+        add(colors, "Default", 46, state: edge.color == nil ? .on : .off)
+        for (index, swatch) in StyleInspector.colors.enumerated() {
+            add(colors, swatch.0, 40 + index, state: edge.color?.uppercased() == swatch.1 ? .on : .off)
+            colors.items.last?.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                StyleInspector.color(swatch.1)?.setFill()
+                NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+                return true
+            }
+        }
+        add(colors, "More…", 45)
+        menu.addItem(withTitle: t("Color"), action: nil, keyEquivalent: "").submenu = colors
         add(menu, "Start Arrow", 34, state: edge.startArrow ? .on : .off)
         add(menu, "End Arrow", 35, state: edge.endArrow ? .on : .off)
         menu.addItem(.separator())
@@ -1313,8 +1342,19 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if model.removeRelationship(id) { selectedRelationshipID = nil; changed() }
             return
         }
+        if item.tag == 45 {
+            relationshipColorPanelID = id
+            let panel = NSColorPanel.shared
+            panel.color = current.color.flatMap(strokeColor) ?? .systemPurple
+            panel.setTarget(self)
+            panel.setAction(#selector(changeRelationshipPanelColor(_:)))
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
         var edge = current
         switch item.tag {
+        case 40...44: edge.color = StyleInspector.colors[item.tag - 40].1
+        case 46: edge.color = nil
         case 31: edge.style = .solid
         case 32: edge.style = .dashed
         case 33: edge.style = .dotted
@@ -1323,6 +1363,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         default: return
         }
         if model.setRelationship(edge) { selectedRelationshipID = id; changed() }
+    }
+    @objc private func changeRelationshipPanelColor(_ panel: NSColorPanel) {
+        guard commitEditing(), let id = relationshipColorPanelID, selectedRelationshipID == id,
+              var edge = model.relationships.first(where: { $0.id == id }),
+              let color = panel.color.usingColorSpace(.deviceRGB) else { return }
+        edge.color = StyleInspector.hex(color)
+        if model.setRelationship(edge) { changed() }
     }
     @objc private func contextCommand(_ item: NSMenuItem) {
         switch item.tag {
