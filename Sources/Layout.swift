@@ -77,6 +77,8 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         let original = mapLayout(roots)
         let originalFrames = Dictionary(uniqueKeysWithValues: original.map { ($0.node.id, $0.frame) })
         var placed: [UUID: CGRect] = [:]
+        let rootIDs = Set(roots.map(\.id))
+        var inheritedSides: [UUID: Bool] = [:]
         // An explicit side switch clears model locations, but nativePresentation is immutable.
         // Do not let its old centers re-pin any member of that switched subtree.
         var switchedSides: [UUID: Bool] = [:]
@@ -102,8 +104,11 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             } else { parentShift = .zero }
             let inheritedCenter = CGPoint(x: item.frame.midX + parentShift.width,
                                           y: item.frame.midY + parentShift.height)
+            let inheritedSide = item.parent.flatMap { inheritedSides[$0] }
+            let automaticSide = switchedSides[node.id] ?? (node.location == nil && saved?.location == nil
+                ? inheritedSide : nil)
             let automaticX: CGFloat
-            if let left = switchedSides[node.id], let parent = item.parent, let actual = placed[parent] {
+            if let left = automaticSide, let parent = item.parent, let actual = placed[parent] {
                 automaticX = left ? actual.minX - 60 - width / 2 : actual.maxX + 60 + width / 2
             } else {
                 automaticX = inheritedCenter.x
@@ -114,6 +119,14 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             let frame = CGRect(x: center.x - width / 2, y: center.y - height / 2,
                                width: width, height: height)
             placed[node.id] = frame
+            if let parent = item.parent {
+                if rootIDs.contains(parent), switchedSides[node.id] == nil,
+                   (node.location != nil || saved?.location != nil), let rootFrame = placed[parent] {
+                    inheritedSides[node.id] = frame.midX < rootFrame.midX
+                } else if let inheritedSide {
+                    inheritedSides[node.id] = inheritedSide
+                }
+            }
             return LaidOutNode(node: node, frame: frame, parent: item.parent)
         }
     }

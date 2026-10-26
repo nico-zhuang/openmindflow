@@ -97,6 +97,69 @@ enum LeftBranchLayoutTests {
         // A later manual free move remains authoritative even though the stale presentation exists.
         model.roots[0].children[0].location = SIMD2(-900, 123)
         assert(placed()[originalLeft.id]!.midX == -900)
+        // Native nil-side branches retain their authored centers, while newly added descendants
+        // must inherit the side visible on the canvas without writing a direction into the model.
+        let authoredLeftLeaf = node("Authored left leaf")
+        let nativeLeft = node("Native left", children: [authoredLeftLeaf])
+        let nativeRight = node("Native right")
+        let nativeRoot = node("Native root", children: [nativeLeft, nativeRight])
+        let nativeModel = MapModel(roots: [nativeRoot], selected: nativeLeft.id)
+        let nativeOverrides: [UUID: MapLayoutOverride] = [
+            nativeRoot.id: presentation(650, 300),
+            nativeLeft.id: presentation(320, 200),
+            authoredLeftLeaf.id: presentation(80, 180),
+            nativeRight.id: presentation(980, 400)
+        ]
+        func nativeFrames() -> [UUID: CGRect] {
+            Dictionary(uniqueKeysWithValues: mapLayout(nativeModel.roots, overrides: nativeOverrides)
+                .map { ($0.node.id, $0.frame) })
+        }
+        let nativeBefore = nativeFrames()
+        assert(nativeBefore[nativeLeft.id]!.maxX < nativeBefore[nativeRoot.id]!.minX &&
+               nativeBefore[nativeRight.id]!.minX > nativeBefore[nativeRoot.id]!.maxX)
+        nativeModel.addChild()
+        let newLeft = nativeModel.selected
+        let leftFrames = nativeFrames()
+        assert(leftFrames[newLeft]!.maxX <= leftFrames[nativeLeft.id]!.minX - 60,
+               "New child of imported nil-side left branch must extend outward, not toward root")
+        for id in [nativeRoot.id, nativeLeft.id, authoredLeftLeaf.id, nativeRight.id] {
+            assert(leftFrames[id] == nativeBefore[id], "Existing native coordinates must stay authoritative")
+        }
+        assert(nativeModel.roots[0].children[0].branchSide == nil &&
+               nativeModel.roots[0].children[0].children[0].location == nil &&
+               nativeOverrides[nativeLeft.id]!.location == CGPoint(x: 320, y: 200))
+        assert(nativeModel.undo() && nativeModel.roots == [nativeRoot] && !nativeModel.undo(),
+               "Adding this descendant must be one undo with unchanged imported model")
+        nativeModel.addChild()
+        let parentLeft = nativeModel.selected
+        nativeModel.addChild()
+        let grandchildLeft = nativeModel.selected
+        let descendantFrames = nativeFrames()
+        assert(descendantFrames[parentLeft]!.maxX <= descendantFrames[nativeLeft.id]!.minX - 60 &&
+               descendantFrames[grandchildLeft]!.maxX <= descendantFrames[parentLeft]!.minX - 60,
+               "Unpositioned second-generation descendants must inherit the imported left side")
+        assert(descendantFrames[authoredLeftLeaf.id] == nativeBefore[authoredLeftLeaf.id])
+        assert(nativeModel.undo() && nativeModel.selected == parentLeft &&
+               nativeModel.undo() && nativeModel.roots == [nativeRoot] && !nativeModel.undo())
+        nativeModel.selected = authoredLeftLeaf.id
+        nativeModel.addChild()
+        let authoredChild = nativeModel.selected
+        let authoredFrames = nativeFrames()
+        assert(authoredFrames[authoredChild]!.maxX <= authoredFrames[authoredLeftLeaf.id]!.minX - 60 &&
+               authoredFrames[authoredLeftLeaf.id] == nativeBefore[authoredLeftLeaf.id],
+               "An authored native descendant stays pinned while its new child inherits the side")
+        assert(nativeModel.undo() && nativeModel.roots == [nativeRoot] && !nativeModel.undo())
+        nativeModel.selected = nativeRight.id
+        nativeModel.addChild()
+        let newRight = nativeModel.selected
+        let rightFrames = nativeFrames()
+        assert(rightFrames[newRight]!.minX >= rightFrames[nativeRight.id]!.maxX + 60,
+               "New child of imported nil-side right branch must extend outward")
+        for id in [nativeRoot.id, nativeLeft.id, authoredLeftLeaf.id, nativeRight.id] {
+            assert(rightFrames[id] == nativeBefore[id])
+        }
+        assert(nativeModel.roots[0].children[1].branchSide == nil && nativeModel.undo() &&
+               nativeModel.roots == [nativeRoot] && !nativeModel.undo())
         print("mixed left/right layout, folds, imported coordinates and explicit switch tests passed")
     }
 }
