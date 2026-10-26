@@ -5,6 +5,7 @@ import AppKit
         _ = NSApplication.shared // Detached canvas only; no window, post or global HID.
         if CommandLine.arguments.contains("--model") { modelResizeTests(); return }
         if CommandLine.arguments.contains("--drag") { dragSwitchTests(); return }
+        if CommandLine.arguments.contains("--review") { reviewRegressionTests(); return }
         let defaults = UserDefaults(suiteName: "LeftBranchInteractionTests.\(UUID())")!
         defaults.set("en", forKey: "language")
         let leaf = MapNode(id: UUID(), title: "leaf", children: [], folded: false,
@@ -133,6 +134,145 @@ import AppKit
             fail("imported nil-side left resize preserves anchor, side and undo")
         }
         print("side menu, localized checks, local drag, left resize preview/import and undo passed")
+    }
+
+    private static func reviewRegressionTests() {
+        func fail(_ message: String) -> Never { fputs("RED review: \(message)\n", stderr); exit(1) }
+        func near(_ lhs: CGFloat, _ rhs: CGFloat) -> Bool { abs(lhs - rhs) < 1.5 }
+        func send(_ canvas: MapCanvas, _ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: canvas.bounds.height - point.y),
+                modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        for side in ["left", "right"] {
+            for delta in [-40.0, 40.0] {
+                let grandchild = MapNode(id: UUID(), title: "grandchild", children: [], folded: false)
+                let child = MapNode(id: UUID(), title: "branch", children: [grandchild], folded: false)
+                let root = MapNode(id: UUID(), title: "root", children: [child], folded: false)
+                let model = MapModel(roots: [root], selected: child.id)
+                let canvas = MapCanvas(model: model)
+                canvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 750)
+                let x: CGFloat = side == "left" ? 320 : 500
+                let rootX: CGFloat = side == "left" ? 650 : 150
+                let grandX: CGFloat = side == "left" ? 90 : 750
+                func presentation(_ x: CGFloat) -> MindNodePresentation {
+                    MindNodePresentation(location: CGPoint(x: x, y: 320), maxWidth: nil,
+                        allowToShrinkWidth: true, font: nil, styleChangedByUser: nil, fillColor: nil)
+                }
+                canvas.nativePresentation = [root.id: presentation(rootX), child.id: presentation(x),
+                                             grandchild.id: presentation(grandX)]
+                let beforePresentation = canvas.nativePresentation
+                var changes = 0
+                canvas.onChange = { changes += 1 }
+                func box(_ id: UUID) -> CGRect { canvas.frameForAccessibility(id)! }
+                let before = box(child.id), grandBefore = box(grandchild.id)
+                let edge = side == "left" ? before.minX : before.maxX
+                let handle = CGPoint(x: edge + (side == "left" ? 6 : -6), y: before.minY + 5)
+                let end = CGPoint(x: handle.x + CGFloat(delta) * (side == "left" ? -1 : 1), y: handle.y)
+                canvas.mouseDown(with: send(canvas, .leftMouseDown, handle))
+                canvas.mouseDragged(with: send(canvas, .leftMouseDragged, end))
+                let preview = box(child.id), grandPreview = box(grandchild.id)
+                let fixedBefore = side == "left" ? before.maxX : before.minX
+                let fixedPreview = side == "left" ? preview.maxX : preview.minX
+                let shift = CGFloat(delta) * (side == "left" ? -1 : 1)
+                guard near(preview.width, before.width + delta), near(fixedPreview, fixedBefore),
+                      near(grandPreview.midX, grandBefore.midX + shift), model.roots == [root] else {
+                    fail("\(side) \(delta) preview anchor, width and native descendant: \(before) -> \(preview), descendant \(grandBefore) -> \(grandPreview)")
+                }
+                canvas.mouseUp(with: send(canvas, .leftMouseUp, end))
+                let after = box(child.id), grandAfter = box(grandchild.id)
+                let fixedAfter = side == "left" ? after.maxX : after.minX
+                guard near(after.width, preview.width), near(fixedAfter, fixedBefore),
+                      near(grandAfter.midX, grandPreview.midX),
+                      model.roots[0].children[0].branchSide == nil,
+                      model.roots[0].children[0].location != nil,
+                      model.roots[0].children[0].children[0].location != nil,
+                      canvas.nativePresentation.count == beforePresentation.count,
+                      canvas.nativePresentation[child.id]?.location == beforePresentation[child.id]?.location,
+                      canvas.nativePresentation[grandchild.id]?.location == beforePresentation[grandchild.id]?.location,
+                      changes == 1, model.undo(), model.roots == [root], !model.undo() else {
+                    fail("\(side) \(delta) commit differs from preview or mutates source/history: \(preview) -> \(after), descendant \(grandPreview) -> \(grandAfter)")
+                }
+            }
+        }
+        let invalidLeaf = MapNode(id: UUID(), title: "native leaf", children: [], folded: false)
+        let invalidBranch = MapNode(id: UUID(), title: "native branch", children: [invalidLeaf], folded: false)
+        let invalidRoot = MapNode(id: UUID(), title: "root", children: [invalidBranch], folded: false)
+        let invalidModel = MapModel(roots: [invalidRoot], selected: invalidBranch.id)
+        for invalid in [CGPoint(x: CGFloat.nan, y: 320), CGPoint(x: 1_000_001, y: 320),
+                        CGPoint(x: 320, y: CGFloat.infinity)] {
+            guard !invalidModel.resizeSelected(by: 40, visibleWidths: [invalidBranch.id: 170],
+                visibleCenters: [invalidBranch.id: CGPoint(x: 320, y: 320), invalidLeaf.id: invalid]),
+                  invalidModel.roots == [invalidRoot], !invalidModel.undo() else {
+                fail("invalid visible center must reject before model mutation or history")
+            }
+        }
+        let nestedLeaf = MapNode(id: UUID(), title: "nested leaf", children: [], folded: false)
+        let nestedChild = MapNode(id: UUID(), title: "nested child", children: [nestedLeaf], folded: false)
+        let nestedParent = MapNode(id: UUID(), title: "nested parent", children: [nestedChild], folded: false)
+        let nestedRoot = MapNode(id: UUID(), title: "root", children: [nestedParent], folded: false)
+        let nestedModel = MapModel(roots: [nestedRoot], selected: nestedParent.id)
+        assert(nestedModel.toggleSelection(nestedChild.id))
+        guard nestedModel.resizeSelected(by: 40,
+            visibleWidths: [nestedParent.id: 170, nestedChild.id: 170],
+            visibleCenters: [nestedParent.id: CGPoint(x: 500, y: 320),
+                nestedChild.id: CGPoint(x: 750, y: 320), nestedLeaf.id: CGPoint(x: 1000, y: 320)]),
+            nestedModel.roots[0].children[0].location == SIMD2(520, 320),
+            nestedModel.roots[0].children[0].children[0].location == SIMD2(810, 320),
+            nestedModel.roots[0].children[0].children[0].children[0].location == SIMD2(1080, 320),
+            nestedModel.undo(), nestedModel.roots == [nestedRoot], !nestedModel.undo() else {
+            fail("overlapping selected native subtrees shift each contribution exactly once")
+        }
+        let a = MapNode(id: UUID(), title: "A", children: [], folded: false,
+                        location: SIMD2(500, 320))
+        let b = MapNode(id: UUID(), title: "B", children: [], folded: false,
+                        location: SIMD2(510, 400))
+        let root = MapNode(id: UUID(), title: "root", children: [a, b], folded: false,
+                           location: SIMD2(150, 320))
+        let model = MapModel(roots: [root], selected: a.id)
+        let canvas = MapCanvas(model: model)
+        canvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 750)
+        let english = UserDefaults(suiteName: "LeftBranchReview.\(UUID())")!
+        english.set("en", forKey: "language")
+        canvas.localizationDefaults = english
+        var changes = 0
+        canvas.onChange = { changes += 1 }
+        let menuA = canvas.contextMenu(for: a.id)
+        guard let rightA = menuA.item(withTitle: "Place on Right"), rightA.state == .on else {
+            fail("nil-side default-right is checked")
+        }
+        _ = NSApp.sendAction(rightA.action!, to: rightA.target, from: rightA)
+        guard model.roots == [root], changes == 0, !model.undo() else {
+            fail("checked default-right action must not materialize side, clear locations or save undo")
+        }
+        _ = canvas.contextMenu(for: b.id)
+        let leftA = menuA.item(withTitle: "Place on Left")!
+        _ = NSApp.sendAction(leftA.action!, to: leftA.target, from: leftA)
+        guard model.roots[0].children[1] == b, changes == 0, !model.undo() else {
+            fail("retained A menu action must never change newly selected B")
+        }
+        _ = canvas.contextMenu(for: a.id)
+        assert(model.toggleSelection(b.id))
+        _ = NSApp.sendAction(leftA.action!, to: leftA.target, from: leftA)
+        guard model.roots == [root], changes == 0, !model.undo() else {
+            fail("retained side action must not act on multi-selection")
+        }
+        let imported = MapNode(id: UUID(), title: "native-left", children: [], folded: false)
+        let nativeRoot = MapNode(id: UUID(), title: "native-root", children: [imported], folded: false)
+        let nativeModel = MapModel(roots: [nativeRoot], selected: imported.id)
+        let nativeCanvas = MapCanvas(model: nativeModel)
+        nativeCanvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 750)
+        nativeCanvas.localizationDefaults = english
+        nativeCanvas.nativePresentation[nativeRoot.id] = MindNodePresentation(location: CGPoint(x: 650, y: 320), maxWidth: nil,
+            allowToShrinkWidth: true, font: nil, styleChangedByUser: nil, fillColor: nil)
+        nativeCanvas.nativePresentation[imported.id] = MindNodePresentation(location: CGPoint(x: 320, y: 320), maxWidth: nil,
+            allowToShrinkWidth: true, font: nil, styleChangedByUser: nil, fillColor: nil)
+        let right = nativeCanvas.contextMenu(for: imported.id).item(withTitle: "Place on Right")!
+        guard right.state == .off else { fail("nil-side actually-left import must not check right") }
+        _ = NSApp.sendAction(right.action!, to: right.target, from: right)
+        guard nativeModel.roots[0].children[0].branchSide == "right", nativeModel.undo(),
+              nativeModel.roots == [nativeRoot] else { fail("imported actually-left can explicitly reflow right") }
+        print("review nil-side native resize, menu identity and checked action passed")
     }
 
     private static func dragSwitchTests() {

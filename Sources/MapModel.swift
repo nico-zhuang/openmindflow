@@ -648,7 +648,9 @@ final class MapModel {
     @discardableResult
     func resizeSelected(by delta: CGFloat, visibleWidths: [UUID: CGFloat],
                         visibleCenters: [UUID: CGPoint] = [:], renderedLeft: Set<UUID> = []) -> Bool {
-        guard delta.isFinite, !visibleWidths.isEmpty else { return false }
+        guard delta.isFinite, !visibleWidths.isEmpty,
+              visibleCenters.values.allSatisfy({ $0.x.isFinite && $0.y.isFinite &&
+                  abs($0.x) <= 1_000_000 && abs($0.y) <= 1_000_000 }) else { return false }
         let paths = selectedPaths()
         guard !paths.isEmpty, paths.allSatisfy({ path in
             let node = Self.node(at: path[...], in: roots)
@@ -667,13 +669,23 @@ final class MapModel {
         })
         func safe(_ node: MapNode, ancestor: Double) -> Bool {
             let own = shifts[node.id] ?? 0
-            if let point = node.location, abs(point.x + ancestor + own / 2) > 1_000_000 { return false }
+            let displacement = ancestor + own / 2
+            if let point = node.location {
+                guard point.x.isFinite && point.y.isFinite,
+                      abs(point.x + displacement) <= 1_000_000 else { return false }
+            } else if displacement != 0, !visibleCenters.isEmpty {
+                guard let center = visibleCenters[node.id],
+                      abs(center.x + displacement) <= 1_000_000 else { return false }
+            }
             return node.children.allSatisfy { safe($0, ancestor: ancestor + own) }
         }
         guard roots.allSatisfy({ safe($0, ancestor: 0) }) else { return false }
         func shiftChildren(_ children: inout [MapNode], by distance: Double) {
+            guard distance != 0 else { return }
             for index in children.indices {
-                children[index].location?.x += distance
+                if children[index].location == nil, let center = visibleCenters[children[index].id] {
+                    children[index].location = SIMD2(Double(center.x) + distance, Double(center.y))
+                } else { children[index].location?.x += distance }
                 shiftChildren(&children[index].children, by: distance)
             }
         }
@@ -682,7 +694,7 @@ final class MapModel {
             let width = min(1000, max(60, old + delta))
             guard node.width != width else { return }
             let distance = shifts[node.id]!
-            if node.location == nil, distance < 0, let center = visibleCenters[node.id] {
+            if node.location == nil, let center = visibleCenters[node.id] {
                 node.location = SIMD2(Double(center.x) + distance / 2, Double(center.y))
             } else { node.location?.x += distance / 2 }
             shiftChildren(&node.children, by: distance)

@@ -548,12 +548,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                         copy.width = width
                         shift += Double(width - old) * (leftIDs.contains(item.id) ? -1 : 1)
                         let half = Double(width - old) * (leftIDs.contains(item.id) ? -0.5 : 0.5)
-                        if copy.location == nil, leftIDs.contains(item.id), let center = baselineCenters[item.id] {
+                        if copy.location == nil, let center = baselineCenters[item.id] {
                             copy.location = SIMD2(Double(center.x) + half, Double(center.y))
                         } else { copy.location?.x += half }
                     }
                 }
-                if ancestorShift != 0 { copy.location?.x += ancestorShift }
+                if ancestorShift != 0 {
+                    if copy.location == nil, let center = baselineCenters[item.id] {
+                        copy.location = SIMD2(Double(center.x) + ancestorShift, Double(center.y))
+                    } else { copy.location?.x += ancestorShift }
+                }
                 copy.children = preview(item.children, ancestorShift: shift)
                 return copy
             }
@@ -1363,7 +1367,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 for (side, tag) in [("left", 38), ("right", 39)] {
                     let title = side == "left" ? "Place on Left" : "Place on Right"
                     add(title, tag)
-                    menu.items.last?.state = (node.node.branchSide ?? "right") == side ? .on : .off
+                    menu.items.last?.representedObject = node.node.id
+                    let renderedSide = goesLeft(node, among: visibleNodes()) ? "left" : "right"
+                    menu.items.last?.state = renderedSide == side ? .on : .off
                 }
             }
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
@@ -1478,8 +1484,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if model.setWidth(width) { changed() }
         case 16: showFontPanel()
         case 38, 39:
-            guard commitEditing(), model.selectedIDs.count == 1 else { return }
-            if model.setRootBranchSide(item.tag == 38 ? "left" : "right", for: model.selected) { changed() }
+            guard let id = item.representedObject as? UUID,
+                  model.selectedIDs.count == 1, model.selected == id,
+                  commitEditing() else { return }
+            let nodes = visibleNodes()
+            guard let branch = nodes.first(where: { $0.node.id == id }),
+                  let parent = branch.parent, nodes.first(where: { $0.node.id == parent })?.parent == nil,
+                  goesLeft(branch, among: nodes) != (item.tag == 38) else { return }
+            if model.setRootBranchSide(item.tag == 38 ? "left" : "right", for: id) { changed() }
         case 20: arrangeMap()
         case 21: copy(nil)
         case 22: paste(nil)
