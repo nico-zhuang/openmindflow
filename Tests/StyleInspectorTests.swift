@@ -3,6 +3,9 @@ import AppKit
 @main enum StyleInspectorTests {
     static func main() {
         _ = NSApplication.shared
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
         let childID = UUID(), rootID = UUID()
         var child = MapNode(id: childID, title: "Child", children: [], folded: false)
         child.fontFamily = "Helvetica"
@@ -41,6 +44,19 @@ import AppKit
             exit(1)
         }
         assert(inspector.themeButtons.count == 3)
+        inspector.frame = NSRect(x: 0, y: 0, width: 260, height: 250)
+        inspector.layoutSubtreeIfNeeded()
+        guard let themes = inspector.themeButtons.first?.superview,
+              let themeScroll = descendants(inspector).compactMap({ $0 as? NSScrollView }).first(where: {
+                  $0.documentView.map { themes === $0 || themes.isDescendant(of: $0) } ?? false
+              }), let themeDocument = themeScroll.documentView,
+              inspector.themeButtons.allSatisfy({ $0.frame.width > 0 && $0.frame.height > 0 }),
+              themeDocument.frame.width > 0,
+              themeDocument.frame.height > themeScroll.contentView.bounds.height,
+              themeScroll.hasVerticalScroller else {
+            fputs("All three theme cards need a sized, vertically scrollable document at 260×250\n", stderr)
+            exit(1)
+        }
         inspector.selectNotes(for: rootID)
         inspector.noteTextView.string = "One note"
         assert(inspector.commitNoteEditing() && model.roots[0].note == "One note")
@@ -72,6 +88,22 @@ import AppKit
         inspector.rootShapePopup.selectItem(withTitle: "Rectangle")
         inspector.changeRootShape(inspector.rootShapePopup)
         assert(model.roots[0].rootShape == "rectangle" && model.undo())
+        guard ["Teal", "Blue", "Coral", "Gold", "Gray"].allSatisfy({
+            inspector.rootFillPopup.item(withTitle: $0)?.image != nil
+        }) && inspector.rootFillPopup.itemTitles.last == "More…" else {
+            fputs("Root fill needs five native quick-color swatches and More…\n", stderr)
+            exit(1)
+        }
+        inspector.rootFillPopup.selectItem(withTitle: "Blue")
+        NSApp.sendAction(inspector.rootFillPopup.action!, to: inspector.rootFillPopup.target,
+                         from: inspector.rootFillPopup)
+        guard model.roots[0].rootFillColor == "#3478F6FF",
+              inspector.rootFillPopup.titleOfSelectedItem == "Blue",
+              model.undo(), model.roots[0].rootFillColor == nil else {
+            fputs("Root fill preset must select the actual color and undo cleanly\n", stderr)
+            exit(1)
+        }
+        inspector.refresh()
         inspector.rootWidthPopup.selectItem(withTitle: "Medium (240 pt)")
         inspector.changeRootWidth(inspector.rootWidthPopup)
         assert(model.roots[0].width == 240 && model.undo())
@@ -135,9 +167,6 @@ import AppKit
         noteCanvas.model = MapModel(roots: [reloadedRoot], selected: rootID)
         inspector.refresh() // File Open calls this after its appearance metadata is installed.
         assert(inspector.noteTextView.string == "Externally newer note")
-        }
-        func descendants(_ view: NSView) -> [NSView] {
-            view.subviews.flatMap { [$0] + descendants($0) }
         }
         let popups = descendants(inspector).compactMap { $0 as? NSPopUpButton }
         let popupLabels = Set(popups.compactMap { $0.accessibilityLabel() })
@@ -255,6 +284,14 @@ import AppKit
         for width: CGFloat in [260, 320] {
             inspector.frame.size.width = width
             inspector.layoutSubtreeIfNeeded()
+            guard let label = descendants(inspector).compactMap({ $0 as? NSTextField }).first(where: {
+                $0.stringValue == "Canvas Background"
+            }), label.frame.width >= label.intrinsicContentSize.width - 0.5,
+                inspector.backgroundPopup.frame.width >= inspector.backgroundPopup.intrinsicContentSize.width - 0.5,
+                inspector.colorPopup.frame.width >= 120 else {
+                fputs("Canvas label, background selector, and native color selector must remain readable at 260–320pt\n", stderr)
+                exit(1)
+            }
             let controls: [NSView] = [inspector.familyPopup, inspector.fontPreview,
                                       inspector.fontSizeField, inspector.alignmentControl,
                                       inspector.colorPopup, inspector.strokeWidthPopup, inspector.strokeStylePopup]
@@ -284,6 +321,16 @@ import AppKit
         defaults.setVolatileDomain(["language": "zh-Hans"], forName: UserDefaults.argumentDomain)
         let unchangedRoots = model.roots, beforeLanguageChange = changes
         inspector.localize()
+        inspector.frame.size.width = 260
+        inspector.layoutSubtreeIfNeeded()
+        guard let canvasLabel = descendants(inspector).compactMap({ $0 as? NSTextField }).first(where: {
+            $0.stringValue == "画布背景"
+        }), canvasLabel.frame.width >= canvasLabel.intrinsicContentSize.width - 0.5,
+            inspector.backgroundPopup.frame.width >= inspector.backgroundPopup.intrinsicContentSize.width - 0.5,
+            inspector.rootFillPopup.item(withTitle: "蓝色")?.representedObject as? String == "Blue" else {
+            fputs("Chinese labels, selectors, and root colors must remain legible at 260pt\n", stderr)
+            exit(1)
+        }
         let labels = descendants(inspector).compactMap { ($0 as? NSTextField)?.stringValue }
         guard ["字体", "连接线", "字号", "宽度"].allSatisfy(labels.contains),
               inspector.familyPopup.item(at: 0)?.title == "混合",

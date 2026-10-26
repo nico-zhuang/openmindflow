@@ -99,7 +99,18 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         themes.orientation = .vertical
         themes.spacing = 12
         themes.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        themeScroll.documentView = themes
+        themes.translatesAutoresizingMaskIntoConstraints = false
+        let themeDocument = NSView()
+        themeDocument.translatesAutoresizingMaskIntoConstraints = false
+        themeScroll.documentView = themeDocument
+        themeDocument.addSubview(themes)
+        NSLayoutConstraint.activate([
+            themeDocument.widthAnchor.constraint(equalTo: themeScroll.contentView.widthAnchor),
+            themes.leadingAnchor.constraint(equalTo: themeDocument.leadingAnchor),
+            themes.trailingAnchor.constraint(equalTo: themeDocument.trailingAnchor),
+            themes.topAnchor.constraint(equalTo: themeDocument.topAnchor),
+            themes.bottomAnchor.constraint(equalTo: themeDocument.bottomAnchor)
+        ])
         for (index, theme) in InspectorTheme.allCases.enumerated() {
             let button = NSButton(title: theme.rawValue.capitalized, target: self, action: #selector(changeTheme(_:)))
             button.tag = index
@@ -124,10 +135,10 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         func row(_ title: String, _ control: NSView) {
             let label = NSTextField(labelWithString: title)
             labels[title] = label
-            label.widthAnchor.constraint(equalToConstant: 76).isActive = true
+            label.setContentCompressionResistancePriority(.required, for: .horizontal)
             let line = NSStackView(views: [label, control])
-            line.orientation = .horizontal
-            line.alignment = .centerY
+            line.orientation = title == "Canvas Background" ? .vertical : .horizontal
+            line.alignment = title == "Canvas Background" ? .leading : .centerY
             line.spacing = 8
             stack.addArrangedSubview(line)
             line.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -189,9 +200,8 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         colorPopup.setAccessibilityLabel("Connection color")
         colorPopup.target = self
         colorPopup.action = #selector(changeColorSelection(_:))
-        let colorControls = NSStackView(views: [colorPopup, colorState])
-        colorControls.spacing = 6
-        row("Color", colorControls)
+        colorPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        row("Color", colorPopup)
         strokeWidthPopup.addItems(withTitles: ["Default", "Mixed", "Custom"] + Self.widths.map(\.0))
         for item in strokeWidthPopup.itemArray { item.representedObject = item.title }
         strokeWidthPopup.setAccessibilityLabel("Connection width")
@@ -210,8 +220,11 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         rootShapePopup.target = self
         rootShapePopup.action = #selector(changeRootShape(_:))
         row("Shape", rootShapePopup)
-        rootFillPopup.addItems(withTitles: ["Default", "More…"])
-        for item in rootFillPopup.itemArray { item.representedObject = item.title }
+        rootFillPopup.addItems(withTitles: ["Default"] + Self.colors.map(\.0) + ["More…"])
+        for item in rootFillPopup.itemArray {
+            item.representedObject = item.title
+            item.image = colorPopup.item(withTitle: item.title)?.image
+        }
         rootFillPopup.target = self
         rootFillPopup.action = #selector(changeRootFill(_:))
         row("Fill", rootFillPopup)
@@ -316,7 +329,9 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         rootWidthPopup.isEnabled = rootShapePopup.isEnabled
         let root = selectedNodes().first?.0
         rootShapePopup.selectItem(withTitle: L10n.text(root?.rootShape == "rectangle" ? "Rectangle" : "Rounded", defaults: defaults))
-        rootFillPopup.selectItem(withTitle: L10n.text(root?.rootFillColor == nil ? "Default" : "More…", defaults: defaults))
+        rootFillPopup.selectItem(withTitle: L10n.text(root?.rootFillColor.flatMap { saved in
+            Self.colors.first(where: { $0.1 == saved.uppercased() })?.0
+        } ?? (root?.rootFillColor == nil ? "Default" : "More…"), defaults: defaults))
         let widthIndex = root?.width.flatMap { MapNode.widthPresets.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
         rootWidthPopup.selectItem(at: widthIndex)
         backgroundPopup.selectItem(withTitle: L10n.text(canvas.model.canvasColor == nil ? "Follow System" :
@@ -486,7 +501,9 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             panel.setTarget(self)
             panel.setAction(#selector(changeRootPanelColor(_:)))
             panel.makeKeyAndOrderFront(nil)
-        } else { changed(canvas.model.setRootFillColor(nil)) }
+        } else if let choice = rootFillPopup.selectedItem?.representedObject as? String {
+            changed(canvas.model.setRootFillColor(Self.colors.first(where: { $0.0 == choice })?.1))
+        }
     }
     @objc private func changeRootPanelColor(_ sender: NSColorPanel) {
         guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
