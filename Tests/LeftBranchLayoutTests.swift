@@ -28,6 +28,29 @@ enum LeftBranchLayoutTests {
         let leftOnlyFrames = Dictionary(uniqueKeysWithValues: mapLayout([leftOnly, second]).map { ($0.node.id, $0.frame) })
         assert(leftOnlyFrames[leftOnly.children[0].id]!.maxX <= leftOnlyFrames[leftOnly.id]!.minX - 60)
         assert(leftOnlyFrames[leftOnly.children[0].id]!.maxY < leftOnlyFrames[second.id]!.minY)
+        assert(abs(leftOnlyFrames[leftOnly.id]!.midY - (leftOnlyFrames[leftOnly.children[0].id]!.maxY - 7)) < 0.01,
+               "A sole left branch must meet the root center at its straight underline")
+
+        let tallLeftGrandchild = node(String(repeating: "Tall grandchild\n", count: 24))
+        let tallLeftChild = node(String(repeating: "Tall left child\n", count: 16),
+                                 children: [tallLeftGrandchild], side: "left")
+        let tallLeftRoot = node("Tall left root", children: [tallLeftChild])
+        let followingRoot = node("Following root")
+        let tallLaid = mapLayout([tallLeftRoot, followingRoot])
+        let tallFrames = Dictionary(uniqueKeysWithValues: tallLaid.map { ($0.node.id, $0.frame) })
+        assert(tallFrames[tallLeftChild.id]!.height > tallFrames[tallLeftRoot.id]!.height * 3 &&
+               tallFrames[tallLeftGrandchild.id]!.height > tallFrames[tallLeftChild.id]!.height,
+               "This case must exercise a tall child and taller grandchild")
+        assert(abs(tallFrames[tallLeftRoot.id]!.midY - (tallFrames[tallLeftChild.id]!.maxY - 7)) < 0.01,
+               "Even a tall left subtree must retain the straight first-branch baseline")
+        assert(tallLaid.dropLast().allSatisfy { $0.frame.minY >= 0 && $0.frame.maxY + 24 <= tallFrames[followingRoot.id]!.minY },
+               "Straight left headroom must preserve the entire subtree and the next root")
+
+        let rightOnly = node("Root", children: [node("Only child")])
+        let rightOnlyFrames = mapLayout([rightOnly]).map(\.frame)
+        assert(rightOnlyFrames == [CGRect(x: 0, y: 15.5, width: 170, height: 55),
+                                   CGRect(x: 230, y: 0, width: 170, height: 50)],
+               "All-right legacy coordinates must remain unchanged")
 
         // Native presentation coordinates are authoritative until an explicit model-side switch.
         let originalLeft = node("Imported left", children: [node("Imported descendant")])

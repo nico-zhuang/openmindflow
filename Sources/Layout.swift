@@ -178,9 +178,10 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             let rightHeight = depth == 0 ? groupHeight(children.filter { $0.branchSide != "left" }) : 0
             var leftTop = top + (height - leftHeight) / 2
             var rightTop = top + (height - (depth == 0 ? rightHeight : groupHeight(children))) / 2
-            if depth == 0, children.count == 1, let child = children.first,
-               child.branchSide != "left" {
-                rightTop = frame.midY - (heights[child.id]! + sizes[child.id]!.height) / 2 + 7
+            if depth == 0, children.count == 1, let child = children.first {
+                let straightTop = frame.midY - (heights[child.id]! + sizes[child.id]!.height) / 2 + 7
+                if child.branchSide == "left" { leftTop = straightTop }
+                else { rightTop = straightTop }
             }
             for child in children {
                 let childLeft = depth == 0 ? child.branchSide == "left" : left
@@ -192,8 +193,7 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
         }
         var top: CGFloat = 0
         for (root, height) in zip(roots, rootHeights) {
-            if !root.folded, root.children.count == 1, let child = root.children.first,
-               child.branchSide != "left" {
+            if !root.folded, root.children.count == 1, let child = root.children.first {
                 top += max(0, (heights[child.id]! + sizes[child.id]!.height - height) / 2 - 7)
             }
             place(root, depth: 0, left: false, parent: nil, top: top)
