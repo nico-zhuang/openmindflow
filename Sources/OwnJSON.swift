@@ -124,7 +124,7 @@ func checkOwnJSONNodes(_ roots: [MapNode]) throws -> Set<UUID> {
 }
 
 private func checkOwnDocument(_ document: OwnMapDocument) throws {
-    guard document.theme.map({ ["tropical", "rainbow", "candyland"].contains($0) }) ?? true,
+    guard document.theme.map({ InspectorTheme(rawValue: $0) != nil }) ?? true,
           document.canvasColor.map(MapNode.validColor) ?? true else { throw OwnJSONError.invalidAppearance }
     let ids = try checkOwnJSONNodes(document.roots)
     var edgeIDs = Set<UUID>()

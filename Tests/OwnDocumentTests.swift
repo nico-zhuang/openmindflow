@@ -72,6 +72,13 @@ enum OwnDocumentTests {
         var invalidStyled = styled
         invalidStyled.theme = "unknown"
         rejects { try writeOwnDocument(invalidStyled, to: url) }
+        for id in ["tropical", "rainbow", "candyland", "vintage", "greyscale", "teal", "slate",
+                   "blackberry", "blackboard", "coffee", "swing"] {
+            try writeOwnDocument(OwnMapDocument(roots: roots, theme: id), to: url)
+            let reopenedTheme = try readOwnDocument(url)
+            assert(reopenedTheme.theme == id, "Theme \(id) must round-trip")
+        }
+        try writeOwnDocument(styled, to: url)
         invalidStyled = styled
         invalidStyled.canvasColor = "not a color"
         rejects { try writeOwnDocument(invalidStyled, to: url) }
@@ -104,6 +111,8 @@ enum OwnDocumentTests {
         let afterRejectedWrite = try Data(contentsOf: url)
         assert(afterRejectedWrite == saved, "Rejected write must leave previous file untouched")
         let bad = folder.appendingPathComponent("bad.mindmap.json")
+        try JSONEncoder().encode(OwnMapDocument(roots: roots, theme: "unknown")).write(to: bad)
+        rejects { _ = try readOwnDocument(bad) }
         for edges in [[MapRelationship(from: left, to: UUID())], [edge, edge], invalid.relationships] {
             let bytes = try JSONEncoder().encode(OwnMapDocument(roots: roots, relationships: edges))
             try bytes.write(to: bad)

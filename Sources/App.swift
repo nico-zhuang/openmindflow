@@ -391,7 +391,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard rgba.count == 4 else { return nil }
             return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
         }
-        return composite(model.canvasColor.flatMap(strokeColor) ?? imported ?? system, over: system)
+        let themed = InspectorTheme(rawValue: model.theme ?? "")?.canvasBackground.flatMap(strokeColor)
+        return composite(model.canvasColor.flatMap(strokeColor) ?? themed ?? imported ?? system, over: system)
     }
     private func rootFill(for node: MapNode) -> NSColor {
         if let hex = node.rootFillColor ?? InspectorTheme(rawValue: model.theme ?? "")?.rootFill,
@@ -403,9 +404,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func titleColor(for node: MapNode, isRoot: Bool, placeholder: Bool = false) -> NSColor {
         let inherited = isRoot ? embeddedTheme?.mainNodes.first?.font?.color : embeddedTheme?.baseSubnode?.font?.color
         let rgba = nativePresentation[node.id]?.font?.color ?? inherited
+        let theme = InspectorTheme(rawValue: model.theme ?? "")
+        let themedTitle = (isRoot ? theme?.rootTitleColor : theme?.branchTitleColor).flatMap(strokeColor)
         let candidate: NSColor = rgba?.count == 4
             ? NSColor(srgbRed: rgba![0], green: rgba![1], blue: rgba![2], alpha: rgba![3])
-            : (placeholder ? .secondaryLabelColor : .labelColor)
+            : (placeholder ? .secondaryLabelColor : themedTitle ?? .labelColor)
         let background = isRoot ? composite(rootFill(for: node), over: canvasBackground) : canvasBackground
         func luminance(_ color: NSColor) -> CGFloat {
             let rgb = color.usingColorSpace(.sRGB)!

@@ -725,7 +725,7 @@ final class MapModel {
 
     @discardableResult
     func setTheme(_ value: String?) -> Bool {
-        guard value.map({ ["tropical", "rainbow", "candyland"].contains($0) }) ?? true,
+        guard value.map({ InspectorTheme(rawValue: $0) != nil }) ?? true,
               value != theme,
               Self.fitsSavedJSON(roots, relationships: relationships, theme: value, canvasColor: canvasColor)
         else { return false }
