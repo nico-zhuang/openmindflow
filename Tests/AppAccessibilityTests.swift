@@ -64,7 +64,7 @@ if CommandLine.arguments.contains("--close-flow") {
         }
         return false
     }
-    func mapWindow() -> AXUIElement? { windows().first { title($0).contains("OpenMindFlow") } }
+    func mapWindow() -> AXUIElement? { windows().first { title($0).contains("MindMap") } }
     func alertWindow() -> AXUIElement? {
         windows().first { window in
             (attribute(window, kAXChildrenAttribute) as? [AXUIElement] ?? []).contains { title($0) == "Discard Changes" }
