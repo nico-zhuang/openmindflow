@@ -24,6 +24,86 @@ enum InspectorThemePaletteTests {
             assert(theme.branchTitleColor.map(MapNode.validColor) ?? true)
         }
         assert(Set(InspectorTheme.allCases.compactMap(\.canvasBackground)).count == 8)
+
+        // Independent category checks from the eleven-theme reference screenshot: these do not
+        // compare palette values to themselves or require pixel-perfect screenshot matching.
+        func channels(_ hex: String) -> (Double, Double, Double) {
+            let value = UInt32(hex.dropFirst(), radix: 16)!
+            return (Double((value >> 24) & 255) / 255,
+                    Double((value >> 16) & 255) / 255,
+                    Double((value >> 8) & 255) / 255)
+        }
+        func luminance(_ hex: String) -> Double {
+            let (r, g, b) = channels(hex)
+            func linear(_ channel: Double) -> Double {
+                channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        func saturation(_ hex: String) -> Double {
+            let (r, g, b) = channels(hex)
+            let high = max(r, g, b)
+            return high == 0 ? 0 : (high - min(r, g, b)) / high
+        }
+        func hueBucket(_ hex: String) -> Int {
+            let (r, g, b) = channels(hex)
+            let high = max(r, g, b), low = min(r, g, b), delta = high - low
+            guard delta > 0 else { return -1 }
+            let sector: Double
+            if high == r { sector = (g - b) / delta }
+            else if high == g { sector = (b - r) / delta + 2 }
+            else { sector = (r - g) / delta + 4 }
+            return Int(floor((sector + 6).truncatingRemainder(dividingBy: 6)))
+        }
+        func contrast(_ a: String, _ b: String) -> Double {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        let visualRanges: [(InspectorTheme, ClosedRange<Double>, ClosedRange<Double>)] = [
+            (.vintage, 0.88...1, 0.045...0.17),    // near-white / chocolate
+            (.greyscale, 0.80...0.95, 0.84...1), // light neutral / near-white
+            (.teal, 0.76...0.92, 0.86...1),     // pale cyan / white
+            (.slate, 0.055...0.16, 0.86...1),   // blue-gray / white
+            (.blackberry, 0.01...0.065, 0...0.035), // wine / near-black
+            (.blackboard, 0.01...0.065, 0...0.035), // forest / near-black
+            (.coffee, 0...0.035, 0...0.018),   // charcoal / black
+            (.swing, 0...0.035, 0.025...0.11) // black-purple / muted violet
+        ]
+        for (theme, backdropRange, rootRange) in visualRanges {
+            let backdrop = theme.canvasBackground!
+            assert(backdropRange.contains(luminance(backdrop)), "\(theme) screenshot background light/dark category")
+            assert(rootRange.contains(luminance(theme.rootFill)), "\(theme) screenshot root light/dark category")
+            assert(contrast(theme.rootTitleColor!, theme.rootFill) >= 4.5,
+                   "\(theme) root title candidate must contrast with root fill")
+            assert(contrast(theme.branchTitleColor!, backdrop) >= 4.5,
+                   "\(theme) branch title candidate must contrast with canvas")
+        }
+        let (tealR, tealG, tealB) = channels(InspectorTheme.teal.canvasBackground!)
+        assert(tealG > tealR + 0.035 && tealB > tealR + 0.035, "Teal canvas must be cyan, not neutral")
+        let (slateR, slateG, slateB) = channels(InspectorTheme.slate.canvasBackground!)
+        assert(slateB > slateR && slateG > slateR, "Slate canvas must be blue-gray")
+        let (berryR, _, berryB) = channels(InspectorTheme.blackberry.canvasBackground!)
+        assert(berryR > berryB * 0.85, "Blackberry canvas must be wine-plum")
+        let (boardR, boardG, _) = channels(InspectorTheme.blackboard.canvasBackground!)
+        assert(boardG > boardR * 1.3, "Blackboard canvas must be forest green")
+        for color in InspectorTheme.greyscale.branchColors {
+            assert(saturation(color) <= 0.055 && luminance(color) < 0.48,
+                   "Greyscale branches must be dark neutral strokes")
+        }
+        for theme in [InspectorTheme.vintage, .teal, .slate, .blackberry, .blackboard, .coffee, .swing] {
+            let colors = theme.branchColors
+            assert(colors.count >= 6, "\(theme) screenshot shows six varied branch strokes")
+            let minSaturation = theme == .blackboard ? 0.30 : 0.45
+            assert(colors.filter { saturation($0) >= minSaturation }.count >= 5,
+                   "\(theme) branches must retain distinct colorful strokes")
+            assert(Set(colors.map(hueBucket)).count >= 4, "\(theme) branches must span several hue families")
+        }
+        assert(InspectorTheme.coffee.branchColors.filter { saturation($0) >= 0.70 }.count >= 5,
+               "Coffee branches must look fluorescent against charcoal")
+        let tealBuckets = Set(InspectorTheme.teal.branchColors.map(hueBucket))
+        assert([0, 2, 3, 4, 5].filter(tealBuckets.contains).count >= 4,
+               "Teal needs warm reds/oranges plus cool teals/purples")
+
         let root = MapNode(id: UUID(), title: "Root", children: [], folded: false)
         let model = MapModel(roots: [root], selected: root.id)
         for id in ids {
@@ -100,7 +180,7 @@ enum InspectorThemePaletteTests {
                 assert(matches(corner, backdrop, tolerance: 0.13), "\(theme) detached PNG background \(String(describing: corner)) expected \(backdrop)")
             }
             let exportedFill = hasInk(exported, theme.rootFill, tolerance: 0.13)
-            let exportedBranch = hasInk(exported, theme.branchColors[0], tolerance: 0.055)
+            let exportedBranch = hasInk(exported, theme.branchColors[0], tolerance: 0.13) // PNG profile conversion shifts saturated RGB channels.
             assert(exportedFill && exportedBranch,
                    "\(theme) exported fill=\(exportedFill) branch=\(exportedBranch) diverges")
         }

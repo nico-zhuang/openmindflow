@@ -6,14 +6,13 @@ enum InspectorTheme: String, CaseIterable, Codable {
         switch self {
         case .tropical, .rainbow: "#FFFFFFFF"
         case .candyland: "#EF1760FF"
-        case .vintage: "#B76052FF"
-        case .greyscale: "#454B50FF"
-        case .teal: "#147D80FF"
-        case .slate: "#687E91FF"
-        case .blackberry: "#805090FF"
-        case .blackboard: "#D5C393FF"
-        case .coffee: "#79543FFF"
-        case .swing: "#EF745BFF"
+        case .vintage: "#564541FF"
+        case .greyscale: "#FAFAFAFF"
+        case .teal, .slate: "#FFFFFFFF"
+        case .blackberry: "#202020FF"
+        case .blackboard: "#101310FF"
+        case .coffee: "#080909FF"
+        case .swing: "#443449FF"
         }
     }
 
@@ -22,14 +21,14 @@ enum InspectorTheme: String, CaseIterable, Codable {
         case .tropical: ["#52C6C4FF", "#FF9955FF", "#F6CC49FF", "#A94ECCFF"]
         case .rainbow: ["#7CCF8DFF", "#A9A6F0FF", "#FF9A60FF", "#46C3C9FF"]
         case .candyland: ["#A1D56FFF", "#F248A8FF", "#3EB9B6FF", "#C95A6AFF"]
-        case .vintage: ["#AE775AFF", "#829777FF", "#C39C57FF", "#738898FF"]
-        case .greyscale: ["#6C7378FF", "#93989CFF", "#50565BFF", "#AAB0B3FF"]
-        case .teal: ["#178C8EFF", "#41A99EFF", "#397A90FF", "#79B5A2FF"]
-        case .slate: ["#AAC5D1FF", "#DBB49EFF", "#94A9C3FF", "#B8C4AAFF"]
-        case .blackberry: ["#CB91C5FF", "#B19BDDFF", "#E4A6ADFF", "#91B0CFFF"]
-        case .blackboard: ["#E0B86EFF", "#91C6AFFF", "#E4A5A0FF", "#B8B7D9FF"]
-        case .coffee: ["#9E704CFF", "#B48B69FF", "#718C78FF", "#AD806DFF"]
-        case .swing: ["#E48166FF", "#69A7A0FF", "#D9AE55FF", "#9C85B7FF"]
+        case .vintage: ["#94B531FF", "#359780FF", "#2A9CB2FF", "#C05027FF", "#B765A1FF", "#A36A30FF"]
+        case .greyscale: ["#444444FF", "#545454FF", "#626262FF", "#737373FF", "#4B4B4BFF", "#5B5B5BFF"]
+        case .teal: ["#B54CCBFF", "#F3A23BFF", "#DE5F70FF", "#319E94FF", "#687FDBFF", "#EF81CBFF"]
+        case .slate: ["#FF9D5DFF", "#FFD448FF", "#BB62D5FF", "#F1667AFF", "#56A8D8FF", "#4BC7C9FF"]
+        case .blackberry: ["#55C9C5FF", "#FFA461FF", "#EC5884FF", "#66ADEEFF", "#FBCB45FF", "#CF59DCFF"]
+        case .blackboard: ["#C65276FF", "#EE8859FF", "#AF67B9FF", "#D6B44BFF", "#6E9CE3FF", "#A6BE4BFF"]
+        case .coffee: ["#ACFF00FF", "#35F445FF", "#FFFF36FF", "#00DDBBFF", "#FFAD22FF", "#32B7FDFF"]
+        case .swing: ["#D2A949FF", "#FFA64DFF", "#F0F075FF", "#EF7058FF", "#25ABA3FF", "#198CBFFF"]
         }
     }
 
@@ -37,14 +36,14 @@ enum InspectorTheme: String, CaseIterable, Codable {
     var canvasBackground: String? {
         switch self {
         case .tropical, .rainbow, .candyland: nil
-        case .vintage: "#F5EBD9FF"
-        case .greyscale: "#F0F1F0FF"
-        case .teal: "#DDF2EFFF"
-        case .slate: "#283440FF"
-        case .blackberry: "#2C2138FF"
-        case .blackboard: "#263B34FF"
-        case .coffee: "#EFE3D2FF"
-        case .swing: "#FFF1E3FF"
+        case .vintage: "#FAFAF8FF"
+        case .greyscale: "#EFEFEFFF"
+        case .teal: "#D8F9FBFF"
+        case .slate: "#455C68FF"
+        case .blackberry: "#39132EFF"
+        case .blackboard: "#12251AFF"
+        case .coffee: "#1F1E1BFF"
+        case .swing: "#171119FF"
         }
     }
 
@@ -52,16 +51,16 @@ enum InspectorTheme: String, CaseIterable, Codable {
     var rootTitleColor: String? {
         switch self {
         case .tropical, .rainbow, .candyland: nil
-        case .blackboard: "#283B34FF"
-        case .vintage, .greyscale, .teal, .slate, .blackberry, .coffee, .swing: "#FFFFFFFF"
+        case .greyscale, .teal, .slate: "#252D2CFF"
+        case .vintage, .blackberry, .blackboard, .coffee, .swing: "#FFFFFFFF"
         }
     }
 
     var branchTitleColor: String? {
         switch self {
         case .tropical, .rainbow, .candyland: nil
-        case .slate, .blackberry, .blackboard: "#F6F3EDFF"
-        case .vintage, .greyscale, .teal, .coffee, .swing: "#252D2CFF"
+        case .slate, .blackberry, .blackboard, .coffee, .swing: "#F6F3EDFF"
+        case .vintage, .greyscale, .teal: "#252D2CFF"
         }
     }
 }
