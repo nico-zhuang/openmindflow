@@ -53,6 +53,17 @@ if bash "$package" "$app" "$scratch/linked.dmg"; then echo 'ERROR: output symlin
 
 cp "$app/Contents/Info.plist" "$scratch/valid-info.plist"
 cp "$app/Contents/Resources/OpenMindFlow.icns" "$scratch/valid-icon.icns"
+for metadata in 'CFBundleDisplayName NotOpenMindFlow' 'CFBundlePackageType BAD!' 'LSMinimumSystemVersion 10.12'; do
+  field="${metadata%% *}"
+  value="${metadata#* }"
+  /usr/libexec/PlistBuddy -c "Set :$field $value" "$app/Contents/Info.plist"
+  codesign --force --sign - --timestamp=none "$app"
+  if bash "$package" "$app" "$scratch/invalid-$field.dmg"; then
+    echo "ERROR: validly self-signed but wrong $field was accepted" >&2; exit 1
+  fi
+  cp "$scratch/valid-info.plist" "$app/Contents/Info.plist"
+  codesign --force --sign - --timestamp=none "$app"
+done
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier wrong.id' "$app/Contents/Info.plist"
 if bash "$package" "$app" "$scratch/invalid-id.dmg"; then echo 'ERROR: invalid bundle ID accepted' >&2; exit 1; fi
 cp "$scratch/valid-info.plist" "$app/Contents/Info.plist"

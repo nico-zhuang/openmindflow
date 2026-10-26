@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Only package a freshly built, locally signed app inside its own private scratch.
+# Only package a metadata-checked, locally signed app inside owned private scratch.
+# Ad-hoc signatures do not authenticate its builder, publisher, or source provenance.
 if [[ $# != 2 || "$1" != /* || "$2" != /* ]]; then
   echo 'Usage: package-openmindflow-local-dmg.sh /private/tmp/openmindflow-local-*/OpenMindFlow.app /private/tmp/openmindflow-local-*/*.dmg' >&2
   exit 2
@@ -28,6 +29,9 @@ icon="$app/Contents/Resources/OpenMindFlow.icns"
 if [[ ! -f "$plist" || ! -f "$icon" || ! -f "$app/Contents/MacOS/OpenMindFlow" ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" != local.openmindflow.native-editor ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist" 2>/dev/null)" != OpenMindFlow ||
+       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$plist" 2>/dev/null)" != OpenMindFlow ||
+       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$plist" 2>/dev/null)" != APPL ||
+       "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist" 2>/dev/null)" != 26.0 ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null)" != OpenMindFlow ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist" 2>/dev/null)" != OpenMindFlow.icns ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" != 0.3.0 ||
