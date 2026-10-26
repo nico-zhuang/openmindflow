@@ -4,9 +4,9 @@ import Darwin
 @main
 enum InspectorThemePaletteTests {
     static func main() {
-        let ids = ["tropical", "rainbow", "candyland", "vintage", "greyscale", "teal", "slate",
-                   "blackberry", "blackboard", "coffee", "swing"]
-        assert(InspectorTheme.allCases.map(\.rawValue) == ids, "Eleven stable theme IDs must be selectable")
+        let ids = ["tropical", "rainbow", "candyland", "teal", "slate", "coffee"]
+        let removed = ["vintage", "greyscale", "blackberry", "blackboard", "swing"]
+        assert(InspectorTheme.allCases.map(\.rawValue) == ids, "Six supported theme IDs remain in stable order")
         let legacy: [(InspectorTheme, String, [String])] = [
             (.tropical, "#FFFFFFFF", ["#52C6C4FF", "#FF9955FF", "#F6CC49FF", "#A94ECCFF"]),
             (.rainbow, "#FFFFFFFF", ["#7CCF8DFF", "#A9A6F0FF", "#FF9A60FF", "#46C3C9FF"]),
@@ -23,9 +23,9 @@ enum InspectorThemePaletteTests {
             assert(theme.rootTitleColor.map(MapNode.validColor) ?? true)
             assert(theme.branchTitleColor.map(MapNode.validColor) ?? true)
         }
-        assert(Set(InspectorTheme.allCases.compactMap(\.canvasBackground)).count == 8)
+        assert(Set(InspectorTheme.allCases.compactMap(\.canvasBackground)).count == 3)
 
-        // Independent category checks from the eleven-theme reference screenshot: these do not
+        // Independent category checks from the four-style reference screenshot: these do not
         // compare palette values to themselves or require pixel-perfect screenshot matching.
         func channels(_ hex: String) -> (Double, Double, Double) {
             let value = UInt32(hex.dropFirst(), radix: 16)!
@@ -60,14 +60,9 @@ enum InspectorThemePaletteTests {
             return (max(x, y) + 0.05) / (min(x, y) + 0.05)
         }
         let visualRanges: [(InspectorTheme, ClosedRange<Double>, ClosedRange<Double>)] = [
-            (.vintage, 0.88...1, 0.045...0.17),    // near-white / chocolate
-            (.greyscale, 0.80...0.95, 0.84...1), // light neutral / near-white
-            (.teal, 0.76...0.92, 0.86...1),     // pale cyan / white
-            (.slate, 0.055...0.16, 0.86...1),   // blue-gray / white
-            (.blackberry, 0.01...0.065, 0...0.035), // wine / near-black
-            (.blackboard, 0.01...0.065, 0...0.035), // forest / near-black
-            (.coffee, 0...0.035, 0...0.018),   // charcoal / black
-            (.swing, 0...0.035, 0.025...0.11) // black-purple / muted violet
+            (.teal, 0.76...0.92, 0.86...1),   // pale cyan / white
+            (.slate, 0.055...0.16, 0.86...1), // blue-gray / white
+            (.coffee, 0...0.035, 0...0.018)  // charcoal / black
         ]
         for (theme, backdropRange, rootRange) in visualRanges {
             let backdrop = theme.canvasBackground!
@@ -82,19 +77,10 @@ enum InspectorThemePaletteTests {
         assert(tealG > tealR + 0.035 && tealB > tealR + 0.035, "Teal canvas must be cyan, not neutral")
         let (slateR, slateG, slateB) = channels(InspectorTheme.slate.canvasBackground!)
         assert(slateB > slateR && slateG > slateR, "Slate canvas must be blue-gray")
-        let (berryR, _, berryB) = channels(InspectorTheme.blackberry.canvasBackground!)
-        assert(berryR > berryB * 0.85, "Blackberry canvas must be wine-plum")
-        let (boardR, boardG, _) = channels(InspectorTheme.blackboard.canvasBackground!)
-        assert(boardG > boardR * 1.3, "Blackboard canvas must be forest green")
-        for color in InspectorTheme.greyscale.branchColors {
-            assert(saturation(color) <= 0.055 && luminance(color) < 0.48,
-                   "Greyscale branches must be dark neutral strokes")
-        }
-        for theme in [InspectorTheme.vintage, .teal, .slate, .blackberry, .blackboard, .coffee, .swing] {
+        for theme in [InspectorTheme.teal, .slate, .coffee] {
             let colors = theme.branchColors
             assert(colors.count >= 6, "\(theme) screenshot shows six varied branch strokes")
-            let minSaturation = theme == .blackboard ? 0.30 : 0.45
-            assert(colors.filter { saturation($0) >= minSaturation }.count >= 5,
+            assert(colors.filter { saturation($0) >= 0.45 }.count >= 5,
                    "\(theme) branches must retain distinct colorful strokes")
             assert(Set(colors.map(hueBucket)).count >= 4, "\(theme) branches must span several hue families")
         }
@@ -114,8 +100,10 @@ enum InspectorThemePaletteTests {
             assert(model.setTheme(nil))
         }
         let invalid = MapModel(roots: [root], selected: root.id)
-        assert(!invalid.setTheme("invalid") && invalid.theme == nil)
-        assert(!invalid.undo(), "Invalid ID must not create history")
+        for id in removed + ["invalid"] {
+            assert(!invalid.setTheme(id) && invalid.theme == nil, "Removed theme \(id) must be rejected")
+            assert(!invalid.undo(), "Invalid ID must not create history")
+        }
         _ = NSApplication.shared // Offscreen graphics only; no window or focus changes.
         func rgb(_ hex: String) -> NSColor {
             let bytes = UInt32(hex.dropFirst(), radix: 16)!
@@ -186,7 +174,8 @@ enum InspectorThemePaletteTests {
         }
         canvasModel.selected = rootWithBranch.children[0].id
         assert(canvasModel.setBranchStroke(color: "#123456FF"))
-        assert(canvasModel.setTheme("blackboard"))
+        assert(canvasModel.setTheme(nil))
+        assert(canvasModel.setTheme("coffee"))
         canvas.needsDisplay = true // The real inspector invalidates canvas after model changes.
         assert(hasInk(screen(), "#123456FF"), "Explicit node stroke overrides theme")
         assert(canvasModel.setCanvasColor("#AABBCCFF"))
@@ -198,8 +187,8 @@ enum InspectorThemePaletteTests {
             backgroundColor: [0.2, 0.3, 0.4, 1], allowNodeStrokeColorVariation: nil,
             baseSubnode: nil, mainNodes: [], subnodeLevels: [])
         assert(matches(screen().colorAt(x: 0, y: 0), "#334D66FF"), "Imported background survives without a theme")
-        assert(canvasModel.setTheme("vintage"))
-        assert(matches(screen().colorAt(x: 0, y: 0), InspectorTheme.vintage.canvasBackground!),
+        assert(canvasModel.setTheme("teal"))
+        assert(matches(screen().colorAt(x: 0, y: 0), InspectorTheme.teal.canvasBackground!),
                "Chosen theme backdrop supersedes imported fallback")
         canvasModel.selected = root.id
         assert(canvasModel.setRootFillColor("#103254FF"))

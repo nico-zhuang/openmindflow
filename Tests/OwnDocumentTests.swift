@@ -72,11 +72,28 @@ enum OwnDocumentTests {
         var invalidStyled = styled
         invalidStyled.theme = "unknown"
         rejects { try writeOwnDocument(invalidStyled, to: url) }
-        for id in ["tropical", "rainbow", "candyland", "vintage", "greyscale", "teal", "slate",
-                   "blackberry", "blackboard", "coffee", "swing"] {
+        let supported = ["tropical", "rainbow", "candyland", "teal", "slate", "coffee"]
+        assert(InspectorTheme.allCases.map(\.rawValue) == supported, "Own JSON supports precisely six ordered IDs")
+        for id in supported {
             try writeOwnDocument(OwnMapDocument(roots: roots, theme: id), to: url)
             let reopenedTheme = try readOwnDocument(url)
             assert(reopenedTheme.theme == id, "Theme \(id) must round-trip")
+            if let theme = InspectorTheme(rawValue: id), id == "rainbow" || id == "candyland" {
+                assert(theme.rootFill == (id == "rainbow" ? "#FFFFFFFF" : "#EF1760FF"))
+                assert(theme.canvasBackground == nil, "Legacy theme keeps native background")
+                assert(theme.branchColors == (id == "rainbow"
+                    ? ["#7CCF8DFF", "#A9A6F0FF", "#FF9A60FF", "#46C3C9FF"]
+                    : ["#A1D56FFF", "#F248A8FF", "#3EB9B6FF", "#C95A6AFF"]))
+            }
+        }
+        for id in ["vintage", "greyscale", "blackberry", "blackboard", "swing"] {
+            var withdrawn = styled
+            withdrawn.theme = id
+            rejects { try writeOwnDocument(withdrawn, to: url) }
+            let encoded = try JSONEncoder().encode(withdrawn)
+            let invalidURL = folder.appendingPathComponent("withdrawn-\(id).mindmap.json")
+            try encoded.write(to: invalidURL)
+            rejects { _ = try readOwnDocument(invalidURL) }
         }
         try writeOwnDocument(styled, to: url)
         invalidStyled = styled
