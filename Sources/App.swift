@@ -2,6 +2,15 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
+// World or screen rectangles use the same coordinate space; only the caller supplies the zoomed inset.
+func branchConnectorEndpoints(parent: CGRect, child: CGRect, parentIsRoot: Bool,
+                              goesLeft: Bool, baselineInset: CGFloat) -> (start: CGPoint, end: CGPoint, controlX: CGFloat) {
+    let start = CGPoint(x: goesLeft ? parent.minX : parent.maxX,
+                        y: parentIsRoot ? parent.midY : parent.maxY - baselineInset)
+    let end = CGPoint(x: goesLeft ? child.maxX : child.minX, y: child.maxY - baselineInset)
+    return (start, end, (start.x + end.x) / 2)
+}
+
 private final class MapNodeAX: NSAccessibilityElement {
     weak var canvas: MapCanvas?
     var nodeID: UUID?
@@ -212,7 +221,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
 
     func plusFrameForAccessibility(_ id: UUID) -> CGRect? {
         guard let item = previewGeometry().nodes.first(where: { $0.node.id == id }) else { return nil }
-        let point = plusPoint(item)
+        let point = plusPoint(item, among: previewGeometry().nodes)
         let rect = CGRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24)
         return window?.convertToScreen(convert(rect, to: nil)) ?? rect
     }
@@ -429,13 +438,26 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                        blue: CGFloat((value >> 8) & 255) / 255,
                        alpha: CGFloat(value & 255) / 255)
     }
-    private func plusPoint(_ item: LaidOutNode) -> CGPoint {
+    private func goesLeft(_ item: LaidOutNode, among nodes: [LaidOutNode]) -> Bool {
+        guard item.parent != nil else { return false }
+        var branch = item
+        while let parentID = branch.parent, let parent = nodes.first(where: { $0.node.id == parentID }) {
+            if parent.parent == nil {
+                if let side = branch.node.branchSide { return side == "left" }
+                // Imported nil-side positions can be on either side of the root; infer from real layout.
+                return branch.frame.midX < parent.frame.midX
+            }
+            branch = parent
+        }
+        return false
+    }
+    private func plusPoint(_ item: LaidOutNode, among nodes: [LaidOutNode]) -> CGPoint {
         let box = screen(item.frame)
-        return CGPoint(x: box.maxX + 15 * zoom,
+        return CGPoint(x: goesLeft(item, among: nodes) ? box.minX - 15 * zoom : box.maxX + 15 * zoom,
                        y: item.parent == nil ? box.midY : box.maxY - 7 * zoom)
     }
-    private func plusHit(_ point: CGPoint, item: LaidOutNode) -> Bool {
-        let center = plusPoint(item)
+    private func plusHit(_ point: CGPoint, item: LaidOutNode, among nodes: [LaidOutNode]) -> Bool {
+        let center = plusPoint(item, among: nodes)
         return hypot(point.x - center.x, point.y - center.y) <= max(12, 12 * zoom)
     }
     private func selectionBox(_ item: LaidOutNode) -> CGRect {
@@ -819,13 +841,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         func baseline(_ box: CGRect) -> CGFloat { box.maxY - 7 * zoom }
         for item in nodes {
             guard let parent = nodes.first(where: { $0.node.id == item.parent }) else { continue }
-            let start = screen(parent.frame), end = screen(item.frame)
+            let points = branchConnectorEndpoints(parent: screen(parent.frame), child: screen(item.frame),
+                parentIsRoot: parent.parent == nil, goesLeft: goesLeft(item, among: nodes), baselineInset: 7 * zoom)
             let line = NSBezierPath()
-            let startY = parent.parent == nil ? start.midY : baseline(start)
-            line.move(to: CGPoint(x: start.maxX, y: startY))
-            line.curve(to: CGPoint(x: end.minX, y: baseline(end)),
-                       controlPoint1: CGPoint(x: (start.maxX + end.minX) / 2, y: startY),
-                       controlPoint2: CGPoint(x: (start.maxX + end.minX) / 2, y: baseline(end)))
+            line.move(to: points.start)
+            line.curve(to: points.end,
+                       controlPoint1: CGPoint(x: points.controlX, y: points.start.y),
+                       controlPoint2: CGPoint(x: points.controlX, y: points.end.y))
             line.lineWidth = strokeWidth(item)
             line.lineCapStyle = .round
             if dashed(item) { line.setLineDash([max(8 * zoom, line.lineWidth * 2),
@@ -881,7 +903,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             guard let text = item.node.note?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty else { return }
             // Child paper sits beyond the underline; root paper stays inside the filled shape.
-            let x = item.parent == nil ? box.maxX - 22 * zoom : box.maxX + 8 * zoom
+            let x = item.parent == nil ? box.maxX - 22 * zoom :
+                (goesLeft(item, among: nodes) ? box.minX - 20 * zoom : box.maxX + 8 * zoom)
             let y = item.parent == nil ? box.midY - 6 * zoom : baseline(box) - 25 * zoom
             let paper = NSBezierPath()
             paper.move(to: CGPoint(x: x, y: y))
@@ -928,7 +951,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 (hovered ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
                 path.stroke()
                 if hovered {
-                    let dot = NSBezierPath(ovalIn: CGRect(x: box.minX - 4 * zoom,
+                    let connectionX = goesLeft(item, among: nodes) ? box.maxX : box.minX
+                    let dot = NSBezierPath(ovalIn: CGRect(x: connectionX - 4 * zoom,
                         y: baseline(box) - 4 * zoom, width: 8 * zoom, height: 8 * zoom))
                     NSColor.controlAccentColor.setFill()
                     dot.fill()
@@ -1014,7 +1038,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             border.stroke()
         }
         for node in nodes where hoveredPlus.contains(node.node.id) && dragSource == nil && editor == nil && !handTool {
-            let center = plusPoint(node)
+            let center = plusPoint(node, among: nodes)
             let circle = NSBezierPath(ovalIn: CGRect(x: center.x - 9, y: center.y - 9,
                 width: 18, height: 18))
             NSColor.controlBackgroundColor.setFill()
@@ -1045,7 +1069,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 width: 22, height: 22), cursor: .resizeLeftRight)
         }
         for item in nodes where hoveredPlus.contains(item.node.id) {
-            let point = plusPoint(item)
+            let point = plusPoint(item, among: nodes)
             addCursorRect(CGRect(x: point.x - 12, y: point.y - 12,
                 width: 24, height: 24), cursor: .pointingHand)
         }
@@ -1585,7 +1609,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         dragOrigin = point
         if handTool { window?.makeFirstResponder(self); return }
         if event.clickCount == 1,
-           let node = hitNodes.last(where: { plusHit(point, item: $0) }) {
+           let node = hitNodes.last(where: { plusHit(point, item: $0, among: hitNodes) }) {
             hoveredPlus.removeAll()
             dragOrigin = nil
             model.selected = node.node.id

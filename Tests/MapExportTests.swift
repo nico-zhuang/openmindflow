@@ -186,6 +186,85 @@ enum MapExportTests {
         assert(importedImage.pixelsWide <= 8192 && importedImage.pixelsHigh <= 8192)
         assert(importedImage.pixelsWide * importedImage.pixelsHigh <= 32_000_000)
         assert(abs(importedImage.size.width - importedPoints.width) < 3)
+        // Mixed, imported nil-side frames must set detached export bounds (not a fresh default layout).
+        var mixedLeft = MapNode(id: UUID(), title: "LEFT NOTE", children: [], folded: false)
+        mixedLeft.note = "Left context"
+        mixedLeft.branchStrokeColor = "#FF2020FF"
+        var mixedRight = MapNode(id: UUID(), title: "RIGHT NOTE", children: [], folded: false)
+        mixedRight.note = "Right context"
+        mixedRight.branchStrokeColor = "#2020FFFF"
+        let mixedRoot = MapNode(id: UUID(), title: "MIXED ROOT", children: [mixedLeft, mixedRight], folded: false)
+        let mixedModel = MapModel(roots: [mixedRoot], selected: mixedRoot.id)
+        let mixed = MapCanvas(model: mixedModel)
+        mixed.frame = CGRect(x: 0, y: 0, width: 500, height: 400)
+        mixed.appearance = NSAppearance(named: .aqua)
+        mixed.nativePresentation[mixedRoot.id] = MindNodePresentation(location: CGPoint(x: 100, y: 100),
+            maxWidth: nil, allowToShrinkWidth: nil, font: nil, styleChangedByUser: nil, fillColor: nil)
+        mixed.nativePresentation[mixedLeft.id] = MindNodePresentation(location: CGPoint(x: -1700, y: 120),
+            maxWidth: nil, allowToShrinkWidth: nil, font: nil, styleChangedByUser: nil, fillColor: nil)
+        mixed.nativePresentation[mixedRight.id] = MindNodePresentation(location: CGPoint(x: 1700, y: 120),
+            maxWidth: nil, allowToShrinkWidth: nil, font: nil, styleChangedByUser: nil, fillColor: nil)
+        let originals = mixedModel.roots
+        let originalPresentation = mixed.nativePresentation
+        let mixedSource = scratch.appendingPathComponent("mixed-source.mindmap.json")
+        try writeOwnJSON(originals, to: mixedSource)
+        let mixedSourceBytes = try Data(contentsOf: mixedSource)
+        let mixedFrames = [mixedRoot.id, mixedLeft.id, mixedRight.id].map { mixed.frameForAccessibility($0)! }
+        let mixedExtent = mixedFrames.reduce(CGRect.null) { $0.union($1) }
+        var mixedPDFSize = CGSize.zero
+        for (format, name) in [(MapExportFormat.png, "mixed.png"), (.pdf, "mixed.pdf"), (.jpeg, "mixed.jpg")] {
+            let output = scratch.appendingPathComponent(name)
+            try exportMap(mixed, as: format, to: output)
+            let bytes = try Data(contentsOf: output)
+            if format == .pdf {
+                let document = CGPDFDocument(CGDataProvider(data: bytes as CFData)!)!
+                mixedPDFSize = document.page(at: 1)!.getBoxRect(.mediaBox).size
+                assert(mixedPDFSize.width >= mixedExtent.width + 100 && mixedPDFSize.height >= mixedExtent.height + 100,
+                       "Mixed imported left/right PDF MediaBox must include full world bounds plus margin")
+            } else {
+                let raster = NSBitmapImageRep(data: bytes)!
+                assert(raster.pixelsWide >= Int(mixedExtent.width + 100) && raster.pixelsHigh >= Int(mixedExtent.height + 100),
+                       "Mixed imported left/right \(name) raster must include full world bounds")
+                var leftInk = false, rightInk = false
+                for x in stride(from: 0, to: raster.pixelsWide, by: 2) {
+                    for y in stride(from: 0, to: raster.pixelsHigh, by: 2) {
+                        guard let pixel = raster.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        if pixel.redComponent > 0.7 && pixel.greenComponent < 0.4 && pixel.blueComponent < 0.4 && x < raster.pixelsWide / 3 { leftInk = true }
+                        if pixel.blueComponent > 0.7 && pixel.greenComponent < 0.4 && pixel.redComponent < 0.4 && x > raster.pixelsWide * 2 / 3 { rightInk = true }
+                    }
+                }
+                assert(leftInk && rightInk, "Both explicitly colored, noted side branches must render without clipping in \(name)")
+                if format == .jpeg {
+                    assert(abs(CGFloat(raster.pixelsWide) - mixedPDFSize.width * 2) < 3 ||
+                           CGFloat(raster.pixelsWide) / mixedPDFSize.width >= 1,
+                           "JPEG scale can be capped but must not shrink below one pixel per PDF point")
+                }
+            }
+        }
+        let mixedAfter = try Data(contentsOf: mixedSource)
+        let notedPNG = NSBitmapImageRep(data: try Data(contentsOf: scratch.appendingPathComponent("mixed.png")))!
+        assert(mixedModel.setNote("", for: mixedLeft.id) && mixedModel.setNote("", for: mixedRight.id))
+        let noNotesOutput = scratch.appendingPathComponent("mixed-without-notes.png")
+        try exportMap(mixed, as: .png, to: noNotesOutput)
+        let noNotesPNG = NSBitmapImageRep(data: try Data(contentsOf: noNotesOutput))!
+        assert(notedPNG.pixelsWide == noNotesPNG.pixelsWide && notedPNG.pixelsHigh == noNotesPNG.pixelsHigh)
+        var leftNoteInk = false, rightNoteInk = false
+        for x in 0..<notedPNG.pixelsWide {
+            for y in 0..<notedPNG.pixelsHigh {
+                guard let a = notedPNG.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let b = noNotesPNG.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let changed = abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) + abs(a.blueComponent - b.blueComponent) > 0.2
+                if changed && x < notedPNG.pixelsWide / 3 { leftNoteInk = true }
+                if changed && x > notedPNG.pixelsWide * 2 / 3 { rightNoteInk = true }
+            }
+        }
+        assert(leftNoteInk && rightNoteInk, "Detached PNG must paint both left and right child note-paper ink")
+        assert(mixedModel.setNote("Left context", for: mixedLeft.id) && mixedModel.setNote("Right context", for: mixedRight.id))
+        assert(mixedModel.roots == originals && mixedAfter == mixedSourceBytes &&
+               mixed.nativePresentation.count == originalPresentation.count &&
+               mixed.nativePresentation[mixedLeft.id]?.location == originalPresentation[mixedLeft.id]?.location &&
+               mixed.nativePresentation[mixedRight.id]?.location == originalPresentation[mixedRight.id]?.location,
+               "Detached exports cannot mutate model, imported frames or source bytes")
         canvas.appearance = NSAppearance(named: .darkAqua)
         let darkOutput = scratch.appendingPathComponent("dark.jpg")
         try exportMap(canvas, as: .jpeg, to: darkOutput)
