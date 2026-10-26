@@ -1,7 +1,12 @@
-# MindMap (native editor prototype)
+# OpenMindFlow — 独立 macOS 思维导图编辑器
 
-Build on macOS with Swift command-line tools: `bash build.sh`. Run with `open build/MindMap.app`.
-No Xcode project or third-party dependencies are required for a development build; distributable previews are independently ad-hoc signed.
+当前独立手测候选：[`OpenMindFlow-Candidate-20261026.zip`](dist/OpenMindFlow-Candidate-20261026.zip)；解压后使用独立的 `OpenMindFlow-Candidate-20261026.app`，其 bundle ID 为 `local.openmindflow.candidate.20261026`。这是本机 arm64 开发候选，只有工具链自动生成的 ad-hoc 可执行签名，**不是**第二个正式签名/公证预览；本次构建未启动或激活它。旧版仍可能含未保存内容，不要替换、关闭或聚焦 `build/MindMap-Feedback-20261026.app`。
+
+- 导入 `.mindnode` 仅只读，编辑另存 `.mindmap.json`；检查器只显示 **Style、Notes、Themes**，主题卡只显示 Tropical/Teal（亮）和 Slate/Coffee（暗），旧 Rainbow/Candyland ID 仍可读取。左侧一级分支及子树可拖过根中心或用右键切换，保存/重开和撤销有独立回归。
+- 最终明确列出的 **39 个安全离屏测试组及 3 个交互子模式**全部编译、执行退出 0；这不等于可见 GUI 或实体鼠标通过。真实未最大化窗口的边缘缩放仍须本人按[人工手测清单](docs/2026-10-26-candidate-manual-handtest.md)亲自拖动。导入文件中有任意固定坐标同级节点时，新增子节点的全面避碰不是本轮承诺。
+- **不要运行仓库遗留的 `build.sh`**：它硬编码写入 `build/MindMap.app`，不是此候选的构建方式。旧预览、来源 `.mindnode` 和现有导出均不得覆盖。
+
+以下段落是旧阶段记录；若与上述当前候选状态冲突，以本节和人工清单为准。
 
 ## Three-page inspector (2026-10-26; development branch, not a second release)
 
