@@ -119,7 +119,8 @@ import AppKit
         assert(relationCanvas.selectedRelationshipID == previousEdge.id)
         let replacement = MapModel(roots: [relationRoot, other], selected: rootID)
         replacement.relationships = [previousEdge] // Even a reused UUID belongs to the new document.
-        relationInspector.colorPanelModel = relationCanvas.model // Simulate an open old-document More panel without ordering it.
+        let oldPanelModel = relationCanvas.model
+        relationInspector.colorPanelModel = oldPanelModel // Simulate an open old-document More panel without ordering it.
         relationCanvas.model = replacement
         assert(relationCanvas.selectedRelationshipID == nil && replacement.relationships[0].id == previousEdge.id,
                "Replacing the document must discard an old relationship target even if its UUID recurs")
@@ -132,6 +133,7 @@ import AppKit
         relationInspector.changeStrokeColor(panel)
         _ = relationInspector.perform(NSSelectorFromString("changeRootPanelColor:"), with: panel)
         _ = relationInspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(relationInspector.colorPanelModel === oldPanelModel && oldPanelModel !== replacement)
         assert(replacement.roots == untouched && replacement.canvasColor == untouchedCanvasColor &&
                !panel.isVisible && !panel.isKeyWindow,
                "An old-document native panel action must not mutate the replacement document")
