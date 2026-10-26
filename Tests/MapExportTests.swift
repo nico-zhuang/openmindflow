@@ -265,6 +265,59 @@ enum MapExportTests {
                mixed.nativePresentation[mixedLeft.id]?.location == originalPresentation[mixedLeft.id]?.location &&
                mixed.nativePresentation[mixedRight.id]?.location == originalPresentation[mixedRight.id]?.location,
                "Detached exports cannot mutate model, imported frames or source bytes")
+        // Explicit left direction must survive own-document save/reopen before all three exports.
+        var explicitLeft = mixedLeft
+        explicitLeft.branchSide = "left"
+        let explicitRoot = MapNode(id: UUID(), title: "EXPLICIT ROOT",
+                                   children: [explicitLeft, mixedRight], folded: false)
+        let explicitSource = scratch.appendingPathComponent("explicit-left.mindmap.json")
+        try writeOwnJSON([explicitRoot], to: explicitSource)
+        let explicitBytes = try Data(contentsOf: explicitSource)
+        let reopened = try readOwnJSON(explicitSource)
+        assert(reopened == [explicitRoot] && reopened[0].children[0].branchSide == "left" &&
+               reopened[0].children[1].branchSide == nil)
+        let explicitModel = MapModel(roots: reopened, selected: reopened[0].id)
+        let explicitCanvas = MapCanvas(model: explicitModel)
+        explicitCanvas.frame = CGRect(x: 0, y: 0, width: 500, height: 400)
+        explicitCanvas.appearance = NSAppearance(named: .aqua)
+        let explicitLeftFrame = explicitCanvas.frameForAccessibility(explicitLeft.id)!
+        let explicitRightFrame = explicitCanvas.frameForAccessibility(mixedRight.id)!
+        let explicitRootFrame = explicitCanvas.frameForAccessibility(explicitRoot.id)!
+        assert(explicitLeftFrame.maxX <= explicitRootFrame.minX - 60 &&
+               explicitRightFrame.minX >= explicitRootFrame.maxX + 60)
+        let explicitExtent = [explicitLeftFrame, explicitRightFrame, explicitRootFrame]
+            .reduce(CGRect.null) { $0.union($1) }
+        for (format, name) in [(MapExportFormat.png, "explicit-left.png"),
+                               (.pdf, "explicit-left.pdf"), (.jpeg, "explicit-left.jpg")] {
+            let output = scratch.appendingPathComponent(name)
+            try exportMap(explicitCanvas, as: format, to: output)
+            let bytes = try Data(contentsOf: output)
+            if format == .pdf {
+                let page = CGPDFDocument(CGDataProvider(data: bytes as CFData)!)!.page(at: 1)!
+                let size = page.getBoxRect(.mediaBox).size
+                assert(size.width >= explicitExtent.width + 100 && size.height >= explicitExtent.height + 100,
+                       "Reopened explicit left/right PDF must contain both sides")
+            } else {
+                let raster = NSBitmapImageRep(data: bytes)!
+                assert(raster.pixelsWide >= Int(explicitExtent.width + 100) &&
+                       raster.pixelsHigh >= Int(explicitExtent.height + 100),
+                       "Reopened explicit left/right raster must contain both sides")
+                var leftInk = false, rightInk = false
+                for x in stride(from: 0, to: raster.pixelsWide, by: 2) {
+                    for y in stride(from: 0, to: raster.pixelsHigh, by: 2) {
+                        guard let pixel = raster.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        if pixel.redComponent > 0.7 && pixel.greenComponent < 0.4 &&
+                           pixel.blueComponent < 0.4 && x < raster.pixelsWide / 3 { leftInk = true }
+                        if pixel.blueComponent > 0.7 && pixel.greenComponent < 0.4 &&
+                           pixel.redComponent < 0.4 && x > raster.pixelsWide * 2 / 3 { rightInk = true }
+                    }
+                }
+                assert(leftInk && rightInk, "Reopened explicit left/right inks must survive \(name)")
+            }
+        }
+        let explicitAfterBytes = try Data(contentsOf: explicitSource)
+        assert(explicitModel.roots == reopened && explicitAfterBytes == explicitBytes,
+               "Reopened left/right exports must not modify model or saved document")
         canvas.appearance = NSAppearance(named: .darkAqua)
         let darkOutput = scratch.appendingPathComponent("dark.jpg")
         try exportMap(canvas, as: .jpeg, to: darkOutput)
