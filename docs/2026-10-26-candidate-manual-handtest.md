@@ -1,4 +1,4 @@
-# MindMap 新候选：人工手测（不触碰旧版）
+# OpenMindFlow 新候选：人工手测（不触碰旧版）
 
 此清单只用于新建、独立标识的候选 App。不要关闭、激活或替换仍在使用的 `build/MindMap-Feedback-20261026.app`，不要修改来源 `.mindnode` 或首版预览压缩包。
 
