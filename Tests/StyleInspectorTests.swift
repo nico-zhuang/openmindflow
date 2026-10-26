@@ -155,9 +155,10 @@ import AppKit
         let model = MapModel(roots: [root], selected: rootID)
         let noteCanvas = MapCanvas(model: model)
         let inspector = StyleInspector(canvas: noteCanvas, defaults: defaults)
-        assert(inspector.tabs.segmentCount == 3 && (0..<3).allSatisfy {
-            inspector.tabs.image(forSegment: $0) != nil &&
-            !(inspector.tabs.toolTip(forSegment: $0) ?? "").isEmpty
+        assert(inspector.tabs.segmentCount == 3 && (0..<3).allSatisfy { index in
+            inspector.tabs.label(forSegment: index) == ["Style", "Notes", "Themes"][index] &&
+            inspector.tabs.image(forSegment: index) == nil &&
+            inspector.tabs.toolTip(forSegment: index) == ["Style", "Notes", "Themes"][index]
         })
         assert(inspector.backgroundPopup.itemTitles == ["Follow System", "Light", "Dark", "More…"])
         assert(inspector.styleScroll.hasVerticalScroller && inspector.notesScroll.hasVerticalScroller)
@@ -522,9 +523,12 @@ import AppKit
               inspector.colorPopup.itemTitles.suffix(1) == ["更多…"],
               inspector.colorPopup.item(withTitle: "蓝色")?.representedObject as? String == "Blue",
               inspector.colorPopup.accessibilityLabel() == "连接线颜色",
-               inspector.tabs.toolTip(forSegment: 0) == "样式",
-               inspector.tabs.toolTip(forSegment: 1) == "注释",
-               inspector.tabs.toolTip(forSegment: 2) == "主题",
+               inspector.tabs.label(forSegment: 0) == "样式" && inspector.tabs.image(forSegment: 0) == nil &&
+                inspector.tabs.toolTip(forSegment: 0) == "样式",
+               inspector.tabs.label(forSegment: 1) == "注释" && inspector.tabs.image(forSegment: 1) == nil &&
+                inspector.tabs.toolTip(forSegment: 1) == "注释",
+               inspector.tabs.label(forSegment: 2) == "主题" && inspector.tabs.image(forSegment: 2) == nil &&
+                inspector.tabs.toolTip(forSegment: 2) == "主题",
                inspector.backgroundPopup.itemTitles == ["跟随系统", "浅色", "深色", "更多…"],
               inspector.strokeWidthPopup.item(withTitle: "粗")?.representedObject as? String == "Bold",
               inspector.strokeStylePopup.item(withTitle: "虚线")?.representedObject as? String == "Dashed",

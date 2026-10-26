@@ -1,5 +1,10 @@
 import AppKit
 
+// A flipped document anchors short Style pages to the viewport's top, not its bottom.
+private final class TopAlignedInspectorDocument: NSView {
+    override var isFlipped: Bool { true }
+}
+
 // The preview is painted at the card's current width rather than letting NSButton's
 // imageAbove cell compress a fixed-size image to make room for the title.
 private final class ThemeCardButton: NSButton {
@@ -99,7 +104,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             tabs.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
             tabs.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12)
         ])
-        let styleDocument = NSView()
+        let styleDocument = TopAlignedInspectorDocument()
         styleDocument.translatesAutoresizingMaskIntoConstraints = false
         styleScroll.documentView = styleDocument
         styleDocument.addSubview(stack)
@@ -311,10 +316,10 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         backgroundPopup.setAccessibilityLabel(text("Canvas Background"))
         noteTextView.setAccessibilityLabel(text("Notes"))
         noteStatus.setAccessibilityLabel(text("Note status"))
-        for (index, pair) in [("paintbrush", "Style"), ("note.text", "Notes"),
-                              ("paintpalette", "Themes")].enumerated() {
-            tabs.setImage(NSImage(systemSymbolName: pair.0, accessibilityDescription: text(pair.1)), forSegment: index)
-            tabs.setToolTip(text(pair.1), forSegment: index)
+        for (index, title) in ["Style", "Notes", "Themes"].enumerated() {
+            tabs.setImage(nil, forSegment: index)
+            tabs.setLabel(text(title), forSegment: index)
+            tabs.setToolTip(text(title), forSegment: index)
         }
         for (button, theme) in zip(themeButtons, Self.featuredThemes) {
             button.title = text(theme.rawValue.capitalized)
