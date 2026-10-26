@@ -237,6 +237,9 @@ final class MapModel {
     }
 
     @discardableResult
+    func clearSelection() -> Bool { selectNodes([]) }
+
+    @discardableResult
     func selectOnly(_ id: UUID) -> Bool {
         guard Self.path(to: id, in: roots) != nil else { return false }
         let changed = selectedIDs != [id]
@@ -290,7 +293,8 @@ final class MapModel {
 
     @discardableResult
     func selectRange(to id: UUID) -> Bool {
-        guard let from = Self.path(to: selectionAnchor, in: roots), let to = Self.path(to: id, in: roots),
+        guard !selectedIDs.isEmpty,
+              let from = Self.path(to: selectionAnchor, in: roots), let to = Self.path(to: id, in: roots),
               from.dropLast().elementsEqual(to.dropLast()), let start = from.last, let end = to.last else { return false }
         let siblings = from.count == 1 ? roots : Self.node(at: from.dropLast(), in: roots).children
         let range = Set(siblings[min(start, end)...max(start, end)].map(\.id))
@@ -328,7 +332,7 @@ final class MapModel {
             pendingInitialWidth.insert(root.id)
             return
         }
-        guard let path = Self.path(to: selected, in: roots) else { return }
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return }
         let child = MapNode(id: UUID(), title: "", children: [], folded: false)
         var updated = roots
         Self.edit(&updated, at: path[...]) { nodes, index in
@@ -342,7 +346,7 @@ final class MapModel {
 
     @discardableResult
     func addImageChild(_ image: MapImage) -> Bool {
-        guard let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
         let parent = Self.node(at: path[...], in: roots)
         let child = MapNode(id: UUID(), title: "", children: [], folded: false,
                             fontFamily: parent.fontFamily, fontSize: parent.fontSize,
@@ -361,7 +365,7 @@ final class MapModel {
 
     @discardableResult
     func addVideoChild(_ video: MapVideo) -> Bool {
-        guard let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
         let parent = Self.node(at: path[...], in: roots)
         let child = MapNode(id: UUID(), title: "", children: [], folded: false,
                             fontFamily: parent.fontFamily, fontSize: parent.fontSize,
@@ -380,7 +384,8 @@ final class MapModel {
 
     func addSibling(before: Bool = false) {
         if roots.isEmpty { addChild(); return }
-        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
+        guard selectedIDs.contains(selected),
+              let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         let inheritedSide = path.count == 2 ? Self.node(at: path[...], in: roots).branchSide : nil
         let sibling = MapNode(id: UUID(), title: "", children: [], folded: false,
                               branchSide: inheritedSide)
@@ -394,7 +399,8 @@ final class MapModel {
     }
 
     func addParent() {
-        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
+        guard selectedIDs.contains(selected),
+              let path = Self.path(to: selected, in: roots), path.count > 1 else { return }
         var previous = Self.node(at: path[...], in: roots)
         let inheritedSide = path.count == 2 ? previous.branchSide : nil
         if path.count == 2 { previous.branchSide = nil }
@@ -407,9 +413,28 @@ final class MapModel {
         pendingInitialWidth.insert(parent.id)
     }
 
+    @discardableResult
+    func insertRoot(title: String, image: MapImage? = nil, video: MapVideo? = nil,
+                    at worldCenter: CGPoint) -> Bool {
+        guard worldCenter.x.isFinite, worldCenter.y.isFinite,
+              abs(worldCenter.x) <= 1_000_000, abs(worldCenter.y) <= 1_000_000,
+              title.utf8.count <= 65_536, image == nil || video == nil else { return false }
+        let root = MapNode(id: UUID(), title: title, children: [], folded: false,
+                           location: SIMD2(Double(worldCenter.x), Double(worldCenter.y)),
+                           image: image, video: video)
+        let updated = roots + [root]
+        guard fitsSavedJSON(updated, relationships: relationships) else { return false }
+        save()
+        roots = updated
+        selected = root.id
+        if title.isEmpty { pendingInitialWidth.insert(root.id) }
+        return true
+    }
+
     func addMainNode() {
         let main = MapNode(id: UUID(), title: "", children: [], folded: false)
-        let index = Self.path(to: selected, in: roots)?.first.map { $0 + 1 } ?? roots.count
+        let index = selectedIDs.contains(selected) ?
+            (Self.path(to: selected, in: roots)?.first.map { $0 + 1 } ?? roots.count) : roots.count
         var updated = roots
         updated.insert(main, at: index)
         guard commit(updated) else { return }
@@ -419,7 +444,8 @@ final class MapModel {
 
     @discardableResult
     func moveSibling(by step: Int) -> Bool {
-        guard step == -1 || step == 1, let path = Self.path(to: selected, in: roots), path.count > 1,
+        guard selectedIDs.contains(selected), step == -1 || step == 1,
+              let path = Self.path(to: selected, in: roots), path.count > 1,
               let index = path.last,
               Self.node(at: path.dropLast(), in: roots).children.indices.contains(index + step) else { return false }
         save()
@@ -582,7 +608,8 @@ final class MapModel {
 
     @discardableResult
     func detachSelected() -> Bool {
-        guard let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
+        guard selectedIDs.contains(selected),
+              let path = Self.path(to: selected, in: roots), path.count > 1 else { return false }
         var moving = Self.node(at: path[...], in: roots)
         moving.branchSide = nil
         var updated = roots
@@ -837,7 +864,7 @@ final class MapModel {
 
     @discardableResult
     func rename(_ title: String, initialWidth: CGFloat? = nil) -> Bool {
-        guard let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
         guard Self.node(at: path[...], in: roots).title != title else { return true }
         let firstWidth = pendingInitialWidth.contains(selected) && !title.isEmpty &&
             Self.node(at: path[...], in: roots).width == nil &&
@@ -856,7 +883,7 @@ final class MapModel {
 
     @discardableResult
     func remove() -> Bool {
-        guard let path = Self.path(to: selected, in: roots) else { return false }
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots) else { return false }
         if path.count == 1 {
             guard roots.count > 1 else { return false }
             save()
@@ -877,7 +904,7 @@ final class MapModel {
 
     @discardableResult
     func toggleFold() -> Bool {
-        guard let path = Self.path(to: selected, in: roots),
+        guard selectedIDs.contains(selected), let path = Self.path(to: selected, in: roots),
               !Self.node(at: path[...], in: roots).children.isEmpty else { return false }
         var updated = roots
         Self.edit(&updated, at: path[...]) { nodes, index in
