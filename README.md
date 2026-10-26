@@ -3,6 +3,12 @@
 Build on macOS with Swift command-line tools: `bash build.sh`. Run with `open build/MindMap.app`.
 No Xcode project or third-party dependencies are required for a development build; distributable previews are independently ad-hoc signed.
 
+## Three-page inspector (2026-10-26; development branch, not a second release)
+
+- The right sidebar has exactly Style, Notes and Themes—no Tags tab. Root shape/fill/width and document background are editable; Notes are plain text, capped at 64 KiB UTF-8, saved to `.mindmap.json`, and Undoable. Right-click a node → Edit Note. Tropical, Rainbow and Candyland cards are drawn from the same root/branch palettes used by the map.
+- Pending title and note edits are validated before selection, deletion, Save/Open/Close, Undo/Redo and every export; invalid edits remain in their editors. Reopening a document refreshes the inspector even when its selected node ID is unchanged. Imported `.mindnode` sources and the original first signed preview remain untouched.
+- The final explicit **33/33 safe offscreen groups passed** on `7f357a0`, and the existing development app was rebuilt after verifying its path, bundle ID and stopped process. Visible/key/frontmost GUI acceptance is **unverified**: the focus-gated synthetic fixture compiled but refused to run while the desktop was in use. The experimental `.mindnode` writer still rejects unsupported content; original-MindNode acceptance and the second signed preview remain pending.
+
 ## Second release: development branch only (not shipped)
 
 - Main nodes now connect horizontally to their first child without a bent branch; root stacking reserves room for tall only-children. Editable relationships anchor to the facing node outline and keep both handles under the pointer even when dragged across a node. Blank-canvas right-click offers New Main Node, Paste, Zoom In/Out, Fit Content and Select All. Settings has only General (language, appearance, compact new-node width) and Keyboard Shortcuts (six working remappable node commands); unavailable original-app settings are not represented by inert controls.
