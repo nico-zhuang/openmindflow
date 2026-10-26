@@ -165,8 +165,20 @@ import AppKit
             fputs("Notes editor must reserve bottom space above its validation status\n", stderr)
             exit(1)
         }
-        assert(inspector.themeButtons.count == 3)
+        let featured: [InspectorTheme] = [.tropical, .teal, .slate, .coffee]
+        assert(inspector.themeButtons.count == featured.count)
+        assert(inspector.themeButtons.map(\.tag) == Array(0..<4))
+        assert(inspector.themeButtons.map { $0.accessibilityLabel() ?? "" } ==
+               featured.map { $0.rawValue.capitalized })
+        let offscreenWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 250),
+                                       styleMask: [.borderless], backing: .buffered, defer: false)
+        inspector.translatesAutoresizingMaskIntoConstraints = true
+        inspector.autoresizingMask = [.width, .height]
+        offscreenWindow.contentView = inspector // Never order, focus, or activate the window.
+        offscreenWindow.setContentSize(NSSize(width: 260, height: 250))
         inspector.frame = NSRect(x: 0, y: 0, width: 260, height: 250)
+        let inspectorWidth = inspector.widthAnchor.constraint(equalToConstant: 260)
+        inspectorWidth.isActive = true
         inspector.layoutSubtreeIfNeeded()
         guard let themes = inspector.themeButtons.first?.superview,
               let themeScroll = descendants(inspector).compactMap({ $0 as? NSScrollView }).first(where: {
@@ -176,9 +188,23 @@ import AppKit
               themeDocument.frame.width > 0,
               themeDocument.frame.height > themeScroll.contentView.bounds.height,
               themeScroll.hasVerticalScroller else {
-            fputs("All three theme cards need a sized, vertically scrollable document at 260×250\n", stderr)
+            fputs("All four theme cards need a sized, vertically scrollable document at 260×250\n", stderr)
             exit(1)
         }
+        let narrowCard = inspector.themeButtons[0]
+        assert(narrowCard.frame.width > 220 && narrowCard.image!.size.width > 215,
+               "Card/image must fill the 260pt inspector (\(narrowCard.frame.width)/\(narrowCard.image!.size.width))")
+        assert(narrowCard.image!.size.width * narrowCard.image!.size.height >=
+               0.80 * narrowCard.bounds.width * narrowCard.bounds.height)
+        let narrowWidth = narrowCard.image!.size.width
+        inspectorWidth.constant = 320
+        offscreenWindow.setContentSize(NSSize(width: 320, height: 250))
+        inspector.layoutSubtreeIfNeeded()
+        assert(narrowCard.image!.size.width > narrowWidth + 45,
+               "Image must grow with inspector content width, not merely stretch the card")
+        inspectorWidth.constant = 260
+        offscreenWindow.setContentSize(NSSize(width: 260, height: 250))
+        inspector.layoutSubtreeIfNeeded()
         inspector.selectNotes(for: rootID)
         inspector.noteTextView.string = "One note"
         assert(inspector.commitNoteEditing() && model.roots[0].note == "One note")
@@ -229,31 +255,6 @@ import AppKit
         inspector.rootWidthPopup.selectItem(withTitle: "Medium (240 pt)")
         inspector.changeRootWidth(inspector.rootWidthPopup)
         assert(model.roots[0].width == 240 && model.undo())
-        let candyPreview = inspector.themeButtons[2].image!
-        let previewBitmap = candyPreview.representations.compactMap { $0 as? NSBitmapImageRep }.first!
-        let pink = NSColor(srgbRed: 239/255, green: 23/255, blue: 96/255, alpha: 1)
-        let actual = previewBitmap.colorAt(x: 110, y: 70)!.usingColorSpace(.sRGB)!
-        let themeCanvas = MapCanvas(model: MapModel(roots: [root], selected: rootID, theme: InspectorTheme.candyland.rawValue))
-        _ = themeCanvas.model.selectNodes([]) // Selected nodes receive a blue translucent overlay.
-        themeCanvas.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
-        let themeBitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 400,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-        let previous = NSGraphicsContext.current
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: themeBitmap)
-        themeCanvas.draw(themeCanvas.bounds)
-        NSGraphicsContext.current = previous
-        let themedBox = themeCanvas.frameForAccessibility(rootID)!
-        let liveColor = themeBitmap.colorAt(x: Int(themedBox.maxX - 15),
-            y: themeBitmap.pixelsHigh - Int(themedBox.midY) - 1)!.usingColorSpace(.sRGB)!
-        for expected in [pink, liveColor] {
-            if abs(actual.redComponent - expected.redComponent) >= 0.05 ||
-               abs(actual.greenComponent - expected.greenComponent) >= 0.05 ||
-               abs(actual.blueComponent - expected.blueComponent) >= 0.05 {
-                fputs("Candyland card \(actual) differs from canvas/palette \(expected)\n", stderr)
-                exit(1)
-            }
-        }
         func matches(_ pixel: NSColor?, hex: String) -> Bool {
             guard let pixel = pixel?.usingColorSpace(.sRGB),
                   let rgb = UInt32(hex.dropFirst().prefix(6), radix: 16) else { return false }
@@ -262,18 +263,65 @@ import AppKit
                 abs(channel - CGFloat((rgb >> shift) & 255) / 255) < 0.06
             }
         }
-        for (index, theme) in InspectorTheme.allCases.enumerated() {
-            let card = inspector.themeButtons[index].image!.representations.compactMap { $0 as? NSBitmapImageRep }.first!
-            guard matches(card.colorAt(x: 110, y: 70), hex: theme.rootFill),
+        for (index, theme) in featured.enumerated() {
+            let button = inspector.themeButtons[index]
+            let card = button.image!.representations.compactMap { $0 as? NSBitmapImageRep }.first!
+            guard matches(card.colorAt(x: 8, y: 8), hex: theme.canvasBackground!),
+                  matches(card.colorAt(x: 190, y: 78), hex: theme.rootFill),
                   theme.branchColors.prefix(3).allSatisfy({ hex in
                       (0..<card.pixelsHigh).contains { y in matches(card.colorAt(x: 320, y: y), hex: hex) }
                   }) else {
-                fputs("Theme card must show the real root and all three branch colors: \(theme)\n", stderr)
+                fputs("Theme card must show real background, root and three branches: \(theme)\n", stderr)
                 exit(1)
             }
-            inspector.themeButtons[index].performClick(nil)
-            assert(model.theme == theme.rawValue && model.undo())
+            func borderPixel() -> NSColor {
+                let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(button.bounds.width),
+                    pixelsHigh: Int(button.bounds.height), bitsPerSample: 8, samplesPerPixel: 4,
+                    hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                    bytesPerRow: 0, bitsPerPixel: 0)!
+                let previous = NSGraphicsContext.current
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+                button.draw(button.bounds)
+                NSGraphicsContext.current = previous
+                return bitmap.colorAt(x: 2, y: Int(button.bounds.height / 2))!.usingColorSpace(.sRGB)!
+            }
+            let unselectedBorder = borderPixel()
+            button.performClick(nil)
+            inspector.refresh()
+            assert(model.theme == theme.rawValue && button.state == .on &&
+                   inspector.backgroundPopup.titleOfSelectedItem == "Follow Theme")
+            let selectedBorder = borderPixel()
+            assert(abs(selectedBorder.redComponent - unselectedBorder.redComponent) +
+                   abs(selectedBorder.greenComponent - unselectedBorder.greenComponent) +
+                   abs(selectedBorder.blueComponent - unselectedBorder.blueComponent) > 0.1,
+                   "Selected outline must visibly differ from the inactive card")
+            assert(model.undo())
+            inspector.refresh()
+            assert(model.theme == nil && button.state == .off &&
+                   inspector.backgroundPopup.titleOfSelectedItem == "Follow System")
         }
+        for legacy in [InspectorTheme.rainbow, .candyland] {
+            assert(model.setTheme(legacy.rawValue))
+            inspector.refresh()
+            assert(model.theme == legacy.rawValue && inspector.themeButtons.allSatisfy { $0.state == .off } &&
+                   inspector.backgroundPopup.titleOfSelectedItem == "Follow System")
+            assert(model.undo())
+        }
+        defaults.setVolatileDomain(["language": "zh-Hans"], forName: UserDefaults.argumentDomain)
+        inspector.localize()
+        assert(inspector.themeButtons.map { $0.accessibilityLabel() ?? "" } ==
+               ["热带", "青绿", "石板", "咖啡"])
+        assert(Set(inspector.themeButtons.compactMap { $0.accessibilityLabel() }).count == 4)
+        assert(model.setTheme(InspectorTheme.teal.rawValue))
+        inspector.refresh()
+        assert(inspector.backgroundPopup.titleOfSelectedItem == "跟随主题")
+        assert(model.setCanvasColor("#FFFFFFFF"))
+        inspector.refresh()
+        assert(inspector.backgroundPopup.titleOfSelectedItem == "浅色")
+        assert(model.undo() && model.canvasColor == nil)
+        assert(model.undo() && model.theme == nil)
+        defaults.setVolatileDomain(["language": "en"], forName: UserDefaults.argumentDomain)
+        inspector.localize()
         assert(inspector.tabs.toolTip(forSegment: 1) == "Notes" &&
                !(0..<inspector.tabs.segmentCount).contains { inspector.tabs.toolTip(forSegment: $0) == "Tags" })
         inspector.selectNotes(for: rootID)

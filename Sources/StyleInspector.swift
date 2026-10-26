@@ -1,5 +1,34 @@
 import AppKit
 
+// The preview is painted at the card's current width rather than letting NSButton's
+// imageAbove cell compress a fixed-size image to make room for the title.
+private final class ThemeCardButton: NSButton {
+    override func layout() {
+        super.layout()
+        let width = max(0, bounds.width - 4)
+        image?.size = NSSize(width: width, height: width * 156 / 392)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let width = max(0, bounds.width - 4)
+        let imageRect = NSRect(x: 2, y: bounds.height - 2 - width * 156 / 392,
+                               width: width, height: width * 156 / 392)
+        image?.draw(in: imageRect)
+        let border = NSBezierPath(roundedRect: imageRect.insetBy(dx: 0.75, dy: 0.75),
+                                  xRadius: 6, yRadius: 6)
+        (state == .on ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+        border.lineWidth = state == .on ? 2.5 : 1
+        border.stroke()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        let label = title as NSString
+        let size = label.size(withAttributes: attributes)
+        label.draw(at: NSPoint(x: (bounds.width - size.width) / 2,
+                               y: max(0, imageRect.minY - 18)), withAttributes: attributes)
+    }
+}
+
 final class StyleInspector: NSView, NSTextViewDelegate {
     private let canvas: MapCanvas
     private let defaults: UserDefaults
@@ -28,6 +57,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     let rootFillPopup = NSPopUpButton()
     let rootWidthPopup = NSPopUpButton()
     private let themeScroll = NSScrollView()
+    private static let featuredThemes: [InspectorTheme] = [.tropical, .teal, .slate, .coffee]
     private(set) var themeButtons: [NSButton] = []
     private var noteNodeID: UUID?
     private var loadedNote = ""
@@ -112,16 +142,20 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             themes.topAnchor.constraint(equalTo: themeDocument.topAnchor),
             themes.bottomAnchor.constraint(equalTo: themeDocument.bottomAnchor)
         ])
-        for (index, theme) in InspectorTheme.allCases.enumerated() {
-            let button = NSButton(title: theme.rawValue.capitalized, target: self, action: #selector(changeTheme(_:)))
+        for (index, theme) in Self.featuredThemes.enumerated() {
+            let button = ThemeCardButton(title: theme.rawValue.capitalized, target: self,
+                                         action: #selector(changeTheme(_:)))
             button.tag = index
             button.image = preview(for: theme)
-            button.imagePosition = .imageAbove
-            button.bezelStyle = .rounded
             button.setAccessibilityLabel(theme.rawValue.capitalized)
-            button.widthAnchor.constraint(equalToConstant: 220).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 105).isActive = true
+            button.translatesAutoresizingMaskIntoConstraints = false
             themes.addArrangedSubview(button)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalTo: themes.widthAnchor, constant: -24),
+                NSLayoutConstraint(item: button, attribute: .height, relatedBy: .equal,
+                                   toItem: button, attribute: .width, multiplier: 156 / 392,
+                                   constant: 18)
+            ])
             themeButtons.append(button)
         }
         styleScroll.isHidden = false
@@ -282,7 +316,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
             tabs.setImage(NSImage(systemSymbolName: pair.0, accessibilityDescription: text(pair.1)), forSegment: index)
             tabs.setToolTip(text(pair.1), forSegment: index)
         }
-        for (button, theme) in zip(themeButtons, InspectorTheme.allCases) {
+        for (button, theme) in zip(themeButtons, Self.featuredThemes) {
             button.title = text(theme.rawValue.capitalized)
             button.setAccessibilityLabel(button.title)
         }
@@ -338,9 +372,14 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         } ?? (root?.rootFillColor == nil ? "Default" : "More…"), defaults: defaults))
         let widthIndex = root?.width.flatMap { MapNode.widthPresets.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
         rootWidthPopup.selectItem(at: widthIndex)
-        backgroundPopup.selectItem(withTitle: L10n.text(canvas.model.canvasColor == nil ? "Follow System" :
+        let followsTheme = canvas.model.canvasColor == nil &&
+            canvas.model.theme.flatMap(InspectorTheme.init(rawValue:))?.canvasBackground != nil
+        backgroundPopup.item(at: 0)?.title = L10n.text(followsTheme ? "Follow Theme" : "Follow System",
+                                                        defaults: defaults)
+        backgroundPopup.selectItem(withTitle: L10n.text(canvas.model.canvasColor == nil ?
+            (followsTheme ? "Follow Theme" : "Follow System") :
             canvas.model.canvasColor == "#FFFFFFFF" ? "Light" : canvas.model.canvasColor == "#141414FF" ? "Dark" : "More…", defaults: defaults))
-        for (button, theme) in zip(themeButtons, InspectorTheme.allCases) {
+        for (button, theme) in zip(themeButtons, Self.featuredThemes) {
             button.state = canvas.model.theme == theme.rawValue ? .on : .off
         }
         func text(_ key: String) -> String { L10n.text(key, defaults: defaults) }
@@ -539,40 +578,44 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     }
     @objc private func changeTheme(_ sender: NSButton) {
         guard ready() else { return }
-        changed(canvas.model.setTheme(InspectorTheme.allCases[sender.tag].rawValue))
+        changed(canvas.model.setTheme(Self.featuredThemes[sender.tag].rawValue))
     }
     private func preview(for theme: InspectorTheme) -> NSImage {
-        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 392, pixelsHigh: 144,
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 392, pixelsHigh: 156,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         let previous = NSGraphicsContext.current
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-        let scale = AffineTransform(scaleByX: 2, byY: 2)
-        NSAffineTransform(transform: scale).concat()
-        NSColor.windowBackgroundColor.setFill()
-        NSRect(x: 0, y: 0, width: 196, height: 72).fill()
-        let root = NSBezierPath(roundedRect: NSRect(x: 3, y: 21, width: 65, height: 30), xRadius: 5, yRadius: 5)
+        (Self.color(theme.canvasBackground ?? "#FFFFFFFF") ?? .white).setFill()
+        NSRect(x: 0, y: 0, width: 392, height: 156).fill()
+        let root = NSBezierPath(roundedRect: NSRect(x: 115, y: 55, width: 150, height: 46),
+                                xRadius: 7, yRadius: 7)
         Self.color(theme.rootFill)?.setFill()
         root.fill()
-        NSColor.secondaryLabelColor.setStroke()
-        root.stroke()
-        let title: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.labelColor]
-        let rootTitle = title.merging([.foregroundColor: NSColor.black]) { _, chosen in chosen }
-        ("Central" as NSString).draw(at: NSPoint(x: 12, y: 30), withAttributes: rootTitle)
+        let rootInk = Self.color(theme.rootTitleColor ?? "#252D2CFF") ?? .black
+        ("Central" as NSString).draw(at: NSPoint(x: 158, y: 70), withAttributes: [
+            .font: NSFont.boldSystemFont(ofSize: 12), .foregroundColor: rootInk
+        ])
         for index in 0..<3 {
-            let y = CGFloat(12 + index * 23)
+            let y = CGFloat(29 + index * 49)
             let stroke = Self.color(theme.branchColors[index]) ?? .systemTeal
             stroke.setStroke()
-            let line = NSBezierPath()
-            line.move(to: NSPoint(x: 68, y: 36))
-            line.curve(to: NSPoint(x: 112, y: y), controlPoint1: NSPoint(x: 90, y: 36), controlPoint2: NSPoint(x: 90, y: y))
-            line.line(to: NSPoint(x: 180, y: y))
-            line.lineWidth = 2.5
-            line.stroke()
-            ("Idea" as NSString).draw(at: NSPoint(x: 120, y: y + 2), withAttributes: title)
+            for (start, end, controlX) in [(115.0, 19.0, 68.0), (265.0, 373.0, 313.0)] {
+                let line = NSBezierPath()
+                line.move(to: NSPoint(x: start, y: 78))
+                line.curve(to: NSPoint(x: end, y: y),
+                           controlPoint1: NSPoint(x: controlX, y: 78),
+                           controlPoint2: NSPoint(x: controlX, y: y))
+                line.lineWidth = 4
+                line.stroke()
+            }
+            let ink = Self.color(theme.branchTitleColor ?? "#252D2CFF") ?? .black
+            ("Idea" as NSString).draw(at: NSPoint(x: 323, y: y + 5), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: ink
+            ])
         }
         NSGraphicsContext.current = previous
-        bitmap.size = NSSize(width: 196, height: 72)
+        bitmap.size = NSSize(width: 392, height: 156)
         let image = NSImage(size: bitmap.size)
         image.addRepresentation(bitmap)
         return image

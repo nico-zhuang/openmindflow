@@ -36,7 +36,7 @@ enum L10n {
         "Open MindNode (Read-only)…": "打开 MindNode（只读）…", "Open Own JSON…": "打开本应用 JSON…",
         "Show/Hide Outline": "显示/隐藏大纲", "Show/Hide Style": "显示/隐藏样式",
         "Show/Hide Style Inspector": "显示/隐藏样式检查器", "Appearance": "外观",
-        "System": "跟随系统", "Follow System": "跟随系统", "Light": "浅色", "Dark": "深色",
+        "System": "跟随系统", "Follow System": "跟随系统", "Follow Theme": "跟随主题", "Light": "浅色", "Dark": "深色",
         "Settings…": "设置…", "Settings": "设置", "General": "常规", "Keyboard Shortcuts": "快捷键",
         "Settings Page": "设置页面", "Shrink new nodes to fit content": "缩小新节点宽度以适应内容",
         "Restore Defaults": "恢复默认值", "Shortcut already in use": "该快捷键已被使用",
@@ -103,6 +103,7 @@ enum L10n {
         "ROOT": "主节点", "CANVAS": "画布", "Rounded": "圆角", "Rectangle": "矩形",
         "Shape": "形状", "Root shape": "主节点形状", "Fill": "填充", "Root fill": "主节点填充",
         "Fixed width": "固定宽度", "Canvas Background": "画布背景",
-        "Tropical": "热带", "Rainbow": "彩虹", "Candyland": "糖果乐园"
+        "Tropical": "热带", "Slate": "石板", "Coffee": "咖啡",
+        "Rainbow": "彩虹", "Candyland": "糖果乐园"
     ]
 }
