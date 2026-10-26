@@ -5,9 +5,14 @@ import UniformTypeIdentifiers
 // World or screen rectangles use the same coordinate space; only the caller supplies the zoomed inset.
 func branchConnectorEndpoints(parent: CGRect, child: CGRect, parentIsRoot: Bool,
                               goesLeft: Bool, baselineInset: CGFloat) -> (start: CGPoint, end: CGPoint, controlX: CGFloat) {
-    let start = CGPoint(x: goesLeft ? parent.minX : parent.maxX,
-                        y: parentIsRoot ? parent.midY : parent.maxY - baselineInset)
     let end = CGPoint(x: goesLeft ? child.maxX : child.minX, y: child.maxY - baselineInset)
+    // Follow a left first-level underline along the root edge. Clamp near its
+    // corners so dragging a branch across the edge never snaps the trunk.
+    let rootLeftY = parent.height > 2 * baselineInset
+        ? min(max(end.y, parent.minY + baselineInset), parent.maxY - baselineInset)
+        : parent.midY
+    let start = CGPoint(x: goesLeft ? parent.minX : parent.maxX,
+                        y: parentIsRoot ? (goesLeft ? rootLeftY : parent.midY) : parent.maxY - baselineInset)
     return (start, end, (start.x + end.x) / 2)
 }
 
@@ -2316,7 +2321,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         style.holdingPriority = .defaultHigh
         split.addSplitViewItem(style)
         style.isCollapsed = true
-        split.preferredContentSize = NSSize(width: 1280, height: 700)
         splitController = split
         return split
     }
