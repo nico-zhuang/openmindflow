@@ -727,7 +727,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 let dy = separation(groups[i], groups[j])
                 guard dy > 0 else { continue }
                 let later = groups[j].reduce(CGRect.null) { $0.union(frames[$1]!) }
-                if later.midY < movingMidY { shift(groups[i], -dy) }
+                if let pinnedTarget, groups[i].contains(pinnedTarget) { shift(groups[j], dy) }
+                else if let pinnedTarget, groups[j].contains(pinnedTarget) { shift(groups[i], -dy) }
+                else if later.midY < movingMidY { shift(groups[i], -dy) }
                 else { shift(groups[j], dy) }
                 changed = true
             } }

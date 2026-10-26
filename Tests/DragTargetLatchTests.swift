@@ -9,6 +9,48 @@ enum DragTargetLatchTests {
             return
         }
         do {
+            let collision = MapNode(id: UUID(), title: "Colliding third branch", children: [], folded: false)
+            var pinned = MapNode(id: UUID(), title: "Pinned wide target", children: [], folded: false)
+            pinned.width = 480
+            let source = MapNode(id: UUID(), title: "Dragged narrow source", children: [], folded: false)
+            let placeholder = MapNode(id: UUID(), title: "Root", children: [collision, pinned, source], folded: false)
+            let baseline = mapLayout([placeholder])
+            let pinnedBox = baseline.first { $0.node.id == pinned.id }!.frame
+            let sourceBox = baseline.first { $0.node.id == source.id }!.frame
+            var nearby = collision
+            nearby.location = SIMD2(Double(pinnedBox.maxX - 85), Double(pinnedBox.midY - 30))
+            let map = MapModel(roots: [MapNode(id: placeholder.id, title: "Root",
+                                            children: [nearby, pinned, source], folded: false)], selected: source.id)
+            let view = MapCanvas(model: map)
+            let offscreen = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1200, height: 700),
+                                     styleMask: [.borderless], backing: .buffered, defer: false)
+            offscreen.contentView = view // Never shown or made key.
+            let pinnedBefore = view.frameForAccessibility(pinned.id)!
+            let nearbyBefore = view.frameForAccessibility(nearby.id)!
+            func mouse(_ kind: NSEvent.EventType, _ world: CGPoint) -> NSEvent {
+                let point = CGPoint(x: world.x + 80, y: view.bounds.height - world.y - 90)
+                return NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: 0,
+                                          windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+            }
+            view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: sourceBox.midX, y: sourceBox.midY)))
+            view.mouseDragged(with: mouse(.leftMouseDragged,
+                CGPoint(x: sourceBox.midX, y: pinnedBox.minY + 5)))
+            let pinnedAfter = view.frameForAccessibility(pinned.id)!
+            let nearbyAfter = view.frameForAccessibility(nearby.id)!
+            guard pinnedAfter == pinnedBefore,
+                  pinnedAfter.maxY + 8 <= nearbyAfter.minY + 0.01,
+                  nearbyAfter.midY > nearbyBefore.midY + 1, map.roots[0].children.count == 3 else {
+                fputs("Pair sweep must move unpinned collider, not target: pinned \(pinnedBefore) -> \(pinnedAfter), collider \(nearbyBefore) -> \(nearbyAfter)\n", stderr); exit(1)
+            }
+            view.advanceSpring(at: ProcessInfo.processInfo.systemUptime + 0.12)
+            guard view.frameForAccessibility(pinned.id)! == pinnedBefore,
+                  pinnedBefore.maxY + 8 <= view.frameForAccessibility(nearby.id)!.minY + 0.01 else {
+                fputs("Subsequent spring ticks must preserve pinned target and pair separation\n", stderr); exit(1)
+            }
+            view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: sourceBox.midX, y: pinnedBox.minY + 5)))
+            offscreen.orderOut(nil)
+        }
+        do {
             let b = MapNode(id: UUID(), title: "B", children: [], folded: false)
             let s = MapNode(id: UUID(), title: "Source", children: [], folded: false)
             let firstRoot = MapNode(id: UUID(), title: "First root", children: [b, s], folded: false)
@@ -155,6 +197,6 @@ enum DragTargetLatchTests {
         checkSameTarget(startFraction: 0.1, endFraction: 0.9,
                         destination: [0, 2, 1], child: false, label: "sibling-index")
         window.orderOut(nil)
-        print("stationary-target dwell, overlap, cancellation and same-target drop zones passed (offscreen only)")
+        print("stationary target, three-branch pair sweep, overlap, cancellation and drop zones passed (offscreen only)")
     }
 }
