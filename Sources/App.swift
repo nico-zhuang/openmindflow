@@ -182,9 +182,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             element.nodeID = item.node.id
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.button)
-            element.setAccessibilityLabel(item.node.title.isEmpty
+            let title = item.node.title.isEmpty
                 ? t(item.node.video != nil ? "Video" : item.node.image != nil ? "Image" : "New idea")
-                : item.node.title)
+                : item.node.title
+            let hasNote = item.node.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            element.setAccessibilityLabel(hasNote ? "\(title), \(t("Has note"))" : title)
             element.setAccessibilityHelp(item.node.children.isEmpty ? nil :
                 "\(t(item.node.folded ? "Collapsed" : "Expanded")), \(item.node.children.count) \(t(item.node.children.count == 1 ? "child" : "children"))")
             element.setAccessibilitySelected(model.selectedIDs.contains(item.node.id))
@@ -453,7 +455,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private func editorFrame(_ node: LaidOutNode) -> CGRect {
         let box = screen(node.frame)
-        let width = min(max(120, (node.frame.width - 24) * max(zoom, 0.8)),
+        let noteInset: CGFloat = node.parent == nil &&
+            node.node.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? 24 * zoom : 0
+        let width = min(max(noteInset > 0 ? 48 : 120,
+                            (node.frame.width - 24) * max(zoom, 0.8) - noteInset),
                         bounds.width > 128 ? bounds.width - 56 : .greatestFiniteMagnitude)
         let font = font(for: node.node, isRoot: node.parent == nil, zoom: max(zoom, 0.8))
         let textHeight = (node.node.title as NSString).boundingRect(
@@ -866,6 +871,31 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 }
             }
         }
+        func drawNote(for item: LaidOutNode, in box: CGRect) {
+            guard let text = item.node.note?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return }
+            // Child paper sits beyond the underline; root paper stays inside the filled shape.
+            let x = item.parent == nil ? box.maxX - 22 * zoom : box.maxX + 8 * zoom
+            let y = item.parent == nil ? box.midY - 6 * zoom : baseline(box) - 25 * zoom
+            let paper = NSBezierPath()
+            paper.move(to: CGPoint(x: x, y: y))
+            paper.line(to: CGPoint(x: x + 8 * zoom, y: y))
+            paper.line(to: CGPoint(x: x + 12 * zoom, y: y + 4 * zoom))
+            paper.line(to: CGPoint(x: x + 12 * zoom, y: y + 12 * zoom))
+            paper.line(to: CGPoint(x: x, y: y + 12 * zoom))
+            paper.close()
+            paper.move(to: CGPoint(x: x + 8 * zoom, y: y))
+            paper.line(to: CGPoint(x: x + 8 * zoom, y: y + 4 * zoom))
+            paper.line(to: CGPoint(x: x + 12 * zoom, y: y + 4 * zoom))
+            for row in [7, 9] {
+                paper.move(to: CGPoint(x: x + 3 * zoom, y: y + CGFloat(row) * zoom))
+                paper.line(to: CGPoint(x: x + 9 * zoom, y: y + CGFloat(row) * zoom))
+            }
+            paper.lineWidth = max(1, 1.25 * zoom)
+            paper.lineJoinStyle = .round
+            NSColor.controlAccentColor.setStroke()
+            paper.stroke()
+        }
         for item in nodes {
             let box = screen(item.frame)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
@@ -923,7 +953,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                     play.fill()
                 }
             }
-            if editor != nil && item.node.id == model.selected { continue }
+            if editor != nil && item.node.id == model.selected {
+                drawNote(for: item, in: box)
+                continue // The live title editor replaces only the painted title, not the note.
+            }
             let title = item.node.title.isEmpty ? (item.node.image == nil && item.node.video == nil ? t("New idea") : "") : item.node.title
             let paragraph = NSMutableParagraphStyle()
             switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? "left" {
@@ -938,19 +971,22 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 .foregroundColor: titleColor(for: item.node, isRoot: item.parent == nil, placeholder: item.node.title.isEmpty)
             ]
             let label = item.node.folded && !item.node.children.isEmpty ? "▸ " + title : title
+            let noteSpace: CGFloat = item.parent == nil &&
+                item.node.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? 24 * zoom : 0
             let height = ceil((label as NSString).boundingRect(
-                with: CGSize(width: box.width - 24 * zoom, height: .greatestFiniteMagnitude),
+                with: CGSize(width: max(1, box.width - 24 * zoom - noteSpace), height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs).height)
             let textRect = item.node.image != nil || item.node.video != nil
                 ? CGRect(x: box.minX + 12 * zoom,
                          y: ((imageRect(item) ?? videoRect(item))?.maxY ?? box.minY) + 8 * zoom,
-                         width: box.width - 24 * zoom, height: height + 2 * zoom)
+                         width: box.width - 24 * zoom - noteSpace, height: height + 2 * zoom)
                 : item.parent == nil
                     ? CGRect(x: box.minX + 12 * zoom, y: box.midY - height / 2,
-                             width: box.width - 24 * zoom, height: height + 2 * zoom)
+                             width: box.width - 24 * zoom - noteSpace, height: height + 2 * zoom)
                     : CGRect(x: box.minX + 12 * zoom, y: baseline(box) - height - 3 * zoom,
                              width: box.width - 24 * zoom, height: height + 2 * zoom)
             (label as NSString).draw(in: textRect, withAttributes: attrs)
+            drawNote(for: item, in: box)
             if model.selectedIDs.contains(item.node.id) {
                 let point = resizeHandlePoint(item)
                 let handle = NSBezierPath(ovalIn: CGRect(x: point.x - 5, y: point.y - 5,
