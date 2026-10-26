@@ -2328,15 +2328,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     func makeToolbar() -> NSToolbar {
         let toolbar = NSToolbar(identifier: "MindMap")
         toolbar.delegate = self
-        toolbar.displayMode = .iconAndLabel
+        toolbar.displayMode = .iconOnly
         return toolbar
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.init("new-main"), .init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
-         .init("outline"), .flexibleSpace, .init("style"), .init("undo"), .init("redo")]
+         .init("outline"), .flexibleSpace, .init("style")]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        toolbarDefaultItemIdentifiers(toolbar) + [.init("undo"), .init("redo")]
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
