@@ -146,10 +146,12 @@ enum OutlineWorkbenchTests {
         let sideWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
                                   styleMask: [.titled], backing: .buffered, defer: false)
         sideWindow.contentViewController = workbench // Never shown or activated.
+        sideWindow.setContentSize(NSSize(width: 1000, height: 700)) // Match AppDelegate's explicit size after attachment.
+        sideWindow.displayIfNeeded() // Settle the host/split layout without ordering a window.
         sideWindow.contentView?.layoutSubtreeIfNeeded()
         assert(sideWindow.contentView!.bounds.width >= 1000 && manyCanvas.bounds.width >= 400 &&
                manyCanvas.bounds.height >= 400,
-               "Attaching the three-column controller must not shrink the window and canvas to a zero-width 26pt strip")
+               "Explicitly sized three-column workbench must fill the window, not shrink to a strip")
         let attachedOutline = sidebar.viewController.view as! MapOutlineView
         assert(sideWindow.makeFirstResponder(attachedOutline.outlineView))
         delegate.installMenu()
