@@ -12,6 +12,34 @@ enum LayoutTests {
         largerRoot.fontSize = 80
         assert(mapLayout([largerRoot])[0].frame.height > mapLayout([fontRoot])[0].frame.height + 40,
                "Edited font size must affect own JSON layout even with no imported metadata")
+        var notedRoot = MapNode(id: UUID(), title: String(repeating: "a ", count: 40), children: [], folded: false)
+        notedRoot.width = 170
+        notedRoot.note = "Visible note"
+        let notedFrame = mapLayout([notedRoot])[0].frame
+        let notedText = (notedRoot.title as NSString).boundingRect(
+            with: CGSize(width: notedFrame.width - 48, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: mapFont(isRoot: true, node: notedRoot)])
+        assert(ceil(notedText.height) <= notedFrame.height - 22,
+               "A noted root must reserve its paper-icon width when computing title height")
+        let importedFont = NSFont.systemFont(ofSize: 36)
+        let importedOverride = MapLayoutOverride(location: nil, maxWidth: 170,
+                                                 allowToShrinkWidth: false, font: importedFont)
+        let importedFrame = mapLayout([notedRoot], overrides: [notedRoot.id: importedOverride])[0].frame
+        let importedText = (notedRoot.title as NSString).boundingRect(
+            with: CGSize(width: importedFrame.width - 48, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: importedFont])
+        assert(ceil(importedText.height) <= importedFrame.height - 22,
+               "Imported root font override must also reserve note width")
+        var withoutNote = notedRoot
+        withoutNote.note = nil
+        let plainFrame = mapLayout([withoutNote])[0].frame
+        let plainText = (withoutNote.title as NSString).boundingRect(
+            with: CGSize(width: plainFrame.width - 24, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: mapFont(isRoot: true, node: withoutNote)])
+        assert(plainFrame.height == max(44, ceil(plainText.height) + 22),
+               "Note-free root retains original sizing")
         let root = MapNode(id: UUID(), title: "Root", children: [
             MapNode(id: UUID(), title: "First", children: [], folded: false),
             MapNode(id: UUID(), title: "Second", children: [], folded: true)

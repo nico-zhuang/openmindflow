@@ -469,7 +469,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                              : max(22, ceil(textHeight) + 6),
                          max(22, bounds.height - 56))
         // ponytail: the field is viewport-capped; use a scrollable text view if native field-editor scrolling falls short.
-        return CGRect(x: box.minX + 12 * zoom,
+        // At 60pt a 48pt field cannot fit between the inset and paper. Extend it left instead of covering the icon.
+        let leadingX = noteInset > 0 ? min(box.minX + 12 * zoom, box.maxX - 23.25 * zoom - width)
+                                     : box.minX + 12 * zoom
+        return CGRect(x: leadingX,
                       y: (imageRect(node) ?? videoRect(node)).map { $0.maxY + 8 * zoom }
                            ?? (node.parent == nil ? box.midY - height / 2 : box.maxY - 9 * zoom - height),
                       width: width, height: height)

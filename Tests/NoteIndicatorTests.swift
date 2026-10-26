@@ -84,6 +84,37 @@ import Darwin
         assert(model.setNote("", for: root.id))
         assert(differs(rootPainted, bitmap(), in: rootRegion()), "Root icon must stay inside its content edge")
 
+        // Editing a narrow root may extend left, but must never cover its paper icon on the right.
+        var narrowRoot = MapNode(id: UUID(), title: "Narrow", children: [], folded: false)
+        narrowRoot.width = 60
+        narrowRoot.note = "Keep visible while editing"
+        let narrowModel = MapModel(roots: [narrowRoot], selected: narrowRoot.id)
+        let narrowCanvas = MapCanvas(model: narrowModel)
+        narrowCanvas.frame = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let editKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                     timestamp: 0, windowNumber: 0, context: nil,
+                                     characters: "a", charactersIgnoringModifiers: "a", isARepeat: false,
+                                     keyCode: 0)!
+        narrowCanvas.keyDown(with: editKey)
+        guard let titleEditor = narrowCanvas.subviews.compactMap({ $0 as? NSTextField }).first,
+              let narrowBox = narrowCanvas.frameForAccessibility(narrowRoot.id) else {
+            fputs("RED: narrow noted root must open a title editor\n", stderr)
+            exit(1)
+        }
+        // Paper begins at box.maxX-22*zoom; its stroke extends slightly to the left.
+        let renderedZoom = narrowBox.width / 60
+        let paperLeft = narrowBox.maxX - 23.25 * renderedZoom
+        guard titleEditor.frame.maxX <= paperLeft else {
+            fputs("RED: narrow noted root editor overlaps paper icon (editor maxX \(titleEditor.frame.maxX), icon minX \(paperLeft))\n", stderr)
+            exit(1)
+        }
+        assert(titleEditor.frame.width >= 48 && titleEditor.frame.minX < narrowBox.minX,
+               "Narrow root editor keeps 48pt usability by extending left of the root")
+        let editingPaint = bitmap(narrowCanvas)
+        assert(narrowModel.setNote("", for: narrowRoot.id))
+        assert(differs(editingPaint, bitmap(narrowCanvas), in: CGRect(x: narrowBox.maxX - 29,
+            y: narrowBox.midY - 10, width: 24, height: 20)), "Root icon remains visible during title editing")
+
         let temp = FileManager.default.temporaryDirectory.standardizedFileURL
         let scratch = temp.appendingPathComponent("note-indicator-\(UUID().uuidString).mindmap.json")
         let saved = temp.appendingPathComponent("note-indicator-\(UUID().uuidString).mindmap.json")

@@ -36,8 +36,8 @@ func mapFont(isRoot: Bool, zoom: CGFloat = 1, node: MapNode? = nil) -> NSFont {
         ?? NSFont(name: "STSongti-SC-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
 }
 
-func mapNodeSize(_ node: MapNode, font: NSFont, maxWidth: CGFloat? = nil,
-                 allowToShrinkWidth: Bool = false) -> CGSize {
+func mapNodeSize(_ node: MapNode, font: NSFont, isRoot: Bool,
+                 maxWidth: CGFloat? = nil, allowToShrinkWidth: Bool = false) -> CGSize {
     let hasMedia = node.image != nil || node.video != nil
     let title = node.title.isEmpty && hasMedia ? "" : (node.title.isEmpty ? "New idea" : node.title)
     let text = (node.folded && !node.children.isEmpty ? "▸ " : "") + title
@@ -53,8 +53,10 @@ func mapNodeSize(_ node: MapNode, font: NSFont, maxWidth: CGFloat? = nil,
     else if let maxWidth {
         width = max(60, allowToShrinkWidth ? min(naturalWidth, maxWidth) : maxWidth)
     } else { width = min(hasMedia ? 1000 : 320, max(170, naturalWidth)) }
+    // Root renderer reserves 24pt beside the usual 24pt title inset for its note paper.
+    let noteSpace: CGFloat = isRoot && node.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? 24 : 0
     let textHeight: CGFloat = text.isEmpty ? 0 : ceil((text as NSString).boundingRect(
-        with: CGSize(width: max(1, width - 24), height: .greatestFiniteMagnitude),
+        with: CGSize(width: max(1, width - 24 - noteSpace), height: .greatestFiniteMagnitude),
         options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes).height)
     let imageHeight = node.image.map {
         ceil($0.displaySize(width: min(node.imageWidth ?? $0.displaySize().width, max(1, width - 24))).height)
@@ -79,7 +81,8 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
             let node = item.node
             let saved = overrides[node.id]
             let size = mapNodeSize(node, font: saved?.font ?? mapFont(isRoot: item.parent == nil, node: node),
-                                   maxWidth: saved?.maxWidth, allowToShrinkWidth: saved?.allowToShrinkWidth ?? false)
+                                   isRoot: item.parent == nil, maxWidth: saved?.maxWidth,
+                                   allowToShrinkWidth: saved?.allowToShrinkWidth ?? false)
             let width = size.width, height = size.height
             let parentShift: CGSize
             if let parent = item.parent, let actual = placed[parent], let baseline = originalFrames[parent] {
@@ -101,7 +104,7 @@ func mapLayout(_ roots: [MapNode], overrides: [UUID: MapLayoutOverride] = [:]) -
 
     @discardableResult
     func measure(_ node: MapNode, depth: Int) -> CGFloat {
-        let size = mapNodeSize(node, font: mapFont(isRoot: depth == 0, node: node))
+        let size = mapNodeSize(node, font: mapFont(isRoot: depth == 0, node: node), isRoot: depth == 0)
         let width = size.width, height = size.height
         sizes[node.id] = size
         if depth == columnWidths.count { columnWidths.append(width) }
