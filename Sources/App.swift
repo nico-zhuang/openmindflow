@@ -1973,7 +1973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "\(t("Untitled")) — \(t("MindMap"))"
+        window.title = "\(t("Untitled")) — \(t("OpenMindFlow"))"
         window.delegate = self
         window.minSize = NSSize(width: 640, height: 400)
         window.contentViewController = splitController
@@ -2002,7 +2002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             canvas.model.theme != savedTheme || canvas.model.canvasColor != savedCanvasColor
         updateTitle()
     }
-    private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("MindMap"))" }
+    private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("OpenMindFlow"))" }
     private func alert(_ message: String, detail: String) {
         let alert = NSAlert()
         alert.messageText = t(message)
@@ -2174,7 +2174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         panel.directoryURL = directory
         #endif
         panel.allowedContentTypes = [UTType(filenameExtension: "mindnode") ?? .data]
-        panel.nameFieldStringValue = "MindMap-Copy.mindnode"
+        panel.nameFieldStringValue = "OpenMindFlow-Copy.mindnode"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #if HEADLESS_TEST
         guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
@@ -2200,7 +2200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         panel.directoryURL = directory
         #endif
         panel.allowedContentTypes = [type]
-        panel.nameFieldStringValue = "MindMap.\(suffix)"
+        panel.nameFieldStringValue = "OpenMindFlow.\(suffix)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #if HEADLESS_TEST
         guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
@@ -2638,11 +2638,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 
     func installMenu() {
         let main = NSMenu()
-        let app = NSMenuItem(title: t("MindMap"), action: nil, keyEquivalent: "")
+        let app = NSMenuItem(title: t("OpenMindFlow"), action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: t("Settings…"), action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: t("Quit MindMap"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: t("Quit OpenMindFlow"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.submenu = appMenu
         main.addItem(app)
         let file = NSMenuItem(title: t("File"), action: nil, keyEquivalent: "")

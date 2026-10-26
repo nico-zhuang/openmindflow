@@ -275,7 +275,11 @@ enum CanvasCommandTests {
         let appDelegate = AppDelegate(defaults: appearanceDefaults)
         _ = appDelegate.makeWorkbench(canvas: canvas)
         appDelegate.installMenu()
-        assert(NSApp.mainMenu!.items.map(\.title) == ["MindMap", "File", "Edit", "View", "Node"])
+        guard NSApp.mainMenu!.items.map(\.title) == ["OpenMindFlow", "File", "Edit", "View", "Node"],
+              NSApp.mainMenu?.item(withTitle: "OpenMindFlow")?.submenu?.item(withTitle: "Quit OpenMindFlow") != nil else {
+            fputs("App menu and Quit command must use the OpenMindFlow brand\n", stderr)
+            exit(1)
+        }
         guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else {
             fputs("Missing Edit menu\n", stderr)
             exit(1)

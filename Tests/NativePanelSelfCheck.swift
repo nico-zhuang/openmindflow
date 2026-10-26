@@ -112,7 +112,7 @@ enum NativePanelSelfCheck {
                     if canvas.model.roots[0].children.count == 1 {
                         let editor = canvas.subviews.compactMap { $0 as? NSTextField }.first
                         let child = canvas.model.roots[0].children[0]
-                        guard canvas.model.selected == child.id, window.title == "Untitled • — MindMap",
+                        guard canvas.model.selected == child.id, window.title == "Untitled • — OpenMindFlow",
                               editor?.currentEditor() != nil, window.firstResponder is NSTextView else {
                             finish("FAIL toolbar child selection, dirty title, or native editor", ok: false); return
                         }
@@ -223,8 +223,8 @@ enum NativePanelSelfCheck {
             if opening {
                 guard actionDispatched, result == "nativeOpenPanel=true", !savedExists,
                       canvas.model.roots[0].title == "Synthetic saved root",
-                      window.title == "Untitled • — MindMap" else {
-                    finish("FAIL cancelled Open \(result) retained=\(!savedExists) dirty=\(window.title == "Untitled • — MindMap")", ok: false)
+                      window.title == "Untitled • — OpenMindFlow" else {
+                    finish("FAIL cancelled Open \(result) retained=\(!savedExists) dirty=\(window.title == "Untitled • — OpenMindFlow")", ok: false)
                     return
                 }
                 finish("nativeOpenCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true", ok: true)
@@ -233,8 +233,8 @@ enum NativePanelSelfCheck {
             if failing {
                 guard actionDispatched, result == "nativeSavePanel=true", !savedExists,
                       canvas.model.roots[0].title == "Synthetic saved root",
-                      window.title == "Untitled • — MindMap" else {
-                    finish("FAIL Save failure unexpectedlySaved=\(savedExists) dirtyRetained=\(window.title == "Untitled • — MindMap")", ok: false)
+                      window.title == "Untitled • — OpenMindFlow" else {
+                    finish("FAIL Save failure unexpectedlySaved=\(savedExists) dirtyRetained=\(window.title == "Untitled • — OpenMindFlow")", ok: false)
                     return
                 }
                 finish("nativeSaveFailure=true ownModelRetained=true dirtyRetained=true ownJSONAbsent=true", ok: true)
@@ -243,8 +243,8 @@ enum NativePanelSelfCheck {
             if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "cancel" {
                 guard actionDispatched, result == "nativeSavePanel=true", !savedExists,
                       canvas.model.roots[0].title == "Synthetic saved root",
-                      window.title == "Untitled • — MindMap" else {
-                    finish("FAIL cancelled Save retained=\(!savedExists) dirty=\(window.title == "Untitled • — MindMap")", ok: false)
+                      window.title == "Untitled • — OpenMindFlow" else {
+                    finish("FAIL cancelled Save retained=\(!savedExists) dirty=\(window.title == "Untitled • — OpenMindFlow")", ok: false)
                     return
                 }
                 finish("nativeSaveCancel=true ownModelRetained=true dirtyRetained=true nativeSelectAll=true", ok: true)
@@ -252,8 +252,8 @@ enum NativePanelSelfCheck {
             }
             guard actionDispatched, result == "nativeSavePanel=true", let roots = try? readOwnJSON(expected),
                   roots.count == 1, roots[0].title == "Synthetic saved root",
-                  window.title == "Untitled.mindmap.json — MindMap" else {
-                finish("FAIL \(result) actionDispatched=\(actionDispatched) savedExists=\(savedExists) titleClean=\(window.title == "Untitled.mindmap.json — MindMap") attempts=\(attempts)", ok: false)
+                  window.title == "Untitled.mindmap.json — OpenMindFlow" else {
+                finish("FAIL \(result) actionDispatched=\(actionDispatched) savedExists=\(savedExists) titleClean=\(window.title == "Untitled.mindmap.json — OpenMindFlow") attempts=\(attempts)", ok: false)
                 return
             }
             finish("nativeSavePanel=true ownJSONDecoded=true nativeOpenPanel=unverified nativeSelectAll=true", ok: true)

@@ -20,6 +20,8 @@ import Foundation
               L10n.choice(defaults: UserDefaults(suiteName: suite)!) == "zh-Hans",
               L10n.language(defaults: defaults) == "zh-Hans",
               L10n.text("View", defaults: defaults) == "视图",
+               L10n.text("OpenMindFlow", defaults: defaults) == "OpenMindFlow",
+               L10n.text("Quit OpenMindFlow", defaults: defaults) == "退出 OpenMindFlow",
               L10n.text("Show/Hide Style Inspector", defaults: defaults) == "显示/隐藏样式检查器",
               L10n.text("Save changes to this map?", defaults: defaults) == "保存对此导图的更改？",
               L10n.text("Map outline", defaults: defaults) == "导图大纲",
@@ -31,6 +33,8 @@ import Foundation
         }
         guard L10n.setLanguage("en", defaults: defaults),
               L10n.text("View", defaults: defaults) == "View",
+               L10n.text("OpenMindFlow", defaults: defaults) == "OpenMindFlow",
+               L10n.text("Quit OpenMindFlow", defaults: defaults) == "Quit OpenMindFlow",
               !L10n.setLanguage("fr", defaults: defaults),
               L10n.choice(defaults: defaults) == "en" else {
             fail("English selection must persist and reject unknown language values")

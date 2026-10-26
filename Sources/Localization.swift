@@ -30,6 +30,7 @@ enum L10n {
     }
 
     private static let chinese: [String: String] = [
+        "OpenMindFlow": "OpenMindFlow", "Quit OpenMindFlow": "退出 OpenMindFlow",
         "MindMap": "思维导图", "Quit MindMap": "退出思维导图", "File": "文件", "Edit": "编辑",
         "View": "视图", "Node": "节点", "Save": "保存", "Undo": "撤销", "Redo": "重做",
         "Cut": "剪切", "Copy": "复制", "Paste": "粘贴", "Select All": "全选",
