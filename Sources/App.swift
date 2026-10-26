@@ -1991,6 +1991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(canvas)
         NSApp.activate(ignoringOtherApps: true)
+        if defaults.bool(forKey: "checkUpdatesAutomatically") { checkForUpdates(nil) }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard confirmDiscardOrSave() else { return false }
@@ -2438,9 +2439,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
         let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 390),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        let tabs = NSSegmentedControl(labels: [t("General"), t("Keyboard Shortcuts")],
+        let tabs = NSSegmentedControl(labels: [t("General"), t("Keyboard Shortcuts"), t("About")],
                                       trackingMode: .selectOne, target: self, action: #selector(chooseSettingsTab(_:)))
-        tabs.frame = CGRect(x: 125, y: 310, width: 290, height: 54)
+        tabs.frame = CGRect(x: 64, y: 310, width: 412, height: 54)
         tabs.selectedSegment = 0
         tabs.setImage(NSImage(systemSymbolName: "gearshape", accessibilityDescription: t("General")), forSegment: 0)
         tabs.setImage(NSImage(systemSymbolName: "keyboard", accessibilityDescription: t("Keyboard Shortcuts")), forSegment: 1)
@@ -2515,6 +2516,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         restore.setAccessibilityLabel(t("Restore Defaults"))
         restore.isHidden = true
         panel.contentView?.addSubview(restore)
+        let aboutHeading = NSTextField(labelWithString: t("About OpenMindFlow"))
+        aboutHeading.identifier = NSUserInterfaceItemIdentifier("about-heading")
+        aboutHeading.font = .boldSystemFont(ofSize: 18)
+        aboutHeading.frame = CGRect(x: 28, y: 264, width: 484, height: 28)
+        aboutHeading.isHidden = true
+        panel.contentView?.addSubview(aboutHeading)
+        let credits = NSTextField(labelWithString: "NicoZhuang | KEEPCRAZY | YoSoAi")
+        credits.identifier = NSUserInterfaceItemIdentifier("about-credits")
+        credits.frame = CGRect(x: 28, y: 226, width: 484, height: 24)
+        credits.isHidden = true
+        panel.contentView?.addSubview(credits)
+        let statement = NSTextField(wrappingLabelWithString: t("OpenMindFlow is independently developed. MindNode files are imported read-only; edits are saved as .mindmap.json. It is not affiliated with IdeasOnCanvas. Open-source license terms are not yet specified."))
+        statement.identifier = NSUserInterfaceItemIdentifier("about-statement")
+        statement.frame = CGRect(x: 28, y: 137, width: 484, height: 80)
+        statement.isHidden = true
+        panel.contentView?.addSubview(statement)
+        let autoUpdates = NSButton(checkboxWithTitle: t("Automatically check for updates"), target: self,
+                                   action: #selector(chooseAutomaticUpdates(_:)))
+        autoUpdates.identifier = NSUserInterfaceItemIdentifier("about-auto-updates")
+        autoUpdates.frame = CGRect(x: 28, y: 91, width: 484, height: 30)
+        autoUpdates.state = defaults.bool(forKey: "checkUpdatesAutomatically") ? .on : .off
+        autoUpdates.isHidden = true
+        panel.contentView?.addSubview(autoUpdates)
+        let checkNow = NSButton(title: t("Check for Updates…"), target: self,
+                                action: #selector(checkForUpdates(_:)))
+        checkNow.identifier = NSUserInterfaceItemIdentifier("about-check-now")
+        checkNow.frame = CGRect(x: 28, y: 48, width: 188, height: 30)
+        checkNow.isHidden = true
+        panel.contentView?.addSubview(checkNow)
         panel.title = t("Settings")
         panel.center()
         settingsWindow = panel
@@ -2525,6 +2555,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard let identifier = view.identifier?.rawValue else { continue }
             if identifier.hasPrefix("general-") { view.isHidden = sender.selectedSegment != 0 }
             if identifier.hasPrefix("shortcuts-") { view.isHidden = sender.selectedSegment != 1 }
+            if identifier.hasPrefix("about-") { view.isHidden = sender.selectedSegment != 2 }
+        }
+    }
+    @objc private func showAbout(_ sender: Any?) {
+        showSettings(sender)
+        guard let tabs = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSSegmentedControl }).first else { return }
+        tabs.selectedSegment = 2
+        chooseSettingsTab(tabs)
+    }
+    @objc private func chooseAutomaticUpdates(_ sender: NSButton) {
+        defaults.set(sender.state == .on, forKey: "checkUpdatesAutomatically")
+    }
+    @objc private func checkForUpdates(_ sender: Any?) {
+        let requestedByUser = sender != nil
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        ReleaseChecker().check(currentVersion: version) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let release?):
+                    let prompt = NSAlert()
+                    prompt.messageText = self.t("A newer OpenMindFlow version is available")
+                    prompt.informativeText = String(format: self.t("Version %@ is available on GitHub Releases. Open the official release page?"), release.version)
+                    prompt.addButton(withTitle: self.t("View Release"))
+                    prompt.addButton(withTitle: self.t("Later"))
+                    if prompt.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(release.pageURL) }
+                case .success(nil):
+                    if requestedByUser { self.alert("No newer release is available.", detail: "You are using the latest available public release.") }
+                case .failure(let error):
+                    if requestedByUser { self.alert("Unable to check for updates.", detail: error.localizedDescription) }
+                }
+            }
         }
     }
     @objc private func chooseSettingsAppearance(_ sender: NSPopUpButton) {
@@ -2613,6 +2675,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             case "shortcuts-restore":
                 (view as? NSButton)?.title = t("Restore Defaults")
                 view.setAccessibilityLabel(t("Restore Defaults"))
+            case "about-heading": (view as? NSTextField)?.stringValue = t("About OpenMindFlow")
+            case "about-statement":
+                (view as? NSTextField)?.stringValue = t("OpenMindFlow is independently developed. MindNode files are imported read-only; edits are saved as .mindmap.json. It is not affiliated with IdeasOnCanvas. Open-source license terms are not yet specified.")
+            case "about-auto-updates":
+                (view as? NSButton)?.title = t("Automatically check for updates")
+                view.setAccessibilityLabel(t("Automatically check for updates"))
+            case "about-check-now":
+                (view as? NSButton)?.title = t("Check for Updates…")
+                view.setAccessibilityLabel(t("Check for Updates…"))
             default: break
             }
             if let identifier = view.identifier?.rawValue {
@@ -2633,6 +2704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             if let tabs = view as? NSSegmentedControl {
                 tabs.setLabel(t("General"), forSegment: 0)
                 tabs.setLabel(t("Keyboard Shortcuts"), forSegment: 1)
+                tabs.setLabel(t("About"), forSegment: 2)
                 tabs.setAccessibilityLabel(t("Settings Page"))
                 tabs.setImage(NSImage(systemSymbolName: "gearshape", accessibilityDescription: t("General")), forSegment: 0)
                 tabs.setImage(NSImage(systemSymbolName: "keyboard", accessibilityDescription: t("Keyboard Shortcuts")), forSegment: 1)
@@ -2644,6 +2716,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let main = NSMenu()
         let app = NSMenuItem(title: t("OpenMindFlow"), action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: t("About OpenMindFlow"), action: #selector(showAbout(_:)), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: t("Settings…"), action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: t("Quit OpenMindFlow"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

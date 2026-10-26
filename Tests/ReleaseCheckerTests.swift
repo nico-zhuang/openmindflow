@@ -40,7 +40,7 @@ enum ReleaseCheckerTests {
         assert(calls == 1, "Transport callback may not invoke user completion twice")
         assert(request?.httpMethod == "GET" && request?.url == endpoint)
         assert((request?.timeoutInterval ?? .infinity) <= 10)
-        assert(request?.value(forHTTPHeaderField: "User-Agent")?.contains("MindMap") == true)
+        assert(request?.value(forHTTPHeaderField: "User-Agent")?.contains("OpenMindFlow") == true)
         assert(request?.value(forHTTPHeaderField: "Accept") == "application/vnd.github+json")
         let bare = "https://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/1.10.0"
         guard case .success(let unprefixed?) = check(data: payload(tag: "1.10.0", pageURL: bare)).0 else {

@@ -28,14 +28,15 @@ import AppKit
             .first { $0.accessibilityLabel() == "Appearance" }
         let shrink = panel.contentView!.subviews.compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Shrink new nodes to fit content" }
-        guard let tabs, tabs.segmentCount == 2,
+        guard let tabs, tabs.segmentCount == 3,
               tabs.label(forSegment: 0) == "General",
               tabs.label(forSegment: 1) == "Keyboard Shortcuts",
+               tabs.label(forSegment: 2) == "About",
               let appearancePopup, appearancePopup.itemTitles == ["System", "Light", "Dark"],
               let shrink, shrink.state == .on,
               !panel.contentView!.subviews.compactMap({ ($0 as? NSControl)?.accessibilityLabel() })
                 .contains(where: { ["License", "Account", "Dock Icon"].contains($0) }) else {
-            fputs("RED Settings must expose only General/Keyboard Shortcuts and real language/appearance/compact-width options\n", stderr)
+            fputs("Settings must expose General/Keyboard Shortcuts/About and real language/appearance/compact-width options\n", stderr)
             exit(1)
         }
         let languageLabel = panel.contentView!.subviews.compactMap { $0 as? NSTextField }.first!

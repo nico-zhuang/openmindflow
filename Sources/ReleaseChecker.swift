@@ -35,7 +35,7 @@ struct ReleaseChecker {
         request.httpMethod = "GET"
         request.httpShouldHandleCookies = false
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("MindMap-Release-Checker/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("OpenMindFlow-Release-Checker/1.0", forHTTPHeaderField: "User-Agent")
         let lock = NSLock()
         var finished = false
         fetch(request) { data, response, error in
