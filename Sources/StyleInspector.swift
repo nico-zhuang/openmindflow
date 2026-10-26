@@ -32,6 +32,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     private var noteNodeID: UUID?
     private var loadedNote = ""
     private var refreshing = false
+    weak var colorPanelModel: MapModel?
 
     override var intrinsicContentSize: NSSize { NSSize(width: 280, height: NSView.noIntrinsicMetric) }
 
@@ -492,6 +493,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     @objc func changeCanvasBackground(_ sender: Any?) {
         guard ready(), let choice = backgroundPopup.selectedItem?.representedObject as? String else { refresh(); return }
         if choice == "More…" {
+            colorPanelModel = canvas.model
             let panel = NSColorPanel.shared
             panel.setTarget(self)
             panel.setAction(#selector(changeCanvasPanelColor(_:)))
@@ -501,7 +503,8 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         }
     }
     @objc private func changeCanvasPanelColor(_ sender: NSColorPanel) {
-        guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
+        guard colorPanelModel === canvas.model, ready(),
+              let color = sender.color.usingColorSpace(.deviceRGB) else { return }
         changed(canvas.model.setCanvasColor(Self.hex(color)))
     }
     static func hex(_ color: NSColor) -> String {
@@ -515,6 +518,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     @objc private func changeRootFill(_ sender: Any?) {
         guard ready() else { return }
         if rootFillPopup.selectedItem?.representedObject as? String == "More…" {
+            colorPanelModel = canvas.model
             let panel = NSColorPanel.shared
             panel.setTarget(self)
             panel.setAction(#selector(changeRootPanelColor(_:)))
@@ -524,7 +528,8 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         }
     }
     @objc private func changeRootPanelColor(_ sender: NSColorPanel) {
-        guard ready(), let color = sender.color.usingColorSpace(.deviceRGB) else { return }
+        guard colorPanelModel === canvas.model, ready(),
+              let color = sender.color.usingColorSpace(.deviceRGB) else { return }
         changed(canvas.model.setRootFillColor(Self.hex(color)))
     }
     @objc func changeRootWidth(_ sender: Any?) {
@@ -628,6 +633,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
                     ?? .systemPurple
             } else if let hex = selectedNodes().first?.0.branchStrokeColor,
                       let color = Self.color(hex) { panel.color = color }
+            colorPanelModel = canvas.model
             panel.setTarget(self)
             panel.setAction(#selector(changeStrokeColor(_:)))
             panel.makeKeyAndOrderFront(nil)
@@ -637,7 +643,8 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         } else { refresh() }
     }
     @objc func changeStrokeColor(_ sender: Any?) {
-        guard ready(), let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
+        guard colorPanelModel === canvas.model, ready(),
+              let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
         changed(setSelectedColor(Self.hex(color)))
     }
     @objc func changeStrokeWidth(_ sender: Any?) {

@@ -68,8 +68,8 @@ private enum NodeShortcuts {
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { replacingModel = true; stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = false } }
-    private var replacingModel = false
+    var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
+    var replacingModel = false
     private(set) var selectedRelationshipID: UUID? {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
     }
@@ -1923,6 +1923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard confirmDiscardOrSave() else { return }
             // Saving may have changed this same path; never install the pre-save tree.
             let document = try readOwnDocument(url)
+            canvas.replacingModel = true
             canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID(),
                                     theme: document.theme, canvasColor: document.canvasColor)
             canvas.model.relationships = document.relationships
@@ -1939,6 +1940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             savedCanvasColor = document.canvasColor
             dirty = false
             updateTitle()
+            canvas.replacingModel = false
             canvas.fitMapInView()
             refreshFindResults(navigate: false)
             window.makeFirstResponder(canvas)
@@ -1964,6 +1966,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do {
             let imported = try MindNodeImporter.loadDetailed(url)
             guard confirmDiscardOrSave() else { return }
+            canvas.replacingModel = true
             canvas.model = MapModel(roots: imported.roots, selected: imported.roots.first?.id ?? UUID())
             canvas.branchStyles = imported.styles
             canvas.embeddedTheme = imported.theme
@@ -1978,6 +1981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             savedCanvasColor = nil
             dirty = false
             updateTitle()
+            canvas.replacingModel = false
             canvas.fitMapInView()
             refreshFindResults(navigate: false)
             window.makeFirstResponder(canvas)

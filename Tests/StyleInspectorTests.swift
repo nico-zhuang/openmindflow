@@ -68,20 +68,40 @@ import AppKit
         relationInspector.colorPopup.selectItem(withTitle: "Teal")
         relationInspector.changeColorSelection(relationInspector.colorPopup)
         assert(relationModel.roots[0].branchStrokeColor == "#14B8A6FF" && relationModel.relationships[0].color == nil)
-        let beforeReplace = relationSelections
-        relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
-        assert(relationSelections == beforeReplace, "Model replacement must not refresh inspector before appearance metadata")
-        relationInspector.refresh() // AppDelegate performs this after installing import metadata.
-        relationCanvas.needsDisplay = true // Final post-import fit invalidates after metadata installation.
-        assert(relationSelections == beforeReplace + 1,
-               "Changed selected UUID must emit exactly one deferred selection notification")
+        assert(relationCanvas.model.toggleSelection(otherID))
         relationCanvas.needsDisplay = true
-        assert(relationSelections == beforeReplace + 1)
+        let beforeReplace = relationSelections
+        // AppDelegate installs a whole document before fit emits the selection notification.
+        relationCanvas.replacingModel = true
+        relationCanvas.model = MapModel(roots: [relationRoot, other], selected: rootID)
+        relationCanvas.branchStyles = [rootID: MindNodeVisualStyle(rgba: [0, 0.8, 0, 1], width: 3)]
+        relationCanvas.embeddedTheme = nil
+        relationCanvas.nativePresentation = [:]
+        assert(relationSelections == beforeReplace, "Metadata setters must not refresh the inspector early")
+        relationInspector.refresh()
+        relationCanvas.replacingModel = false
+        _ = relationCanvas.fitMapInView()
+        assert(relationSelections == beforeReplace + 1,
+               "Replacing {A,B} with {A} must notify once after all metadata")
+        relationCanvas.replacingModel = true
         relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
-        assert(relationSelections == beforeReplace + 1)
+        relationCanvas.branchStyles = [:]
+        relationCanvas.embeddedTheme = nil
+        relationCanvas.nativePresentation = [:]
+        assert(relationSelections == beforeReplace + 1, "New UUID must wait for document installation")
+        relationInspector.refresh()
+        relationCanvas.replacingModel = false
+        _ = relationCanvas.fitMapInView()
+        assert(relationSelections == beforeReplace + 2,
+               "Changed selected UUID must emit exactly one deferred selection notification")
+        let afterReplace = relationSelections
+        relationCanvas.needsDisplay = true
+        assert(relationSelections == afterReplace)
+        relationCanvas.model = MapModel(roots: [relationRoot, other], selected: otherID)
+        assert(relationSelections == afterReplace)
         relationInspector.refresh()
         relationCanvas.needsDisplay = true
-        assert(relationSelections == beforeReplace + 1,
+        assert(relationSelections == afterReplace,
                "Replacing a model with the same selected UUID relies on explicit inspector refresh")
         assert(relationCanvas.model.toggleSelection(rootID))
         relationCanvas.createRelationship(nil)
@@ -99,9 +119,36 @@ import AppKit
         assert(relationCanvas.selectedRelationshipID == previousEdge.id)
         let replacement = MapModel(roots: [relationRoot, other], selected: rootID)
         replacement.relationships = [previousEdge] // Even a reused UUID belongs to the new document.
+        relationInspector.colorPanelModel = relationCanvas.model // Simulate an open old-document More panel without ordering it.
         relationCanvas.model = replacement
         assert(relationCanvas.selectedRelationshipID == nil && replacement.relationships[0].id == previousEdge.id,
                "Replacing the document must discard an old relationship target even if its UUID recurs")
+        // Simulate delayed native panel actions without opening or ordering the shared panel.
+        let panel = NSColorPanel.shared
+        assert(!panel.isVisible && !panel.isKeyWindow)
+        panel.color = .systemGreen
+        let untouched = replacement.roots
+        let untouchedCanvasColor = replacement.canvasColor
+        relationInspector.changeStrokeColor(panel)
+        _ = relationInspector.perform(NSSelectorFromString("changeRootPanelColor:"), with: panel)
+        _ = relationInspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(replacement.roots == untouched && replacement.canvasColor == untouchedCanvasColor &&
+               !panel.isVisible && !panel.isKeyWindow,
+               "An old-document native panel action must not mutate the replacement document")
+        relationInspector.colorPopup.selectItem(withTitle: "Blue")
+        relationInspector.changeColorSelection(relationInspector.colorPopup)
+        assert(replacement.roots[0].branchStrokeColor == "#3478F6FF",
+               "Presets still edit the new document")
+        relationInspector.colorPanelModel = replacement // Model captured by current-document More (no panel ordering).
+        relationInspector.changeStrokeColor(panel)
+        let currentColor = StyleInspector.hex(panel.color.usingColorSpace(.deviceRGB)!)
+        assert(replacement.roots[0].branchStrokeColor == currentColor,
+               "Current-document More color still edits the selected node")
+        _ = relationInspector.perform(NSSelectorFromString("changeRootPanelColor:"), with: panel)
+        _ = relationInspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(replacement.roots[0].rootFillColor == currentColor && replacement.canvasColor == currentColor &&
+               !panel.isVisible && !panel.isKeyWindow,
+               "Current-document native callbacks remain functional without ordering a panel")
         do {
         let model = MapModel(roots: [root], selected: rootID)
         let noteCanvas = MapCanvas(model: model)
