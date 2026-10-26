@@ -40,7 +40,7 @@
 
 ### Task 3: Large Theme Cards and Eight Real Themes
 
-**Files:** Modify `Sources/InspectorTheme.swift`, `Sources/StyleInspector.swift`, `Sources/MapModel.swift` (`setTheme` currently hardcodes three IDs), `Sources/OwnJSON.swift`, and `Sources/App.swift` only in the later integration pass; test `Tests/StyleInspectorTests.swift`, `Tests/OwnDocumentTests.swift`, plus new focused visual theme test if existing one cannot compare fills and actual pixels.
+**Files:** Modify `Sources/InspectorTheme.swift`, `Sources/StyleInspector.swift`, `Sources/Localization.swift` (labels for new themes), `Sources/MapModel.swift` (`setTheme` currently hardcodes three IDs), `Sources/OwnJSON.swift`, and `Sources/App.swift` only in the later integration pass; test `Tests/StyleInspectorTests.swift`, `Tests/OwnDocumentTests.swift`, plus new focused visual theme test if existing one cannot compare fills and actual pixels.
 
 **Interfaces:** `InspectorTheme: String, CaseIterable` gains eight lowercase raw IDs `vintage`, `greyscale`, `teal`, `slate`, `blackberry`, `blackboard`, `coffee`, `swing` and scoped palette properties for root fill, branch colors, document background and contrasting title color. Existing three raw IDs/colors unchanged. `OwnJSON` theme validation reads `InspectorTheme(rawValue: value) != nil` rather than a three-string hardcoded list.
 
