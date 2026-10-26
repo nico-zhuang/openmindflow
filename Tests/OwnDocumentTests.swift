@@ -96,6 +96,13 @@ enum OwnDocumentTests {
             rejects { _ = try readOwnDocument(invalidURL) }
         }
         try writeOwnDocument(styled, to: url)
+        let restoredStyled = try readOwnDocument(url)
+        assert(restoredStyled.roots == styled.roots &&
+               restoredStyled.relationships == styled.relationships &&
+               restoredStyled.theme == styled.theme &&
+               restoredStyled.canvasColor == styled.canvasColor,
+               "Restored styled document must retain its content")
+        let restoredStyledBytes = try Data(contentsOf: url)
         invalidStyled = styled
         invalidStyled.canvasColor = "not a color"
         rejects { try writeOwnDocument(invalidStyled, to: url) }
@@ -108,7 +115,8 @@ enum OwnDocumentTests {
         invalidStyled = styled
         invalidStyled.roots[0].rootFillColor = "bad"
         rejects { try writeOwnDocument(invalidStyled, to: url) }
-        assert((try? Data(contentsOf: url)) == styledBytes)
+        assert((try? Data(contentsOf: url)) == restoredStyledBytes,
+               "Rejected writes must preserve the immediately preceding styled file byte-for-byte")
         try writeOwnDocument(document, to: url)
         saved = try Data(contentsOf: url)
         var invalid = document
