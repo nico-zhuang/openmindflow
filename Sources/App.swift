@@ -463,12 +463,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private func selectionBox(_ item: LaidOutNode) -> CGRect {
         screen(item.frame).insetBy(dx: 6 * zoom, dy: 5 * zoom)
     }
-    private func resizeHandlePoint(_ item: LaidOutNode) -> CGPoint {
+    private func resizeHandlePoint(_ item: LaidOutNode, among nodes: [LaidOutNode]) -> CGPoint {
         if model.selectedIDs.count == 1, let media = imageRect(item) ?? videoRect(item) {
             return CGPoint(x: media.maxX, y: media.maxY)
         }
         let box = selectionBox(item)
-        return CGPoint(x: box.maxX, y: box.minY)
+        return CGPoint(x: goesLeft(item, among: nodes) ? box.minX : box.maxX, y: box.minY)
     }
     private func drawSelectionBox(_ item: LaidOutNode) {
         let path = NSBezierPath(roundedRect: selectionBox(item), xRadius: 4 * zoom, yRadius: 4 * zoom)
@@ -527,24 +527,37 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private func visibleNodes(for candidate: [MapNode]? = nil) -> [LaidOutNode] {
         // ponytail: copy the tiny tree only during width drag; index nodes if very large maps make resizing lag.
-        func preview(_ nodes: [MapNode]) -> [MapNode] {
+        let source = candidate ?? model.roots
+        let baseline = resize == nil || candidate != nil ? [] : visibleNodes(for: source)
+        let leftIDs = Set(baseline.filter { goesLeft($0, among: baseline) }.map { $0.node.id })
+        let baselineCenters = Dictionary(uniqueKeysWithValues: baseline.map {
+            ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        })
+        func preview(_ nodes: [MapNode], ancestorShift: Double = 0) -> [MapNode] {
             nodes.map { item in
                 var copy = item
+                var shift = ancestorShift
                 if let resize, let old = resize.visibleWidths[item.id] {
                     let delta = resize.currentWidth - resize.startWidth
                     if model.selectedIDs.count == 1, let image = copy.image {
                         copy.imageWidth = min(1000, max(60, image.displaySize(width: copy.imageWidth).width + delta))
+                    } else if model.selectedIDs.count == 1, let video = copy.video {
+                        copy.videoWidth = min(1000, max(60, video.displaySize(width: copy.videoWidth).width + delta))
                     } else {
                         let width = min(1000, max(60, old + delta))
                         copy.width = width
-                        if copy.location != nil { copy.location!.x += Double(width - old) / 2 }
+                        shift += Double(width - old) * (leftIDs.contains(item.id) ? -1 : 1)
+                        let half = Double(width - old) * (leftIDs.contains(item.id) ? -0.5 : 0.5)
+                        if copy.location == nil, leftIDs.contains(item.id), let center = baselineCenters[item.id] {
+                            copy.location = SIMD2(Double(center.x) + half, Double(center.y))
+                        } else { copy.location?.x += half }
                     }
                 }
-                copy.children = preview(item.children)
+                if ancestorShift != 0 { copy.location?.x += ancestorShift }
+                copy.children = preview(item.children, ancestorShift: shift)
                 return copy
             }
         }
-        let source = candidate ?? model.roots
         let roots = resize == nil || candidate != nil ? source : preview(source)
         func hasLocation(_ node: MapNode) -> Bool {
             node.location != nil || node.children.contains(where: hasLocation)
@@ -1018,7 +1031,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             (label as NSString).draw(in: textRect, withAttributes: attrs)
             drawNote(for: item, in: box)
             if model.selectedIDs.contains(item.node.id) {
-                let point = resizeHandlePoint(item)
+                let point = resizeHandlePoint(item, among: nodes)
                 let handle = NSBezierPath(ovalIn: CGRect(x: point.x - 5, y: point.y - 5,
                     width: 10, height: 10))
                 NSColor.windowBackgroundColor.setFill()
@@ -1064,7 +1077,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         let nodes = visibleNodes()
         if let item = nodes.first(where: { $0.node.id == model.selected }) {
-            let point = resizeHandlePoint(item)
+            let point = resizeHandlePoint(item, among: nodes)
             addCursorRect(CGRect(x: point.x - 11, y: point.y - 11,
                 width: 22, height: 22), cursor: .resizeLeftRight)
         }
@@ -1138,11 +1151,12 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         } else { endEditingWithoutSaving(); needsDisplay = true }
         return true
     }
-    private func changed() {
+    private func changed(reveal: Bool = true) {
         if let id = selectedRelationshipID, !model.relationships.contains(where: { $0.id == id }) {
             selectedRelationshipID = nil
         }
-        revealSelection(); needsDisplay = true; onChange?()
+        if reveal { revealSelection() }
+        needsDisplay = true; onChange?()
     }
     func addChild() { guard commitEditing() else { return }; let old = model.selected; model.addChild(); if old != model.selected { changed(); beginEditing() } }
     func addSibling(before: Bool = false) { guard commitEditing() else { return }; let old = model.selected; model.addSibling(before: before); if old != model.selected { changed(); beginEditing() } }
@@ -1345,6 +1359,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             custom.target = self
             custom.tag = 15
             menu.addItem(withTitle: t("Node Width"), action: nil, keyEquivalent: "").submenu = widthMenu
+            if let parentID = node.parent, visibleNodes().first(where: { $0.node.id == parentID })?.parent == nil {
+                for (side, tag) in [("left", 38), ("right", 39)] {
+                    let title = side == "left" ? "Place on Left" : "Place on Right"
+                    add(title, tag)
+                    menu.items.last?.state = (node.node.branchSide ?? "right") == side ? .on : .off
+                }
+            }
             if node.parent != nil || model.roots.count > 1 { add("Delete", 5) }
         } else {
             add("New Main Node", 3)
@@ -1456,6 +1477,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let width: CGFloat? = item.tag == 10 ? nil : MapNode.widthPresets[item.tag - 11]
             if model.setWidth(width) { changed() }
         case 16: showFontPanel()
+        case 38, 39:
+            guard commitEditing(), model.selectedIDs.count == 1 else { return }
+            if model.setRootBranchSide(item.tag == 38 ? "left" : "right", for: model.selected) { changed() }
         case 20: arrangeMap()
         case 21: copy(nil)
         case 22: paste(nil)
@@ -1632,8 +1656,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
            let selected = hitNodes.first(where: { model.selectedIDs.contains($0.node.id) &&
-               abs(point.x - resizeHandlePoint($0).x) <= 11 &&
-               abs(point.y - resizeHandlePoint($0).y) <= 11 }) {
+               abs(point.x - resizeHandlePoint($0, among: hitNodes).x) <= 11 &&
+               abs(point.y - resizeHandlePoint($0, among: hitNodes).y) <= 11 }) {
             let widths = Dictionary(uniqueKeysWithValues: hitNodes.filter {
                 model.selectedIDs.contains($0.node.id)
             }.map { ($0.node.id, $0.frame.width) })
@@ -1722,7 +1746,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return
         }
         if var resize {
-            resize.currentWidth = min(1000, max(60, resize.startWidth + (point.x - resize.startX) / zoom))
+            let nodes = visibleNodes(for: model.roots)
+            let left = nodes.first(where: { $0.node.id == resize.id }).map { goesLeft($0, among: nodes) } ?? false
+            let media = model.selectedIDs.count == 1 && nodes.first(where: { $0.node.id == resize.id }).map {
+                $0.node.image != nil || $0.node.video != nil
+            } == true
+            resize.currentWidth = min(1000, max(60, resize.startWidth + (left && !media ? -1 : 1) *
+                (point.x - resize.startX) / zoom))
             self.resize = resize
             needsDisplay = true
             return
@@ -1775,8 +1805,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                       let selected = selectedNode(), let video = selected.node.video {
                 let width = min(1000, max(60, video.displaySize(width: selected.node.videoWidth).width + delta))
                 if model.setVideoWidth(width) { resize = nil; changed() }
-            } else if model.resizeSelected(by: delta, visibleWidths: handle.visibleWidths) {
-                resize = nil; changed()
+            } else {
+                let nodes = visibleNodes(for: model.roots)
+                let centers = Dictionary(uniqueKeysWithValues: nodes.map {
+                    ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+                })
+                let left = Set(nodes.filter { goesLeft($0, among: nodes) }.map { $0.node.id })
+                if model.resizeSelected(by: delta, visibleWidths: handle.visibleWidths,
+                                        visibleCenters: centers, renderedLeft: left) {
+                    resize = nil; changed(reveal: false)
+                }
             }
             return
         }
@@ -1791,6 +1829,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             })
             if model.translateSelectedSubtrees(by: delta, visibleCenters: centers) { changed() }
             return
+        }
+        if model.selectedIDs.count == 1, let parentID = anchor.parent,
+           let parent = nodes.first(where: { $0.node.id == parentID && $0.parent == nil }) {
+            let rootX = screen(parent.frame).midX
+            let side = point.x < rootX ? "left" : "right"
+            // Only a release on the opposite side changes direction; same-side drops retain normal behavior.
+            if (point.x < rootX) != goesLeft(anchor, among: nodes) {
+                if model.setRootBranchSide(side, for: source) { changed() }
+                return
+            }
         }
         let placement: (target: LaidOutNode, parent: UUID, index: Int)
         if let target = validDrop(at: point, source: source, nodes: nodes) { placement = target }

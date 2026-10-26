@@ -70,6 +70,7 @@ enum L10n {
         "Line Style": "线条样式", "Dotted": "点线", "Start Arrow": "起点箭头", "End Arrow": "终点箭头",
         "New Parent": "新建父节点", "New Main Node": "新建主节点",
         "Detach Node": "分离节点", "Fold/Unfold": "折叠/展开", "Delete": "删除",
+        "Place on Left": "放置在左侧", "Place on Right": "放置在右侧",
         "Node Width": "节点宽度", "Auto": "自动", "Narrow (170 pt)": "窄（170 点）",
         "Medium (240 pt)": "中（240 点）", "Wide (320 pt)": "宽（320 点）",
         "Extra Wide (480 pt)": "特宽（480 点）", "Custom Width…": "自定义宽度…",

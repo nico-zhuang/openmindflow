@@ -591,26 +591,63 @@ final class MapModel {
         return commit(updated)
     }
 
+    private func widthDirection(at path: [Int], renderedLeft: Set<UUID> = []) -> Double {
+        guard path.count > 1 else { return 1 }
+        let branch = roots[path[0]].children[path[1]]
+        if branch.branchSide == "left" { return -1 }
+        if branch.branchSide == "right" { return 1 }
+        if renderedLeft.contains(branch.id) { return -1 }
+        if let branchX = branch.location?.x, let rootX = roots[path[0]].location?.x,
+           branchX < rootX { return -1 }
+        return 1
+    }
+
+    private static func shiftPositioned(_ children: inout [MapNode], by distance: Double) {
+        for index in children.indices {
+            children[index].location?.x += distance
+            shiftPositioned(&children[index].children, by: distance)
+        }
+    }
+
     @discardableResult
     func setWidth(_ width: CGFloat?, anchoredFrom oldWidth: CGFloat? = nil) -> Bool {
         guard width.map(MapNode.validWidth) ?? true, oldWidth.map(MapNode.validWidth) ?? true,
               selectedPaths().allSatisfy({ path in
                   let node = Self.node(at: path[...], in: roots)
                   guard node.width != width, let width, let oldWidth, let point = node.location else { return true }
-                  let center = point.x + Double(width - oldWidth) / 2
+                  let center = point.x + Double(width - oldWidth) * widthDirection(at: path) / 2
                   return center.isFinite && abs(center) <= 1_000_000
               }) else { return false }
+        let directions = Dictionary(uniqueKeysWithValues: selectedPaths().map { path in
+            (Self.node(at: path[...], in: roots).id, widthDirection(at: path))
+        })
+        if let width, let oldWidth {
+            let shifts = Dictionary(uniqueKeysWithValues: selectedPaths().map { path -> (UUID, Double) in
+                let node = Self.node(at: path[...], in: roots)
+                return (node.id, node.width == width ? 0 : Double(width - oldWidth) * directions[node.id]!)
+            })
+            func safe(_ node: MapNode, ancestor: Double) -> Bool {
+                let own = shifts[node.id] ?? 0
+                if let point = node.location,
+                   (!point.x.isFinite || abs(point.x + ancestor + own / 2) > 1_000_000) { return false }
+                return node.children.allSatisfy { safe($0, ancestor: ancestor + own) }
+            }
+            guard roots.allSatisfy({ safe($0, ancestor: 0) }) else { return false }
+        }
         return editSelected { node in
             guard node.width != width else { return }
-            if let width, let oldWidth, let point = node.location {
-                node.location?.x = point.x + Double(width - oldWidth) / 2
+            if let width, let oldWidth {
+                let distance = Double(width - oldWidth) * directions[node.id]!
+                node.location?.x += distance / 2
+                Self.shiftPositioned(&node.children, by: distance)
             }
             node.width = width
         }
     }
 
     @discardableResult
-    func resizeSelected(by delta: CGFloat, visibleWidths: [UUID: CGFloat]) -> Bool {
+    func resizeSelected(by delta: CGFloat, visibleWidths: [UUID: CGFloat],
+                        visibleCenters: [UUID: CGPoint] = [:], renderedLeft: Set<UUID> = []) -> Bool {
         guard delta.isFinite, !visibleWidths.isEmpty else { return false }
         let paths = selectedPaths()
         guard !paths.isEmpty, paths.allSatisfy({ path in
@@ -619,14 +656,14 @@ final class MapModel {
             let width = min(1000, max(60, old + delta))
             guard width.isFinite else { return false }
             guard node.width != width, let point = node.location else { return true }
-            let center = point.x + Double(width - old) / 2
+            let center = point.x + Double(width - old) * widthDirection(at: path, renderedLeft: renderedLeft) / 2
             return center.isFinite && abs(center) <= 1_000_000
         }) else { return false }
         let shifts = Dictionary(uniqueKeysWithValues: paths.map { path in
             let node = Self.node(at: path[...], in: roots)
             let old = visibleWidths[node.id]!
             let width = min(1000, max(60, old + delta))
-            return (node.id, node.width == width ? 0 : Double(width - old))
+            return (node.id, node.width == width ? 0 : Double(width - old) * widthDirection(at: path, renderedLeft: renderedLeft))
         })
         func safe(_ node: MapNode, ancestor: Double) -> Bool {
             let own = shifts[node.id] ?? 0
@@ -644,8 +681,10 @@ final class MapModel {
             let old = visibleWidths[node.id]!
             let width = min(1000, max(60, old + delta))
             guard node.width != width else { return }
-            let distance = Double(width - old)
-            node.location?.x += distance / 2
+            let distance = shifts[node.id]!
+            if node.location == nil, distance < 0, let center = visibleCenters[node.id] {
+                node.location = SIMD2(Double(center.x) + distance / 2, Double(center.y))
+            } else { node.location?.x += distance / 2 }
             shiftChildren(&node.children, by: distance)
             node.width = width
         }

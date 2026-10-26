@@ -184,7 +184,7 @@ enum CanvasCommandTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         guard let rightMenu = rightCanvas.menu(for: rightEvent), rightModel.selected == rightB.id,
-              rightMenu.items.map(\.title) == ["Edit Title", "Edit Note", "Copy", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Delete", "", "Arrange Map"] else {
+              rightMenu.items.map(\.title) == ["Edit Title", "Edit Note", "Copy", "Font…", "New Child", "New Sibling", "New Main Node", "Node Width", "Place on Left", "Place on Right", "Delete", "", "Arrange Map"] else {
             fputs("Right-clicking a node needs a context menu targeting that exact node\n", stderr); exit(1)
         }
         var noteTarget: UUID?
