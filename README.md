@@ -1,9 +1,9 @@
 # OpenMindFlow — 独立 macOS 思维导图编辑器
 
-当前独立手测候选：[`OpenMindFlow-Candidate-20261026.zip`](dist/OpenMindFlow-Candidate-20261026.zip)；解压后使用独立的 `OpenMindFlow-Candidate-20261026.app`，其 bundle ID 为 `local.openmindflow.candidate.20261026`。这是本机 arm64 开发候选，只有工具链自动生成的 ad-hoc 可执行签名，**不是**第二个正式签名/公证预览；本次构建未启动或激活它。旧版仍可能含未保存内容，不要替换、关闭或聚焦 `build/MindMap-Feedback-20261026.app`。
+当前独立手测候选（2026-10-27 窗口与左侧主干修复）：[`OpenMindFlow-WindowFix-20261027.zip`](dist/OpenMindFlow-WindowFix-20261027.zip)；解压后使用独立的 `build/OpenMindFlow-WindowFix-20261027.app`，bundle ID `local.openmindflow.windowfix.20261027`。本机 arm64 开发候选仅有工具链自动生成的 ad-hoc 签名，**不是**正式签名/公证预览。2026-10-26 的旧候选已有用户亲测的最大化黑边及边缘拉伸失败反馈，且可能有未保存内容；不得关闭、覆盖或对它运行自动化。同样保护 `build/MindMap-Feedback-20261026.app` 与首版签名预览。
 
 - 导入 `.mindnode` 仅只读，编辑另存 `.mindmap.json`；检查器只显示 **Style、Notes、Themes**，主题卡只显示 Tropical/Teal（亮）和 Slate/Coffee（暗），旧 Rainbow/Candyland ID 仍可读取。左侧一级分支及子树可拖过根中心或用右键切换，保存/重开和撤销有独立回归。
-- 最终明确列出的 **39 个安全离屏测试组及 3 个交互子模式**全部编译、执行退出 0；这不等于可见 GUI 或实体鼠标通过。真实未最大化窗口的边缘缩放仍须本人按[人工手测清单](docs/2026-10-26-candidate-manual-handtest.md)亲自拖动。导入文件中有任意固定坐标同级节点时，新增子节点的全面避碰不是本轮承诺。
+- 修复最大化中央灰底外围黑边的根因：去掉优先级高于窗口当前尺寸的固定 1280×700 分栏内容约束；在左侧首级主干下划线与根节点左边交会时让线条平顺，并连续处理边界。**40 个显式安全离屏测试组及 3 个交互子模式**都编译、运行退出 0；这不等于可见 GUI 或实体鼠标通过。新候选的真实未最大化窗口四边拉伸、最大化背景及左侧主干外观仍须本人按[人工手测清单](docs/2026-10-26-candidate-manual-handtest.md)亲自复验，技术证据见[跟进记录](docs/2026-10-27-window-and-left-trunk-followup.md)。导入文件中任意固定坐标同级节点的全面避碰不是本轮承诺。
 - **不要运行仓库遗留的 `build.sh`**：它硬编码写入 `build/MindMap.app`，不是此候选的构建方式。旧预览、来源 `.mindnode` 和现有导出均不得覆盖。
 
 以下段落是旧阶段记录；若与上述当前候选状态冲突，以本节和人工清单为准。
