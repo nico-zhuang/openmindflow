@@ -96,6 +96,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
     }
     private var relationshipColorPanelID: UUID?
+    func invalidateRelationshipColorPanelOwnership() { relationshipColorPanelID = nil }
+    #if HEADLESS_TEST
+    func armRelationshipColorPanelForTesting(_ id: UUID) {
+        _ = relationshipMenu(for: id)
+        relationshipColorPanelID = id
+    }
+    #endif
     var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
     var nativePresentation: [UUID: MindNodePresentation] = [:] {
         didSet {
@@ -2333,18 +2340,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #endif
     private var pendingOpenURLs: [URL] = []
     private var settingsWindow: NSWindow?
-    // Legacy menu/toolbar and Find entry points forward through the selected session.
-    private var activeSession: DocumentSession? {
+    // Explicit window resolution is shared by production key-window routing and headless fixtures.
+    func resolveSession(for key: NSWindow?) -> DocumentSession? {
         #if HEADLESS_TEST
         if let fixtureAnchor { return fixtureAnchor }
         #endif
-        if let key = NSApp.keyWindow {
-            if let owner = windowSessions.first(where: { $0.window === key }) { return owner.active }
-            if key === findSession?.findWindow, let session = findSession, isLiveSession(session) { return session }
-            if let session = sessionsByWindow[ObjectIdentifier(key)] { return session }
-        }
-        return nil
+        guard let key else { return nil }
+        if let owner = windowSessions.first(where: { $0.window === key }) { return owner.active }
+        if key === findSession?.findWindow, let session = findSession, isLiveSession(session) { return session }
+        return sessionsByWindow[ObjectIdentifier(key)]
     }
+    #if HEADLESS_TEST
+    var primarySessionForTesting: DocumentSession? { primarySession }
+    func cacheLegacySessionForTesting(_ document: DocumentSession, in window: NSWindow) {
+        sessionsByWindow[ObjectIdentifier(window)] = document
+    }
+    #endif
+    // Legacy menu/toolbar and Find entry points forward through the selected session.
+    private var activeSession: DocumentSession? { resolveSession(for: NSApp.keyWindow) }
     private func isLiveSession(_ session: DocumentSession) -> Bool {
         windowSessions.contains { coordinator in
             session.window === coordinator.window &&
@@ -2435,13 +2448,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard let self else { return }
             if self.findSession === removed { self.findSession = nil }
             self.sessionsByWindow[ObjectIdentifier(owner.window)] = owner.active
+            if self.primarySession === removed {
+                self.primarySession = self.windowSessions.flatMap(\.documents).first
+            }
         }
         coordinator.onClose = { [weak self] closed in
-            if let findSession = self?.findSession,
-               closed.documents.contains(where: { $0 === findSession }) { self?.findSession = nil }
-            self?.windowSessions.removeAll { $0 === closed }
-            self?.sessionsByWindow.removeValue(forKey: ObjectIdentifier(closed.window))
-            if self?.window === closed.window { self?.window = self?.windowSessions.first?.window }
+            guard let self else { return }
+            if let findSession = self.findSession,
+               closed.documents.contains(where: { $0 === findSession }) { self.findSession = nil }
+            let removedPrimary = closed.documents.contains { $0 === self.primarySession }
+            self.windowSessions.removeAll { $0 === closed }
+            self.sessionsByWindow.removeValue(forKey: ObjectIdentifier(closed.window))
+            if removedPrimary { self.primarySession = self.windowSessions.flatMap(\.documents).first }
+            if self.window === closed.window { self.window = self.windowSessions.first?.window }
         }
         windowSessions.append(coordinator)
         let document = installSession(canvas: canvas, in: nativeWindow)

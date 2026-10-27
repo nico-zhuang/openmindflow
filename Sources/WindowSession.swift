@@ -47,6 +47,7 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         panel?.orderOut(nil)
         panel?.close()
         document.inspector.colorPanelModel = nil
+        document.canvas.invalidateRelationshipColorPanelOwnership()
     }
     func remove(_ document: DocumentSession) {
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
