@@ -102,25 +102,65 @@ import Darwin
         let foregroundColor = a.canvas.model.canvasColor
         assert(foregroundColor != beforeCanvas,
                "foreground A must still accept its own color callback, as when shared panel is key")
-        let exportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omf-binding-\(UUID())", isDirectory: true)
-        try! FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: false,
-                                                 attributes: [.posixPermissions: 0o700])
-        var ownedDirectory = stat()
-        precondition(lstat(exportDirectory.path, &ownedDirectory) == 0 &&
-                     ownedDirectory.st_uid == getuid() &&
-                     ownedDirectory.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
-                     ownedDirectory.st_mode & 0o777 == 0o700)
+        let temporaryParent = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        precondition(temporaryParent.path.hasPrefix("/"))
+        func privateDirectory(_ prefix: String) -> (URL, stat) {
+            let directory = temporaryParent.appendingPathComponent("\(prefix)\(UUID())", isDirectory: true)
+            try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                     attributes: [.posixPermissions: 0o700])
+            var identity = stat()
+            precondition(lstat(directory.path, &identity) == 0 &&
+                         directory.resolvingSymlinksInPath() == directory &&
+                         directory.deletingLastPathComponent().resolvingSymlinksInPath() == temporaryParent &&
+                         identity.st_uid == getuid() &&
+                         identity.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
+                         identity.st_mode & 0o777 == 0o700)
+            return (directory, identity)
+        }
+        let (exportDirectory, ownedDirectory) = privateDirectory("mindmap-native-panel-")
+        let (unadmittedDirectory, unadmittedIdentity) = privateDirectory("omf-binding-unadmitted-")
+        try! "mindmap-owned-native-panel\n".write(to: exportDirectory.appendingPathComponent(".owner"),
+                                                  atomically: true, encoding: .utf8)
+        let previousPanelDirectory = getenv("MINDMAP_SELFTEST_PANEL_DIR").map { String(cString: $0) }
+        precondition(setenv("MINDMAP_SELFTEST_PANEL_DIR", exportDirectory.path, 1) == 0)
         defer {
-            var current = stat()
-            if lstat(exportDirectory.path, &current) == 0 &&
-                current.st_dev == ownedDirectory.st_dev && current.st_ino == ownedDirectory.st_ino &&
-                current.st_uid == getuid() && current.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
-                exportDirectory.deletingLastPathComponent().resolvingSymlinksInPath() ==
-                    FileManager.default.temporaryDirectory.resolvingSymlinksInPath() {
-                try? FileManager.default.removeItem(at: exportDirectory)
+            if let previousPanelDirectory {
+                precondition(setenv("MINDMAP_SELFTEST_PANEL_DIR", previousPanelDirectory, 1) == 0)
+            } else {
+                precondition(unsetenv("MINDMAP_SELFTEST_PANEL_DIR") == 0)
+            }
+            for (directory, identity) in [(exportDirectory, ownedDirectory),
+                                          (unadmittedDirectory, unadmittedIdentity)] {
+                var current = stat()
+                if directory.path.hasPrefix("/") &&
+                    directory.deletingLastPathComponent().resolvingSymlinksInPath() == temporaryParent &&
+                    directory.resolvingSymlinksInPath() == directory &&
+                    lstat(directory.path, &current) == 0 &&
+                    current.st_dev == identity.st_dev && current.st_ino == identity.st_ino &&
+                    current.st_uid == getuid() && current.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
+                    current.st_mode & 0o777 == 0o700 {
+                    try? FileManager.default.removeItem(at: directory)
+                }
             }
         }
+        let unadmittedURL = unadmittedDirectory.appendingPathComponent("existing.mflw")
+        try! a.saveCurrentMap(to: unadmittedURL)
+        var beforeUnadmitted = stat()
+        precondition(lstat(unadmittedURL.path, &beforeUnadmitted) == 0)
+        let originalUnadmittedBytes = try! Data(contentsOf: unadmittedURL)
+        a.canvas.addMainNode()
+        app.afterSavePanelForTesting = { captured in
+            assert(captured === a, "hook must capture active A")
+            return unadmittedURL
+        }
+        _ = app.perform(NSSelectorFromString("saveAsNative:"), with: nil)
+        var afterUnadmitted = stat()
+        assert(lstat(unadmittedURL.path, &afterUnadmitted) == 0 &&
+               afterUnadmitted.st_dev == beforeUnadmitted.st_dev &&
+               afterUnadmitted.st_ino == beforeUnadmitted.st_ino &&
+               (try! Data(contentsOf: unadmittedURL)) == originalUnadmittedBytes,
+               "post-panel hook must not authorize replacing an existing outside-fixture file")
+        app.afterSavePanelForTesting = nil
         for action in ["saveAsNative:", "exportPDF:", "exportPNG:", "exportJPEG:",
                        "exportMarkdownFile:", "exportMindNodeCopy:"] {
             assert(first.activate(a))

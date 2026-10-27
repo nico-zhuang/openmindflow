@@ -2839,21 +2839,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func exportMindNodeCopy(_ sender: Any?) {
         guard let session = activeSession, isActiveLiveSession(session),
               session.commitPendingEditors() else { return }
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        #endif
         let panel = NSSavePanel()
         #if HEADLESS_TEST
-        if afterSavePanelForTesting == nil {
-            guard let directory = ownedPanelFixtureDirectory() else { return }
-            panel.directoryURL = directory
-        }
+        panel.directoryURL = directory
         #endif
         panel.allowedContentTypes = [UTType(filenameExtension: "mindnode") ?? .data]
         panel.nameFieldStringValue = "OpenMindFlow-Copy.mindnode"
         guard let url = savePanelURL(panel, for: session), stillOwnsModalDocument(session) else { return }
         #if HEADLESS_TEST
-        if afterSavePanelForTesting == nil {
-            guard let directory = ownedPanelFixtureDirectory(),
-                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
-        }
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
         #endif
         do { try session.exportCurrentMindNode(to: url) }
         catch DocumentOperationError.cancelled { return }
@@ -2872,21 +2869,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private func export(_ format: MapExportFormat, extension suffix: String, type: UTType) {
         guard let session = activeSession, isActiveLiveSession(session),
               session.commitPendingEditors() else { return }
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return }
+        #endif
         let panel = NSSavePanel()
         #if HEADLESS_TEST
-        if afterSavePanelForTesting == nil {
-            guard let directory = ownedPanelFixtureDirectory() else { return }
-            panel.directoryURL = directory
-        }
+        panel.directoryURL = directory
         #endif
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = "OpenMindFlow.\(suffix)"
         guard let url = savePanelURL(panel, for: session), stillOwnsModalDocument(session) else { return }
         #if HEADLESS_TEST
-        if afterSavePanelForTesting == nil {
-            guard let directory = ownedPanelFixtureDirectory(),
-                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
-        }
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
         #endif
         do { try exportMap(session.canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
@@ -2930,14 +2924,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard let session = explicitSession ?? activeSession, isLiveSession(session),
               (explicitSession != nil || stillOwnsModalDocument(session)),
               session.commitPendingEditors() else { return false }
+        #if HEADLESS_TEST
+        guard let directory = ownedPanelFixtureDirectory() else { return false }
+        #endif
         var destination = chooseDestination ? nil : session.fileURL
         if destination == nil {
             let panel = NSSavePanel()
             #if HEADLESS_TEST
-            if afterSavePanelForTesting == nil {
-                guard let directory = ownedPanelFixtureDirectory() else { return false }
-                panel.directoryURL = directory
-            }
+            panel.directoryURL = directory
             #endif
             panel.allowedContentTypes = [UTType(exportedAs: "local.openmindflow.document", conformingTo: .data)]
             panel.nameFieldStringValue = session.fileURL?.lastPathComponent ?? "Untitled.mflw"
@@ -2950,10 +2944,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             return false
         }
         #if HEADLESS_TEST
-        if afterSavePanelForTesting == nil {
-            guard let directory = ownedPanelFixtureDirectory(),
-                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
-        }
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
         #endif
         guard isLiveSession(session),
               (explicitSession != nil || stillOwnsModalDocument(session)) else { return false }
