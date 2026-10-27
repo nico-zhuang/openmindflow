@@ -1,0 +1,65 @@
+# OpenMindFlow Native Document and MindNode v9 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Deliver versioned non-JSON `.mflw` document saves and conservative, preservation-first editable MindNode v9 import/save-copy/export without touching users' original files or existing running app bundles.
+
+**Architecture:** A dedicated binary-plist own-file codec stores `OwnMapDocument` and optional opaque encoded MindNode provenance. A separate MindNode archive captures and validates source package bytes, metadata and the original tree; exports patch staged copies of imported packages or use the existing verified-subset synthetic writer when no source exists. AppKit coordinates file menus and dirty-state only after operations succeed.
+
+**Tech Stack:** Swift 6.2, AppKit, Foundation `PropertyListEncoder/Decoder`, CryptoKit SHA-256, Darwin `openat`/`renameatx_np`; tests compile with `swiftc -suppress-warnings -D HEADLESS_TEST Sources/*.swift Tests/NAME.swift -framework AppKit -framework AVKit -framework AVFoundation` on arm64 macOS 26.
+
+## Global Constraints
+
+- `.mflw` is the only **new user-facing own save** extension; its bytes are NOT JSON, and `.omf` must not be used because PRONOM assigns it to Open Media Framework Interchange.
+- Own file header uses exact UTF-8 `OMFLW001`, big-endian UInt64 payload length, 32 SHA-256 bytes over a binary property-list payload; cap entire file at 128 MiB. A binary plist contains `OwnMapDocument` and optional opaque `Data` for one independently versioned MindNode provenance archive.
+- Existing `.mindmap.json` files remain readable for migration but are never a new default output. Opening a legacy file and saving writes a newly selected `.mflw` path without changing the JSON original.
+- MindNode import accepts v9 binary-plist directory packages and regular files. Export and Save As MindNode Copy exclusively create a NEW destination; no implicit write into the imported `.mindnode` or existing package. Unknown source metadata and unchanged resource bytes stay in the new copy; unsupported edits cause a clear error and publish nothing.
+- A candidate is built in a fresh owned `/private/tmp/openmindflow-local-*` scratch directory, separately named under `build/`/`dist/`, ad-hoc signed and `open -n` alongside all old running apps. Do not push or remove old files. No global HID/AX for the user's session; attached unshown `NSWindow` is acceptable, physical mouse/original MindNode acceptance must be labeled unverified.
+
+---
+
+### Task 1: Versioned native `.mflw` codec
+
+**Files:** Create `Sources/OpenMindFlowFile.swift`, `Tests/OpenMindFlowFileTests.swift`; modify `Sources/OwnJSON.swift` solely to expose `checkOwnDocument(_:)` for reuse.
+
+**Interfaces:** Produces `enum NativeMapFile { struct Payload { var document: OwnMapDocument; var mindNodeArchive: Data? }; static func read(_ url: URL) throws -> Payload; static func write(_ payload: Payload, to url: URL) throws }`. Does not parse archive Data or touch AppKit.
+
+- [ ] **Step 1: Write the failing codec test.** Make an owned 0700 scratch directory, construct `OwnMapDocument(roots:[MapNode(id:UUID(),title:"A",children:[],folded:false)])`; assert `NativeMapFile.write(.init(document:document,mindNodeArchive:nil),to:file.mflw)` produces bytes beginning `OMFLW001`, **not** `{` or `[`, and `read` returns identical roots. Include corruption/truncation/wrong version, 128 MiB limit, symlinked destination, nested `.mindnode` path, old JSON rejection, changed provenance bytes and atomic re-save tests using uniquely owned scratch.
+- [ ] **Step 2: Run RED.** `swiftc -suppress-warnings -D HEADLESS_TEST Sources/*.swift Tests/OpenMindFlowFileTests.swift -framework AppKit -framework AVKit -framework AVFoundation -o /private/tmp/omf-codec-red && /private/tmp/omf-codec-red`; expect missing `NativeMapFile`/required behavior failure.
+- [ ] **Step 3: Implement bounded verified codec.** `checkOwnDocument` becomes internal; `PropertyListEncoder().outputFormat = .binary`, `SHA256.hash(data:payload)`, header exactly `Array("OMFLW001".utf8) + UInt64(bigEndian: payload.count) + digest`; parser verifies all lengths/magic/hash **before** decoding, checks returned document and bplist format; reject unsafe destinations via `lstat`, `O_NOFOLLOW` and existing `.mindnode`-parent exclusion before atomic write. Invalid versions never silently migrate.
+- [ ] **Step 4: Run GREEN and existing persistence suites.** Compile/run `OpenMindFlowFileTests`, `OwnJSONTests`, `OwnDocumentTests`; inspect `git diff --check` and have a reviewer confirm no JSON output was renamed to `.mflw`.
+- [ ] **Step 5: Commit.** Stage only this task's three files and commit `Add versioned binary OpenMindFlow document codec`.
+
+### Task 2: Portable preservation-first MindNode provenance archive
+
+**Files:** Create `Sources/MindNodeArchive.swift`, `Tests/MindNodeArchiveTests.swift`; modify `Sources/MindNodeImporter.swift` to give existing detailed metadata structs `Codable` as needed, and modify `Sources/MindNodeTitlePatch.swift` only for tested supported edit operations. Do not modify Task 1 files or `App.swift`.
+
+**Interfaces:** Produces `struct MindNodeArchive: Codable { init(importing source: URL) throws; var imported: MindNodeDetailedImport { get }; func export(editedRoots: [MapNode], to destination: URL) throws }`. App passes `PropertyListEncoder().encode(archive)` as the opaque `NativeMapFile.Payload.mindNodeArchive`; reopening uses `PropertyListDecoder().decode(MindNodeArchive.self, from: data)`. `imported.roots` is the untouched baseline. Preserve original directory-path/file-byte manifest or single-file bytes, not a source URL dependency.
+
+- [ ] **Step 1: Write failing source archive tests.** Synthetic v9 directory fixture contains unknown plist fields, opaque `notes`, source connections, attachment marker, nested binary resource and theme file; assert import snapshot, encode/decode, export with *only supported* title/fold/order edits, exact bytes for all non-`contents.xml` paths, preserved unknown plist fields, matching own importer, and unchanged original SHA-256. Cover regular-file v9. Unsupported rich-text title edits, note/media/style edits, malformed path, symlinks, occupied destination, >64 MiB / >1000 paths, and broken archive must fail without publishing.
+- [ ] **Step 2: Run RED.** `swiftc -suppress-warnings -D HEADLESS_TEST Sources/*.swift Tests/MindNodeArchiveTests.swift -framework AppKit -framework AVKit -framework AVFoundation -o /private/tmp/omf-archive-red && /private/tmp/omf-archive-red`; expect missing archive API failure.
+- [ ] **Step 3: Implement snapshot and staged export.** Collect files via the existing `MindNodePackage.snapshot` size/path restrictions (or stricter dirfd-based traversal); store sorted relative paths and byte blobs with a source-kind version. Recreate files only inside an owned private stage in the chosen destination parent, apply `MindNodeTitlePatch.apply` to `contents.xml` or regular-file bytes, verify non-target resources exactly, check `MindNodeImporter.loadDetailed` against supported edited fields, and publish with `renameatx_np(..., RENAME_EXCL)` so a concurrent newly created name is not replaced. Validate decoded archive paths and byte budgets as strictly as newly captured ones. Keep fallback `MindNodeWriter` for new, simple native maps only; never use it to flatten an imported theme/resource package.
+- [ ] **Step 4: Run GREEN and existing compatibility suites.** Compile/run `MindNodeArchiveTests`, `MindNodeImporterTests`, `MindNodeTitlePatchTests`, `MindNodePackageTests`, `MindNodeWriterTests`. Code review must inspect all unsupported-edit paths for potential silent loss and independently verify original hash immutability.
+- [ ] **Step 5: Commit.** Stage only this task's files and commit `Preserve imported MindNode packages in portable archives`.
+
+### Task 3: Wire user document lifecycle and formats
+
+**Files:** Modify `Sources/App.swift`, `Sources/Localization.swift`, `Tests/FileActionMenuTests.swift`; create `Tests/NativeDocumentJourneyTests.swift`. Depends on Task 1 and Task 2 public interfaces; do not edit their owned files.
+
+**Interfaces:** On import, keep `MindNodeArchive` in delegate state and install `archive.imported` styles/theme/presentation; on own native save, `NativeMapFile.write(.init(document: OwnMapDocument(roots:canvas.model.roots,relationships:canvas.model.relationships,theme:canvas.model.theme,canvasColor:canvas.model.canvasColor),mindNodeArchive: archive.map { try PropertyListEncoder().encode($0) }),to:destination)`. On native open, decode archive Data, validate it, then restore the same presentation and model without changing dirty on failure. `fileURL` tracks `.mflw` only.
+
+- [ ] **Step 1: Write failing synthetic journey tests.** Assert File menu offers Open Map / Import MindNode / Save / Save As MindNode Copy / Export MindNode (localized), legacy JSON open→new `.mflw` save leaves original unchanged, source v9 with opaque resources imported→edited→native Save→reopen→export retains unknown package bytes, and failures/Cancel preserve prior model, selection, fileURL and dirty. Use an unshown owned `NSWindow` and private file fixtures; no AX against old apps.
+- [ ] **Step 2: Run RED.** `swiftc -suppress-warnings -D HEADLESS_TEST Sources/*.swift Tests/NativeDocumentJourneyTests.swift -framework AppKit -framework AVKit -framework AVFoundation -o /private/tmp/omf-journey-red && /private/tmp/omf-journey-red`; expect old Save targets JSON and old menu labels.
+- [ ] **Step 3: Implement AppKit state changes.** Configure Open panel with `.mflw`/legacy JSON, sniff extension + codec magic before mutation, retain two-phase preflight/re-read after discard confirmation, set native `fileURL` after successful write only, and keep imported source archive alive across `.mflw` close/reopen. For source-backed MindNode Save As/Export call `archive.export`, otherwise use `MindNodeWriter` subset; never set the `.mindnode` source as implicit Cmd-S target. Remove unconditional post-import modal warning; give explicit unsupported-export error. Rename old JSON/read-only/experimental menu and About copy, both languages.
+- [ ] **Step 4: Run GREEN plus menu/dirty lifecycle tests.** Compile/run `NativeDocumentJourneyTests`, `FileActionMenuTests`, `OwnDocumentTests`, `WindowResizeTests`; check each synthetic window is unshown and never becomes key.
+- [ ] **Step 5: Commit.** Stage only AppKit, localization and journey tests, commit `Use native documents and export preserved MindNode copies`.
+
+### Task 4: Bundle association, regression and independent delivery
+
+**Files:** Modify `scripts/build-openmindflow-local.sh`, `scripts/package-openmindflow-local-dmg.sh`, related packaging metadata tests if they exist, and the current section of `README.md`; create `Tests/NativeDocumentBundleTests.swift` only if needed for UTType assertion. No old archive paths are modified.
+
+- [ ] **Step 1: Write failing bundle metadata check.** Build a fresh scratch app and assert `Info.plist` contains exported `local.openmindflow.document`, extension `mflw`, MIME `application/vnd.openmindflow.mflw`, `CFBundleDocumentTypes` role `Editor`; old build lacks these keys and the check must RED.
+- [ ] **Step 2: Implement declarations and docs.** Add UTExportedTypeDeclarations/CFBundleDocumentTypes in the app build script, bump both scripts from `CFBundleShortVersionString=0.3.0`/`CFBundleVersion=4` to `0.4.0`/`5`, and preserve the signed icon and other metadata checks. Document `.mflw` binary format, JSON legacy migration, preservation/unsupported MindNode edits, new-vs-old file behavior, synthetic-only original app limitations and reproducible SHA-256 of the newly named candidate.
+- [ ] **Step 3: Run GREEN and full named safe suites.** Exclude `Tests/AppAccessibilityTests.swift` (live user-session AX) and visible self-checks; compile/run every other `Tests/*Tests.swift` independently plus `LeftBranchInteractionTests` `--model`, `--drag`, `--review`; inspect all exits. Run signed production build, `codesign --verify --deep --strict`, `hdiutil verify`, ZIP binary comparison, `git diff --check`.
+- [ ] **Step 4: Review and deliver.** Third-party review for Important/Critical format safety issues; correct via RED→GREEN. Preflight distinct `build/OpenMindFlow-NativeFormatReview-20261027.app` and `dist/OpenMindFlow-0.4.0-NativeFormatReview-20261027.{dmg,zip}` (or another unused named date/version), copy only fresh outputs, compare checksums, `open -n` new app and verify prior three PIDs still run. Never claim original MindNode has accepted generated files without independent evidence.
+- [ ] **Step 5: Commit.** Stage only script/tests/docs changes and commit `Register native OpenMindFlow documents and ship separate review build`. Never push.
