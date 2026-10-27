@@ -2326,27 +2326,78 @@ private func ownedPanelFixtureDirectory() -> URL? {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
-    private var canvas: MapCanvas!
-    private var outline: MapOutlineView!
-    private var inspector: StyleInspector!
-    private var splitController: NSSplitViewController!
-    private var fileURL: URL? // Only our .mflw document; imported MindNode/legacy JSON remain untouched.
-    private var mindNodeArchive: MindNodeArchive?
-    private var savedNativeSHA256: Data?
-    private var savedNativeIdentity: NativeMapFile.FileIdentity?
+    private var sessionsByWindow: [ObjectIdentifier: DocumentSession] = [:]
+    private var primarySession: DocumentSession?
+    private weak var findSession: DocumentSession?
+    #if HEADLESS_TEST
+    private var fixtureAnchor: DocumentSession?
+    #endif
     private var pendingOpenURLs: [URL] = []
-    private var savedRoots: [MapNode] = []
-    private var savedRelationships: [MapRelationship] = []
-    private var savedTheme: String?
-    private var savedCanvasColor: String?
-    private var dirty = false
     private var closeApproved = false
     private var settingsWindow: NSWindow?
-    private var findWindow: NSPanel?
-    private var findField: NSSearchField?
-    private var findStatus: NSTextField?
-    private var findMatches: [UUID] = []
-    private var findIndex = 0
+    // Legacy menu/toolbar and Find entry points forward through the selected session.
+    private var activeSession: DocumentSession? {
+        #if HEADLESS_TEST
+        if let fixtureAnchor { return fixtureAnchor }
+        #endif
+        if let key = NSApp.keyWindow {
+            if let session = sessionsByWindow[ObjectIdentifier(key)] { return session }
+            if key === findSession?.findWindow { return findSession }
+        }
+        // Legacy unshown workbench fixture has no native window to register.
+        return sessionsByWindow.isEmpty ? primarySession : nil
+    }
+    private func requireCurrentSession() throws -> DocumentSession {
+        #if HEADLESS_TEST
+        if let fixtureAnchor { return fixtureAnchor }
+        #endif
+        guard let key = NSApp.keyWindow,
+              let session = sessionsByWindow[ObjectIdentifier(key)] else { throw DocumentOperationError.cancelled }
+        return session
+    }
+    private var canvas: MapCanvas! { activeSession?.canvas }
+    private var outline: MapOutlineView! { activeSession?.outline }
+    private var inspector: StyleInspector! { activeSession?.inspector }
+    private var splitController: NSSplitViewController! { activeSession?.splitController }
+    private var fileURL: URL? { activeSession?.fileURL }
+    private var dirty: Bool { activeSession?.dirty ?? false }
+    private var findWindow: NSPanel? {
+        get { activeSession?.findWindow }
+        set { activeSession?.findWindow = newValue }
+    }
+    private var findField: NSSearchField? {
+        get { activeSession?.findField }
+        set { activeSession?.findField = newValue }
+    }
+    private var findStatus: NSTextField? {
+        get { activeSession?.findStatus }
+        set { activeSession?.findStatus = newValue }
+    }
+    private var findMatches: [UUID] {
+        get { activeSession?.findMatches ?? [] }
+        set { activeSession?.findMatches = newValue }
+    }
+    private var findIndex: Int {
+        get { activeSession?.findIndex ?? 0 }
+        set { activeSession?.findIndex = newValue }
+    }
+    private func installSession(canvas: MapCanvas, in window: NSWindow) -> DocumentSession {
+        let session = DocumentSession(canvas: canvas, defaults: defaults)
+        session.window = window
+        session.onTitleChange = { [weak self, weak session] in
+            guard let self, let session, let window = session.window else { return }
+            window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+        }
+        session.onFindChange = { [weak self, weak session] in
+            guard let self, let session, self.activeSession === session else { return }
+            self.refreshFindResults(navigate: false)
+        }
+        sessionsByWindow[ObjectIdentifier(window)] = session
+        if primarySession == nil { primarySession = session }
+        window.contentViewController = session.splitController
+        session.onTitleChange?()
+        return session
+    }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -2358,25 +2409,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #if HEADLESS_TEST
     /// Genuine AppDelegate document actions in a never-ordered synthetic window; no live AX/HID.
     func installUnshownDocumentFixture(canvas fixture: MapCanvas) -> NSWindow {
-        savedRoots = fixture.model.roots
-        savedRelationships = fixture.model.relationships
-        savedTheme = fixture.model.theme
-        savedCanvasColor = fixture.model.canvasColor
-        _ = makeWorkbench(canvas: fixture)
+        let installed = installAdditionalUnshownDocumentFixture(canvas: fixture)
+        fixtureAnchor = installed.session
+        openPendingFinderDocument()
+        return installed.window
+    }
+    func installAdditionalUnshownDocumentFixture(canvas fixture: MapCanvas) -> (window: NSWindow, session: DocumentSession) {
         let fixtureWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
                                      styleMask: [.titled, .closable, .resizable],
                                      backing: .buffered, defer: false)
-        window = fixtureWindow
-        fixtureWindow.contentViewController = splitController
-        fixture.onChange = { [weak self] in
-            self?.syncDirty(); self?.outline.reloadMap(); self?.inspector.refresh()
-        }
-        fixture.onSelectionChange = { [weak self] in
-            self?.outline.syncSelection(); self?.inspector.refresh()
-        }
-        updateTitle()
-        openPendingFinderDocument()
-        return fixtureWindow
+        let session = installSession(canvas: fixture, in: fixtureWindow)
+        if window == nil { window = fixtureWindow }
+        return (fixtureWindow, session)
     }
     #endif
 
@@ -2399,16 +2443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
-        canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
-        savedRoots = [root]
-        _ = makeWorkbench(canvas: canvas)
-        canvas.onChange = { [weak self] in
-            self?.syncDirty(); self?.outline.reloadMap(); self?.inspector.refresh()
-            if self?.findWindow?.isVisible == true { self?.refreshFindResults() }
-        }
-        canvas.onSelectionChange = { [weak self] in
-            self?.outline.syncSelection(); self?.inspector.refresh()
-        }
+        let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         canvas.onImageError = { [weak self] error in
             self?.alert("Could not import image", detail: error.localizedDescription)
         }
@@ -2421,7 +2456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.title = "\(t("Untitled")) — \(t("OpenMindFlow"))"
         window.delegate = self
         window.minSize = NSSize(width: 640, height: 400)
-        window.contentViewController = splitController
+        _ = installSession(canvas: canvas, in: window)
         window.toolbar = makeToolbar()
         window.setContentSize(NSSize(width: 1280, height: 700))
         window.center()
@@ -2443,13 +2478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         closeApproved || confirmDiscardOrSave() ? .terminateNow : .terminateCancel
     }
-    private func syncDirty() {
-        // ponytail: compares embedded video bytes on each edit; use revision IDs if large maps stutter.
-        dirty = canvas.model.roots != savedRoots || canvas.model.relationships != savedRelationships ||
-            canvas.model.theme != savedTheme || canvas.model.canvasColor != savedCanvasColor
-        updateTitle()
-    }
-    private func updateTitle() { window.title = "\(fileURL?.lastPathComponent ?? t("Untitled"))\(dirty ? " •" : "") — \(t("OpenMindFlow"))" }
+    private func updateTitle() { activeSession?.onTitleChange?() }
     private func alert(_ message: String, detail: String) {
         let alert = NSAlert()
         alert.messageText = t(message)
@@ -2457,12 +2486,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         alert.alertStyle = .warning
         alert.runModal()
     }
-    private func commitPendingEditors() -> Bool {
-        canvas.commitEditing() && inspector.commitNoteEditing()
-    }
+    private func commitPendingEditors() -> Bool { activeSession?.commitPendingEditors() ?? false }
     private func confirmDiscardOrSave() -> Bool {
-        guard commitPendingEditors() else { return false }
-        guard dirty else { return true }
+        guard let session = activeSession else { return false }
+        return confirmDiscardOrSave(for: session)
+    }
+    private func confirmDiscardOrSave(for session: DocumentSession) -> Bool {
+        guard session.commitPendingEditors() else { return false }
+        guard session.dirty else { return true }
         let prompt = NSAlert()
         prompt.messageText = t("Save changes to this map?")
         prompt.informativeText = t("Opening another file, closing the window, or quitting will discard unsaved changes.")
@@ -2470,85 +2501,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         prompt.addButton(withTitle: t("Cancel"))
         prompt.addButton(withTitle: t("Discard Changes"))
         switch prompt.runModal() {
-        case .alertFirstButtonReturn: return save()
+        case .alertFirstButtonReturn: return save(for: session)
         case .alertThirdButtonReturn: return true
         default: return false
         }
     }
-    private enum DocumentOperationError: LocalizedError {
-        case unsupported, cancelled
-        var errorDescription: String? {
-            switch self {
-            case .unsupported: "Select a .mflw document, legacy .mindmap.json file, or use Import MindNode."
-            case .cancelled: "The document operation was cancelled."
-            }
-        }
-    }
-    private struct LoadedDocument {
-        let document: OwnMapDocument
-        let archive: MindNodeArchive?
-        let nativeURL: URL?
-        let digest: Data?
-        let identity: NativeMapFile.FileIdentity?
-    }
-    private func currentDocument() -> OwnMapDocument {
-        OwnMapDocument(roots: canvas.model.roots, relationships: canvas.model.relationships,
-                       theme: canvas.model.theme, canvasColor: canvas.model.canvasColor)
-    }
-    private func readMap(at url: URL) throws -> LoadedDocument {
-        if url.pathExtension == "mflw" {
-            let result = try NativeMapFile.readWithFileIdentity(url)
-            let archive = try result.payload.mindNodeArchive.map {
-                try PropertyListDecoder().decode(MindNodeArchive.self, from: $0)
-            }
-            return LoadedDocument(document: result.payload.document, archive: archive,
-                                  nativeURL: url, digest: result.digest, identity: result.identity)
-        }
-        guard url.lastPathComponent.hasSuffix(".mindmap.json") else { throw DocumentOperationError.unsupported }
-        return LoadedDocument(document: try readOwnDocument(url), archive: nil,
-                              nativeURL: nil, digest: nil, identity: nil)
-    }
-    private func installDocument(_ loaded: LoadedDocument) {
-        let document = loaded.document
-        canvas.replacingModel = true
-        defer { canvas.replacingModel = false }
-        canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID(),
-                                theme: document.theme, canvasColor: document.canvasColor)
-        canvas.model.relationships = document.relationships
-        canvas.branchStyles = loaded.archive?.imported.styles ?? [:]
-        canvas.nativePresentation = loaded.archive?.imported.presentation ?? [:]
-        canvas.embeddedTheme = loaded.archive?.imported.theme
-        mindNodeArchive = loaded.archive
-        fileURL = loaded.nativeURL
-        savedNativeSHA256 = loaded.digest
-        savedNativeIdentity = loaded.identity
-        savedRoots = document.roots
-        savedRelationships = document.relationships
-        savedTheme = document.theme
-        savedCanvasColor = document.canvasColor
-        dirty = false
-        outline.reloadMap()
-        inspector.refresh()
-        updateTitle()
-        canvas.fitMapInView()
-        refreshFindResults(navigate: false)
-        window.makeFirstResponder(canvas)
-    }
     /// A preflight validates before asking to discard; re-read after a potential Save.
     func loadMap(at url: URL) throws {
-        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
-        _ = try readMap(at: url)
-        guard confirmDiscardOrSave() else { throw DocumentOperationError.cancelled }
-        try installDocument(readMap(at: url))
+        let target = try requireCurrentSession()
+        guard target.commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        _ = try target.preflightMap(at: url)
+        guard confirmDiscardOrSave(for: target) else { throw DocumentOperationError.cancelled }
+        target.installDocument(try target.preflightMap(at: url))
     }
     /// Import into an editable native document; source bytes are never an automatic Save target.
     func loadMindNode(at url: URL) throws {
-        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
-        _ = try MindNodeArchive(importing: url)
-        guard confirmDiscardOrSave() else { throw DocumentOperationError.cancelled }
-        let archive = try MindNodeArchive(importing: url)
-        installDocument(LoadedDocument(document: OwnMapDocument(roots: archive.imported.roots),
-                                       archive: archive, nativeURL: nil, digest: nil, identity: nil))
+        let target = try requireCurrentSession()
+        guard target.commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        _ = try target.preflightMindNode(at: url)
+        guard confirmDiscardOrSave(for: target) else { throw DocumentOperationError.cancelled }
+        let archive = try target.preflightMindNode(at: url)
+        target.installDocument(LoadedDocument(document: OwnMapDocument(roots: archive.imported.roots),
+                                              archive: archive, nativeURL: nil, digest: nil, identity: nil))
     }
     @objc private func openFile(_ sender: Any?) {
         guard commitPendingEditors() else { return }
@@ -2639,17 +2613,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try canvas.insertVideoFile(url) }
         catch { alert("Could not import video", detail: error.localizedDescription) }
     }
-    /// Only a supported patch of an imported source may retain all opaque MindNode bytes.
     func exportCurrentMindNode(to url: URL) throws {
-        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
-        let document = currentDocument()
-        if let mindNodeArchive {
-            try mindNodeArchive.export(document: document, to: url)
-        } else {
-            try MindNodeWriter.write(document.roots, to: url, imported: nil,
-                                     relationships: document.relationships,
-                                     theme: document.theme, canvasColor: document.canvasColor)
-        }
+        try requireCurrentSession().exportCurrentMindNode(to: url)
     }
     @objc private func saveAsMindNodeCopy(_ sender: Any?) { exportMindNodeCopy(sender) }
     @objc private func exportMindNodeCopy(_ sender: Any?) {
@@ -2695,64 +2660,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try exportMap(canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
     }
-    /// Case-only aliases and hardlinks still refer to the current document on normal macOS volumes.
-    private func refersToCurrentNativeFile(_ destination: URL) -> Bool {
-        guard let fileURL else { return false }
-        if fileURL == destination { return true }
-        var opened = stat(), chosen = stat()
-        guard lstat(destination.path, &chosen) == 0,
-              chosen.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { return false }
-        // If Finder moved or replaced the opened file, an occupied Save As name
-        // may be that document even if another copy at the old path has equal bytes.
-        // Fail closed for occupied targets; a brand-new unoccupied name stays usable.
-        guard let lastRead = savedNativeSHA256, let openedIdentity = savedNativeIdentity,
-              lstat(fileURL.path, &opened) == 0,
-              opened.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              openedIdentity == NativeMapFile.FileIdentity(device: UInt64(opened.st_dev),
-                                                           inode: UInt64(opened.st_ino)) else { return true }
-        do { try NativeMapFile.verifyExpectedCurrent(fileURL, expectedCurrentSHA256: lastRead) }
-        catch { return true }
-        return opened.st_dev == chosen.st_dev && opened.st_ino == chosen.st_ino
-    }
-    /// A native Save commits file URL and clean state only after verified publication.
     func saveCurrentMap(to url: URL) throws {
-        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
-        guard url.pathExtension == "mflw" else { throw DocumentOperationError.unsupported }
-        let document = currentDocument()
-        let archiveData: Data?
-        if let mindNodeArchive {
-            let encoder = PropertyListEncoder()
-            encoder.outputFormat = .binary
-            archiveData = try encoder.encode(mindNodeArchive)
-        } else { archiveData = nil }
-        let payload = NativeMapFile.Payload(document: document, mindNodeArchive: archiveData)
-        if fileURL != nil && savedNativeSHA256 == nil { throw NativeMapFile.FileError.conflict }
-        #if HEADLESS_TEST
-        if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
-        #endif
-        try NativeMapFile.write(payload, to: url,
-                                expectedCurrentSHA256: refersToCurrentNativeFile(url) ? savedNativeSHA256 : nil)
-        let result = try NativeMapFile.readWithFileIdentity(url)
-        guard result.payload.document.roots == document.roots,
-              result.payload.document.relationships == document.relationships,
-              result.payload.document.theme == document.theme,
-              result.payload.document.canvasColor == document.canvasColor,
-              result.payload.mindNodeArchive == archiveData else { throw NativeMapFile.FileError.conflict }
-        fileURL = url
-        savedNativeSHA256 = result.digest
-        savedNativeIdentity = result.identity
-        savedRoots = document.roots
-        savedRelationships = document.relationships
-        savedTheme = document.theme
-        savedCanvasColor = document.canvasColor
-        dirty = false
-        updateTitle()
+        try requireCurrentSession().saveCurrentMap(to: url)
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     @objc private func saveAsNative(_ sender: Any?) { _ = save(chooseDestination: true) }
-    private func save(chooseDestination: Bool = false) -> Bool {
-        guard commitPendingEditors() else { return false }
-        var destination = chooseDestination ? nil : fileURL
+    private func save(chooseDestination: Bool = false, for explicitSession: DocumentSession? = nil) -> Bool {
+        guard let session = explicitSession ?? activeSession, session.commitPendingEditors() else { return false }
+        var destination = chooseDestination ? nil : session.fileURL
         if destination == nil {
             let panel = NSSavePanel()
             #if HEADLESS_TEST
@@ -2760,7 +2675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             panel.directoryURL = directory
             #endif
             panel.allowedContentTypes = [UTType(exportedAs: "local.openmindflow.document", conformingTo: .data)]
-            panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "Untitled.mflw"
+            panel.nameFieldStringValue = session.fileURL?.lastPathComponent ?? "Untitled.mflw"
             guard panel.runModal() == .OK else { return false }
             destination = panel.url
         }
@@ -2772,7 +2687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard let directory = ownedPanelFixtureDirectory(),
               url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
         #endif
-        do { try saveCurrentMap(to: url); return true }
+        do { try session.saveCurrentMap(to: url); return true }
         catch DocumentOperationError.cancelled { return false }
         catch { alert("Could not save map", detail: error.localizedDescription); return false }
     }
@@ -2788,60 +2703,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func showNodeFont(_ sender: Any?) { canvas.showFontPanel() }
     @objc private func createNodeRelationship(_ sender: Any?) { canvas.createRelationship(sender) }
     @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
-    private func togglePane(at index: Int) {
-        let window = splitController.view.window
-        let frame = window?.frame
-        let host = window?.contentView
-        let oldOrigin = host.map { canvas.convert(CGPoint.zero, to: $0) }
-        let item = splitController.splitViewItems[index]
-        item.isCollapsed.toggle()
-        if let frame, window?.frame != frame { window?.setFrame(frame, display: true) }
-        host?.layoutSubtreeIfNeeded()
-        if let oldOrigin, let host {
-            let newOrigin = canvas.convert(CGPoint.zero, to: host)
-            canvas.shiftViewport(by: CGPoint(x: oldOrigin.x - newOrigin.x, y: oldOrigin.y - newOrigin.y))
-        }
-        if item.isCollapsed { window?.makeFirstResponder(canvas) }
-    }
-    @objc private func toggleOutline(_ sender: Any?) { togglePane(at: 0) }
-    @objc private func toggleStyle(_ sender: Any?) {
-        guard !splitController.splitViewItems[2].isCollapsed ? commitPendingEditors() : true else { return }
-        togglePane(at: 2)
-    }
-
+    @objc private func toggleOutline(_ sender: Any?) { activeSession?.toggleOutline() }
+    @objc private func toggleStyle(_ sender: Any?) { activeSession?.toggleStyle() }
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
-        self.canvas = canvas
-        canvas.localizationDefaults = defaults
-        let split = NSSplitViewController()
-        let sidebarController = NSViewController()
-        outline = MapOutlineView(canvas: canvas, defaults: defaults)
-        sidebarController.view = outline
-        let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarController)
-        sidebar.canCollapse = true
-        sidebar.minimumThickness = 180
-        sidebar.maximumThickness = 320
-        split.addSplitViewItem(sidebar)
-        sidebar.isCollapsed = true
-        let canvasController = NSViewController()
-        canvasController.view = canvas
-        split.addSplitViewItem(NSSplitViewItem(viewController: canvasController))
-        let inspectorController = NSViewController()
-        inspector = StyleInspector(canvas: canvas, defaults: defaults)
-        canvas.onEditNote = { [weak self] id in
-            guard let self, self.canvas.model.selectedIDs == [id] else { return }
-            if self.splitController.splitViewItems[2].isCollapsed { self.togglePane(at: 2) }
-            _ = self.inspector.selectNotes(for: id)
-        }
-        inspectorController.view = inspector
-        let style = NSSplitViewItem(viewController: inspectorController)
-        style.canCollapse = true
-        style.minimumThickness = 260
-        style.maximumThickness = 320
-        style.holdingPriority = .defaultHigh
-        split.addSplitViewItem(style)
-        style.isCollapsed = true
-        splitController = split
-        return split
+        if let window { return installSession(canvas: canvas, in: window).splitController }
+        // Compatibility for callers constructing an unshown workbench before a window.
+        let session = DocumentSession(canvas: canvas, defaults: defaults)
+        primarySession = session
+        return session.splitController
     }
 
     func makeToolbar() -> NSToolbar {
@@ -2901,6 +2770,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
 
     @objc private func showFind(_ sender: Any?) {
+        guard let session = activeSession else { return }
+        findSession = session
         if findWindow == nil {
             let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 430, height: 110),
                                 styleMask: [.titled, .closable, .utilityWindow],
