@@ -71,6 +71,11 @@ enum NativeMapFile {
     }
 
     static func read(_ url: URL) throws -> Payload {
+        try readWithSHA256(url).payload
+    }
+
+    /// Decode and hash the same bounded bytes from one no-follow file descriptor.
+    static func readWithSHA256(_ url: URL) throws -> (payload: Payload, digest: Data) {
         let (parent, name) = try parentDescriptor(for: url)
         defer { close(parent) }
         let descriptor = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
@@ -98,7 +103,7 @@ enum NativeMapFile {
         }
         let payload = try PropertyListDecoder().decode(Payload.self, from: body)
         try checkOwnDocument(payload.document)
-        return payload
+        return (payload, Data(SHA256.hash(data: bytes)))
     }
 
     private struct CurrentFile {

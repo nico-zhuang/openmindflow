@@ -59,11 +59,15 @@ enum OpenMindFlowFileTests {
         assert(reopened.document.relationships == document.relationships)
         assert(reopened.document.theme == document.theme && reopened.document.canvasColor == document.canvasColor)
         assert(reopened.mindNodeArchive == provenance)
+        let (snapshot, snapshotDigest) = try NativeMapFile.readWithSHA256(file)
+        assert(snapshot.document.roots == document.roots && snapshot.mindNodeArchive == provenance)
+        assert(snapshotDigest == Data(SHA256.hash(data: bytes)), "Read digest covers the entire original file")
 
         func badFile(_ name: String, _ contents: Data) throws {
             let url = scratch.appendingPathComponent("\(name).mflw")
             try contents.write(to: url)
             rejects(name) { _ = try NativeMapFile.read(url) }
+            rejects("\(name) snapshot") { _ = try NativeMapFile.readWithSHA256(url) }
         }
         for end in [0, 3, 8, 12, 16, 47, 48, bytes.count - 1] {
             try badFile("truncated-\(end)", Data(bytes.prefix(end)))
@@ -89,6 +93,7 @@ enum OpenMindFlowFileTests {
         let linked = scratch.appendingPathComponent("linked.mflw")
         try fm.createSymbolicLink(at: linked, withDestinationURL: file)
         rejects("linked read") { _ = try NativeMapFile.read(linked) }
+        rejects("linked snapshot read") { _ = try NativeMapFile.readWithSHA256(linked) }
         rejects("linked destination") { try NativeMapFile.write(.init(document: document, mindNodeArchive: nil), to: linked) }
         let package = scratch.appendingPathComponent("source.mindnode", isDirectory: true)
         try fm.createDirectory(at: package, withIntermediateDirectories: false)
@@ -107,8 +112,10 @@ enum OpenMindFlowFileTests {
         try NativeMapFile.verifyExpectedCurrent(file, expectedCurrentSHA256: Data(SHA256.hash(data: bytes)))
         let expectedSave = scratch.appendingPathComponent("expected-save.mflw")
         try bytes.write(to: expectedSave)
-        try NativeMapFile.write(.init(document: document, mindNodeArchive: replacement), to: expectedSave,
-                                expectedCurrentSHA256: Data(SHA256.hash(data: bytes)))
+        let (savedSnapshot, savedDigest) = try NativeMapFile.readWithSHA256(expectedSave)
+        assert(savedSnapshot.mindNodeArchive == provenance && savedDigest == snapshotDigest)
+        try NativeMapFile.write(.init(document: savedSnapshot.document, mindNodeArchive: replacement), to: expectedSave,
+                                expectedCurrentSHA256: savedDigest)
         let expectedSavedPayload = try NativeMapFile.read(expectedSave)
         assert(expectedSavedPayload.mindNodeArchive == replacement)
         do {
@@ -120,8 +127,8 @@ enum OpenMindFlowFileTests {
         let external = Data("external revision".utf8)
         try external.write(to: file)
         do {
-            try NativeMapFile.write(.init(document: document, mindNodeArchive: replacement), to: file,
-                                    expectedCurrentSHA256: Data(SHA256.hash(data: bytes)))
+            try NativeMapFile.write(.init(document: snapshot.document, mindNodeArchive: replacement), to: file,
+                                    expectedCurrentSHA256: snapshotDigest)
             fatalError("A stale document must not overwrite external changes")
         } catch NativeMapFile.FileError.conflict { }
         let externallyUpdated = try Data(contentsOf: file)
