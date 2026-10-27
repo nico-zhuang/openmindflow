@@ -51,7 +51,18 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { prepareClose(documents: documents) }
     func windowWillClose(_ notification: Notification) {
-        for document in documents { document.window = nil }
+        for document in documents {
+            let panel = document.findWindow
+            document.findWindow = nil
+            document.findField = nil
+            document.findStatus = nil
+            document.findMatches = []
+            document.findIndex = 0
+            panel?.orderOut(nil)
+            panel?.close()
+            document.window = nil
+        }
+        active = nil
         onClose?(self)
     }
 

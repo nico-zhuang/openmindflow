@@ -2340,10 +2340,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         #endif
         if let key = NSApp.keyWindow {
             if let session = windowSessions.first(where: { $0.window === key })?.active ?? sessionsByWindow[ObjectIdentifier(key)] { return session }
-            if key === findSession?.findWindow { return findSession }
+            if key === findSession?.findWindow, let session = findSession, isLiveSession(session) { return session }
         }
-        // Legacy unshown workbench fixture has no native window to register.
-        return sessionsByWindow.isEmpty ? primarySession : nil
+        return nil
+    }
+    private func isLiveSession(_ session: DocumentSession) -> Bool {
+        windowSessions.contains { coordinator in
+            session.window === coordinator.window &&
+            coordinator.documents.contains { $0 === session }
+        }
     }
     private func requireCurrentSession() throws -> DocumentSession {
         #if HEADLESS_TEST
@@ -2387,8 +2392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
         }
         session.onFindChange = { [weak self, weak session] in
-            guard let self, let session, self.activeSession === session else { return }
-            self.refreshFindResults(navigate: false)
+            guard let self, let session, self.isLiveSession(session) else { return }
+            self.refreshFindResults(for: session, navigate: false)
         }
         sessionsByWindow[ObjectIdentifier(window)] = session
         if primarySession == nil { primarySession = session }
@@ -2423,6 +2428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             self?.confirmDiscardOrSave(for: document) ?? false
         }
         coordinator.onClose = { [weak self] closed in
+            if let findSession = self?.findSession,
+               closed.documents.contains(where: { $0 === findSession }) { self?.findSession = nil }
             self?.windowSessions.removeAll { $0 === closed }
             self?.sessionsByWindow.removeValue(forKey: ObjectIdentifier(closed.window))
             if self?.window === closed.window { self?.window = self?.windowSessions.first?.window }
@@ -2714,18 +2721,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         catch DocumentOperationError.cancelled { return false }
         catch { alert("Could not save map", detail: error.localizedDescription); return false }
     }
-    @objc private func undoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.undo() } }
-    @objc private func redoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.redo() } }
-    @objc private func newChild(_ sender: Any?) { canvas.addChild() }
-    @objc private func newSibling(_ sender: Any?) { canvas.addSibling() }
-    @objc private func newSiblingBefore(_ sender: Any?) { canvas.addSibling(before: true) }
-    @objc private func newParent(_ sender: Any?) { canvas.addParent() }
-    @objc private func newMainNode(_ sender: Any?) { canvas.addMainNode() }
-    @objc private func detachNode(_ sender: Any?) { canvas.detachSelected() }
-    @objc private func foldNode(_ sender: Any?) { canvas.toggleFold() }
-    @objc private func showNodeFont(_ sender: Any?) { canvas.showFontPanel() }
-    @objc private func createNodeRelationship(_ sender: Any?) { canvas.createRelationship(sender) }
-    @objc private func fitMap(_ sender: Any?) { canvas.fitMapInView() }
+    @objc private func undoEdit(_ sender: Any?) { if commitPendingEditors() { canvas?.undo() } }
+    @objc private func redoEdit(_ sender: Any?) { if commitPendingEditors() { canvas?.redo() } }
+    @objc private func newChild(_ sender: Any?) { canvas?.addChild() }
+    @objc private func newSibling(_ sender: Any?) { canvas?.addSibling() }
+    @objc private func newSiblingBefore(_ sender: Any?) { canvas?.addSibling(before: true) }
+    @objc private func newParent(_ sender: Any?) { canvas?.addParent() }
+    @objc private func newMainNode(_ sender: Any?) { canvas?.addMainNode() }
+    @objc private func detachNode(_ sender: Any?) { canvas?.detachSelected() }
+    @objc private func foldNode(_ sender: Any?) { canvas?.toggleFold() }
+    @objc private func showNodeFont(_ sender: Any?) { canvas?.showFontPanel() }
+    @objc private func createNodeRelationship(_ sender: Any?) { canvas?.createRelationship(sender) }
+    @objc private func fitMap(_ sender: Any?) { canvas?.fitMapInView() }
     @objc private func toggleOutline(_ sender: Any?) { activeSession?.toggleOutline() }
     @objc private func toggleStyle(_ sender: Any?) { activeSession?.toggleStyle() }
     func makeWorkbench(canvas: MapCanvas) -> NSSplitViewController {
@@ -2733,6 +2740,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         // Compatibility for callers constructing an unshown workbench before a window.
         let session = DocumentSession(canvas: canvas, defaults: defaults)
         primarySession = session
+        #if HEADLESS_TEST
+        fixtureAnchor = session
+        #endif
         return session.splitController
     }
 
@@ -2795,7 +2805,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func showFind(_ sender: Any?) {
         guard let session = activeSession else { return }
         findSession = session
-        if findWindow == nil {
+        if session.findWindow == nil {
             let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 430, height: 110),
                                 styleMask: [.titled, .closable, .utilityWindow],
                                 backing: .buffered, defer: false)
@@ -2814,35 +2824,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             next.frame = CGRect(x: 369, y: 12, width: 44, height: 28)
             next.setAccessibilityLabel(t("Next Result"))
             panel.contentView?.addSubview(next)
-            findWindow = panel
-            findField = field
-            findStatus = status
+            session.findWindow = panel
+            session.findField = field
+            session.findStatus = status
             panel.center()
         }
-        findWindow?.makeKeyAndOrderFront(nil)
-        refreshFindResults()
-        if let findField { findWindow?.makeFirstResponder(findField) }
+        #if !HEADLESS_TEST
+        session.findWindow?.makeKeyAndOrderFront(nil)
+        #endif
+        refreshFindResults(for: session)
+        if let field = session.findField { session.findWindow?.makeFirstResponder(field) }
+    }
+    private func findOwner(of sender: Any?) -> DocumentSession? {
+        guard let view = sender as? NSView, let panel = view.window as? NSPanel else { return nil }
+        if let session = windowSessions.flatMap(\.documents).first(where: {
+            isLiveSession($0) && $0.findWindow === panel
+        }) { return session }
+        #if HEADLESS_TEST
+        if let fixtureAnchor, fixtureAnchor.window == nil, fixtureAnchor.findWindow === panel { return fixtureAnchor }
+        #endif
+        return nil
     }
     @objc private func findChanged(_ sender: NSSearchField) {
-        findMatches = searchTitles(canvas.model.roots, query: sender.stringValue)
-        findIndex = 0
-        updateFindResult()
+        guard let session = findOwner(of: sender), session.findField === sender else { return }
+        session.findMatches = searchTitles(session.canvas.model.roots, query: sender.stringValue)
+        session.findIndex = 0
+        updateFindResult(for: session)
     }
     @objc private func findNext(_ sender: Any?) {
-        let current = searchTitles(canvas.model.roots, query: findField?.stringValue ?? "")
-        if current != findMatches { findMatches = current; findIndex = 0 }
-        else if !findMatches.isEmpty { findIndex = (findIndex + 1) % findMatches.count }
-        updateFindResult()
+        guard let session = findOwner(of: sender), let field = session.findField else { return }
+        let current = searchTitles(session.canvas.model.roots, query: field.stringValue)
+        if current != session.findMatches { session.findMatches = current; session.findIndex = 0 }
+        else if !session.findMatches.isEmpty { session.findIndex = (session.findIndex + 1) % session.findMatches.count }
+        updateFindResult(for: session)
     }
-    private func refreshFindResults(navigate: Bool = true) {
-        guard let findField else { return }
-        let current = searchTitles(canvas.model.roots, query: findField.stringValue)
-        if current != findMatches { findMatches = current; findIndex = 0 }
-        updateFindResult(navigate: navigate)
+    private func refreshFindResults(for session: DocumentSession, navigate: Bool = true) {
+        guard let field = session.findField else { return }
+        let current = searchTitles(session.canvas.model.roots, query: field.stringValue)
+        if current != session.findMatches { session.findMatches = current; session.findIndex = 0 }
+        updateFindResult(for: session, navigate: navigate)
     }
-    private func updateFindResult(navigate: Bool = true) {
-        findStatus?.stringValue = findMatches.isEmpty ? t("No matches") : "\(findIndex + 1) / \(findMatches.count)"
-        if navigate && !findMatches.isEmpty { canvas.showSearchResult(findMatches[findIndex]) }
+    private func updateFindResult(for session: DocumentSession, navigate: Bool = true) {
+        session.findStatus?.stringValue = session.findMatches.isEmpty ? t("No matches") : "\(session.findIndex + 1) / \(session.findMatches.count)"
+        if navigate && !session.findMatches.isEmpty { session.canvas.showSearchResult(session.findMatches[session.findIndex]) }
     }
 
     @objc private func showSettings(_ sender: Any?) {
