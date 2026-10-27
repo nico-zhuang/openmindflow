@@ -7,6 +7,7 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private(set) var active: DocumentSession?
     var confirmClose: ((DocumentSession) -> Bool)?
     var onClose: ((WindowSession) -> Void)?
+    var onRemove: ((WindowSession, DocumentSession) -> Void)?
     private let toolbarTemplate: AppDelegate
 
     init(window: NSWindow, toolbarTemplate: AppDelegate) {
@@ -36,33 +37,40 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         window.makeFirstResponder(document.canvas)
         return true
     }
+    private func detachOwnedPanels(from document: DocumentSession) {
+        let panel = document.findWindow
+        document.findWindow = nil
+        document.findField = nil
+        document.findStatus = nil
+        document.findMatches = []
+        document.findIndex = 0
+        panel?.orderOut(nil)
+        panel?.close()
+        document.inspector.colorPanelModel = nil
+    }
     func remove(_ document: DocumentSession) {
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
         documents.remove(at: index)
         if active === document {
             active = nil
-            if let next = documents.first { activate(next) }
+            if let next = documents.first { _ = activate(next) }
             else { window.contentViewController = nil }
         }
+        detachOwnedPanels(from: document)
         document.window = nil
+        onRemove?(self, document)
     }
     func prepareClose(documents closing: [DocumentSession]) -> Bool {
         for document in closing where documents.contains(where: { $0 === document }) {
-            guard (confirmClose?(document) ?? document.commitPendingEditors()) else { return false }
+            guard document.commitPendingEditors(),
+                  (confirmClose?(document) ?? true) else { return false }
         }
         return true
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { prepareClose(documents: documents) }
     func windowWillClose(_ notification: Notification) {
         for document in documents {
-            let panel = document.findWindow
-            document.findWindow = nil
-            document.findField = nil
-            document.findStatus = nil
-            document.findMatches = []
-            document.findIndex = 0
-            panel?.orderOut(nil)
-            panel?.close()
+            detachOwnedPanels(from: document)
             document.window = nil
         }
         active = nil

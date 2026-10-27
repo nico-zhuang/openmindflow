@@ -2339,8 +2339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if let fixtureAnchor { return fixtureAnchor }
         #endif
         if let key = NSApp.keyWindow {
-            if let session = windowSessions.first(where: { $0.window === key })?.active ?? sessionsByWindow[ObjectIdentifier(key)] { return session }
+            if let owner = windowSessions.first(where: { $0.window === key }) { return owner.active }
             if key === findSession?.findWindow, let session = findSession, isLiveSession(session) { return session }
+            if let session = sessionsByWindow[ObjectIdentifier(key)] { return session }
         }
         return nil
     }
@@ -2354,8 +2355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         #if HEADLESS_TEST
         if let fixtureAnchor { return fixtureAnchor }
         #endif
-        guard let key = NSApp.keyWindow,
-              let session = windowSessions.first(where: { $0.window === key })?.active ?? sessionsByWindow[ObjectIdentifier(key)] else { throw DocumentOperationError.cancelled }
+        guard let session = activeSession else { throw DocumentOperationError.cancelled }
         return session
     }
     private var canvas: MapCanvas! { activeSession?.canvas }
@@ -2430,6 +2430,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let coordinator = WindowSession(window: nativeWindow, toolbarTemplate: self)
         coordinator.confirmClose = { [weak self] document in
             self?.confirmDiscardOrSave(for: document) ?? false
+        }
+        coordinator.onRemove = { [weak self] owner, removed in
+            guard let self else { return }
+            if self.findSession === removed { self.findSession = nil }
+            self.sessionsByWindow[ObjectIdentifier(owner.window)] = owner.active
         }
         coordinator.onClose = { [weak self] closed in
             if let findSession = self?.findSession,
@@ -2591,6 +2596,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         #endif
         openPendingFinderDocument()
         if defaults.bool(forKey: "checkUpdatesAutomatically") { checkForUpdates(nil) }
+    }
+    func closeDocument(_ document: DocumentSession, in owner: WindowSession) -> Bool {
+        guard windowSessions.contains(where: { $0 === owner }),
+              owner.documents.contains(where: { $0 === document }),
+              owner.prepareClose(documents: [document]) else { return false }
+        if owner.documents.count == 1 {
+            // NSWindow.close() does not ask its delegate; the confirmation above is its preflight.
+            owner.window.close()
+        } else {
+            owner.remove(document)
+        }
+        return true
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard let coordinator = windowSessions.first(where: { $0.window === sender }) else { return false }
