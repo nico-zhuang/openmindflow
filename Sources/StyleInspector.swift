@@ -68,6 +68,10 @@ final class StyleInspector: NSView, NSTextViewDelegate {
     private var loadedNote = ""
     private var refreshing = false
     weak var colorPanelModel: MapModel?
+    var canApplyPanelColor: (() -> Bool)?
+    private func ownsActivePanelColor() -> Bool {
+        colorPanelModel === canvas.model && (canApplyPanelColor?() ?? true)
+    }
 
     override var intrinsicContentSize: NSSize { NSSize(width: 280, height: NSView.noIntrinsicMetric) }
 
@@ -547,7 +551,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         }
     }
     @objc private func changeCanvasPanelColor(_ sender: NSColorPanel) {
-        guard colorPanelModel === canvas.model, ready(),
+        guard ownsActivePanelColor(), ready(),
               let color = sender.color.usingColorSpace(.deviceRGB) else { return }
         changed(canvas.model.setCanvasColor(Self.hex(color)))
     }
@@ -572,7 +576,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         }
     }
     @objc private func changeRootPanelColor(_ sender: NSColorPanel) {
-        guard colorPanelModel === canvas.model, ready(),
+        guard ownsActivePanelColor(), ready(),
               let color = sender.color.usingColorSpace(.deviceRGB) else { return }
         changed(canvas.model.setRootFillColor(Self.hex(color)))
     }
@@ -692,7 +696,7 @@ final class StyleInspector: NSView, NSTextViewDelegate {
         } else { refresh() }
     }
     @objc func changeStrokeColor(_ sender: Any?) {
-        guard colorPanelModel === canvas.model, ready(),
+        guard ownsActivePanelColor(), ready(),
               let color = (sender as? NSColorPanel)?.color.usingColorSpace(.deviceRGB) else { return }
         changed(setSelectedColor(Self.hex(color)))
     }

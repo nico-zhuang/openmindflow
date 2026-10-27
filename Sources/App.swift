@@ -96,6 +96,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
     }
     private var relationshipColorPanelID: UUID?
+    var canApplyRelationshipPanelColor: (() -> Bool)?
     func invalidateRelationshipColorPanelOwnership() { relationshipColorPanelID = nil }
     #if HEADLESS_TEST
     func armRelationshipColorPanelForTesting(_ id: UUID) {
@@ -1822,7 +1823,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if model.setRelationship(edge) { selectedRelationshipID = id; changed() }
     }
     @objc private func changeRelationshipPanelColor(_ panel: NSColorPanel) {
-        guard commitEditing(), let id = relationshipColorPanelID, selectedRelationshipID == id,
+        guard canApplyRelationshipPanelColor?() ?? true, commitEditing(),
+              let id = relationshipColorPanelID, selectedRelationshipID == id,
               var edge = model.relationships.first(where: { $0.id == id }),
               let color = panel.color.usingColorSpace(.deviceRGB) else { return }
         edge.color = StyleInspector.hex(color)
@@ -2347,6 +2349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var settingsWindow: NSWindow?
     // Explicit window resolution is shared by production key-window routing and headless fixtures.
     func resolveSession(for key: NSWindow?) -> DocumentSession? {
+        if let settingsWindow, key === settingsWindow { return nil }
         #if HEADLESS_TEST
         if let fixtureAnchor { return fixtureAnchor }
         #endif
@@ -2367,6 +2370,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         windowSessions.contains { coordinator in
             session.window === coordinator.window &&
             coordinator.documents.contains { $0 === session }
+        }
+    }
+    private func isActiveLiveSession(_ session: DocumentSession) -> Bool {
+        windowSessions.contains { owner in
+            owner.active === session && session.window === owner.window &&
+            owner.documents.contains { $0 === session }
         }
     }
     private func requireCurrentSession() throws -> DocumentSession {
@@ -2404,6 +2413,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     private func installSession(canvas: MapCanvas, in window: NSWindow, register: Bool = true) -> DocumentSession {
         let session = DocumentSession(canvas: canvas, defaults: defaults)
+        session.inspector.canApplyPanelColor = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.isActiveLiveSession(session)
+        }
+        canvas.canApplyRelationshipPanelColor = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.isActiveLiveSession(session)
+        }
         if register { session.window = window }
         session.onTitleChange = { [weak self, weak session] in
             guard let self, let session, let window = session.window else { return }
@@ -2748,13 +2765,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
     }
     @objc private func insertImageFile(_ sender: Any?) {
+        guard let session = activeSession, isActiveLiveSession(session),
+              session.commitPendingEditors() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .heic, .heif]
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
         panel.directoryURL = directory
         #endif
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url,
+              activeSession === session, isActiveLiveSession(session) else { return }
         #if HEADLESS_TEST
         guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
         #endif
@@ -2766,21 +2786,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                 data.append(chunk)
                 guard data.count <= 8 * 1024 * 1024 else { throw MapImageError.tooLarge }
             }
-            try canvas.insertImageData(data)
+            guard activeSession === session, isActiveLiveSession(session) else { return }
+            try session.canvas.insertImageData(data)
         } catch { alert("Could not import image", detail: error.localizedDescription) }
     }
     @objc private func insertVideoFile(_ sender: Any?) {
+        guard let session = activeSession, isActiveLiveSession(session),
+              session.commitPendingEditors() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, UTType(filenameExtension: "m4v") ?? .movie]
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
         panel.directoryURL = directory
         #endif
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url,
+              activeSession === session, isActiveLiveSession(session) else { return }
         #if HEADLESS_TEST
         guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
         #endif
-        do { try canvas.insertVideoFile(url) }
+        do { try session.canvas.insertVideoFile(url) }
         catch { alert("Could not import video", detail: error.localizedDescription) }
     }
     func exportCurrentMindNode(to url: URL) throws {
@@ -3041,7 +3065,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 
     @objc private func showSettings(_ sender: Any?) {
         if let settingsWindow {
+            #if !HEADLESS_TEST
             settingsWindow.makeKeyAndOrderFront(nil)
+            #endif
             return
         }
         let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 390),
@@ -3155,7 +3181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         panel.title = t("Settings")
         panel.center()
         settingsWindow = panel
+        #if !HEADLESS_TEST
         panel.makeKeyAndOrderFront(nil)
+        #endif
     }
     @objc private func chooseSettingsTab(_ sender: NSSegmentedControl) {
         for view in settingsWindow?.contentView?.subviews ?? [] {
@@ -3229,15 +3257,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
         installMenu()
     }
-    @objc private func chooseLanguage(_ sender: NSPopUpButton) {
-        guard let chosen = sender.selectedItem?.representedObject as? String,
-              L10n.setLanguage(chosen, defaults: defaults) else { return }
-        installMenu()
-        outline?.localize()
-        inspector?.localize()
-        canvas?.needsDisplay = true
-        if window != nil { updateTitle() }
-        if let toolbar = window?.toolbar {
+    func refreshLanguageForAllDocuments() {
+        let registered = windowSessions.flatMap(\.documents)
+        #if HEADLESS_TEST
+        // makeWorkbench(canvas:) has no registered window, but remains a language fixture.
+        let sessions = registered + (fixtureAnchor.map { anchor in
+            registered.contains { $0 === anchor } ? [] : [anchor]
+        } ?? [])
+        #else
+        let sessions = registered
+        #endif
+        for session in sessions {
+            session.outline.localize()
+            session.inspector.localize()
+            session.canvas.needsDisplay = true
+            session.onTitleChange?() // The title callback rejects inactive registered documents.
+            session.findWindow?.title = t("Find")
+            session.findField?.placeholderString = t("Search nodes")
+            session.findField?.setAccessibilityLabel(t("Search nodes"))
+            if session.findMatches.isEmpty { session.findStatus?.stringValue = t("No matches") }
+            session.findWindow?.contentView?.subviews.compactMap { $0 as? NSButton }
+                .first?.setAccessibilityLabel(t("Next Result"))
+        }
+        for owner in windowSessions {
+            guard let toolbar = owner.window.toolbar else { continue }
             for item in toolbar.items {
                 guard let translated = self.toolbar(toolbar, itemForItemIdentifier: item.itemIdentifier,
                                                      willBeInsertedIntoToolbar: false) else { continue }
@@ -3247,11 +3290,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                 item.image = translated.image
             }
         }
-        findWindow?.title = t("Find")
-        findField?.placeholderString = t("Search nodes")
-        findField?.setAccessibilityLabel(t("Search nodes"))
-        if findMatches.isEmpty { findStatus?.stringValue = t("No matches") }
-        findWindow?.contentView?.subviews.compactMap { $0 as? NSButton }.first?.setAccessibilityLabel(t("Next Result"))
+    }
+    @objc private func chooseLanguage(_ sender: NSPopUpButton) {
+        guard let chosen = sender.selectedItem?.representedObject as? String,
+              L10n.setLanguage(chosen, defaults: defaults) else { return }
+        installMenu()
+        refreshLanguageForAllDocuments()
         settingsWindow?.title = t("Settings")
         if let label = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSTextField }).first {
             label.stringValue = t("Interface Language")

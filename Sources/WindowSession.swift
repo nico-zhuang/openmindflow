@@ -30,6 +30,9 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         guard documents.contains(where: { $0 === document }) else { return false }
         if active === document { return true }
         guard active?.commitPendingEditors() ?? true else { return false }
+        // Only a successful transition invalidates the outgoing shared-panel target.
+        active?.inspector.colorPanelModel = nil
+        active?.canvas.invalidateRelationshipColorPanelOwnership()
         active = document
         document.window = window
         window.contentViewController = document.splitController
@@ -91,13 +94,14 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         item.target = self
         return item
     }
-    @objc func undoEdit(_ sender: Any?) { if active?.commitPendingEditors() == true { active?.canvas.undo() } }
-    @objc func redoEdit(_ sender: Any?) { if active?.commitPendingEditors() == true { active?.canvas.redo() } }
-    @objc func newMainNode(_ sender: Any?) { active?.canvas.addMainNode() }
-    @objc func newChild(_ sender: Any?) { active?.canvas.addChild() }
-    @objc func newSibling(_ sender: Any?) { active?.canvas.addSibling() }
-    @objc func foldNode(_ sender: Any?) { active?.canvas.toggleFold() }
-    @objc func fitMap(_ sender: Any?) { active?.canvas.fitMapInView() }
-    @objc func toggleOutline(_ sender: Any?) { active?.toggleOutline() }
-    @objc func toggleStyle(_ sender: Any?) { active?.toggleStyle() }
+    private var commandSession: DocumentSession? { window.isKeyWindow ? active : nil }
+    @objc func undoEdit(_ sender: Any?) { if commandSession?.commitPendingEditors() == true { commandSession?.canvas.undo() } }
+    @objc func redoEdit(_ sender: Any?) { if commandSession?.commitPendingEditors() == true { commandSession?.canvas.redo() } }
+    @objc func newMainNode(_ sender: Any?) { commandSession?.canvas.addMainNode() }
+    @objc func newChild(_ sender: Any?) { commandSession?.canvas.addChild() }
+    @objc func newSibling(_ sender: Any?) { commandSession?.canvas.addSibling() }
+    @objc func foldNode(_ sender: Any?) { commandSession?.canvas.toggleFold() }
+    @objc func fitMap(_ sender: Any?) { commandSession?.canvas.fitMapInView() }
+    @objc func toggleOutline(_ sender: Any?) { commandSession?.toggleOutline() }
+    @objc func toggleStyle(_ sender: Any?) { commandSession?.toggleStyle() }
 }
