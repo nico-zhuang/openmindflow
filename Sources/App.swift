@@ -2384,21 +2384,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         get { activeSession?.findIndex ?? 0 }
         set { activeSession?.findIndex = newValue }
     }
-    private func installSession(canvas: MapCanvas, in window: NSWindow) -> DocumentSession {
+    private func installSession(canvas: MapCanvas, in window: NSWindow, register: Bool = true) -> DocumentSession {
         let session = DocumentSession(canvas: canvas, defaults: defaults)
         session.window = window
         session.onTitleChange = { [weak self, weak session] in
             guard let self, let session, let window = session.window else { return }
+            if let owner = self.windowSessions.first(where: { $0.window === window }),
+               owner.active !== session { return }
             window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
         }
         session.onFindChange = { [weak self, weak session] in
             guard let self, let session, self.isLiveSession(session) else { return }
             self.refreshFindResults(for: session, navigate: false)
         }
-        sessionsByWindow[ObjectIdentifier(window)] = session
-        if primarySession == nil { primarySession = session }
-        window.contentViewController = session.splitController
-        session.onTitleChange?()
+        if register {
+            sessionsByWindow[ObjectIdentifier(window)] = session
+            if primarySession == nil { primarySession = session }
+            window.contentViewController = session.splitController
+            session.onTitleChange?()
+        }
         return session
     }
     private let defaults: UserDefaults
@@ -2475,25 +2479,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #endif
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        pendingOpenURLs.append(contentsOf: urls.filter { $0.isFileURL && $0.pathExtension == "mflw" })
-        if window != nil { openPendingFinderDocument() }
+        #if HEADLESS_TEST
+        // Preserve the historical prelaunch fixture's pending Finder replacement without
+        // making production document creation depend on this test-only hook.
+        if window == nil && urls.count == 1 { pendingOpenURLs = urls }
+        #endif
+        for url in urls {
+            do {
+                let opened = try openMapInWindow(url, preferred: nil)
+                #if !HEADLESS_TEST
+                if let owner = windowSessions.first(where: { $0.documents.contains(where: { $0 === opened }) }) {
+                    owner.window.makeKeyAndOrderFront(nil)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                #endif
+            } catch {
+                #if HEADLESS_TEST
+                fputs("Could not open map \(url.lastPathComponent): \(error.localizedDescription)\n", stderr)
+                #else
+                alert("Could not open map", detail: "\(url.lastPathComponent): \(error.localizedDescription)")
+                #endif
+            }
+        }
     }
     private func openPendingFinderDocument() {
-        guard window != nil, !pendingOpenURLs.isEmpty else { return }
+        #if HEADLESS_TEST
+        guard fixtureAnchor != nil, !pendingOpenURLs.isEmpty else { return }
         let urls = pendingOpenURLs
         pendingOpenURLs.removeAll()
-        guard urls.count == 1 else {
-            alert("Could not open map", detail: "Open one .mflw document at a time in this candidate.")
-            return
+        for url in urls {
+            do { try loadMap(at: url) }
+            catch { fputs("Could not open fixture map: \(error.localizedDescription)\n", stderr) }
         }
-        do { try loadMap(at: urls[0]) }
-        catch DocumentOperationError.cancelled { return }
-        catch { alert("Could not open map", detail: error.localizedDescription) }
+        #endif
+    }
+    private func preparedWindow(for preferred: WindowSession?) -> (session: WindowSession, newWindow: Bool) {
+        if let preferred, windowSessions.contains(where: { $0 === preferred }) { return (preferred, false) }
+        if let existing = windowSessions.first { return (existing, false) }
+        return (createWindowSession(), true)
+    }
+    private func installOpenedDocument(_ loaded: LoadedDocument, preferred: WindowSession?) -> DocumentSession {
+        let destination = preparedWindow(for: preferred)
+        let owner = destination.session
+        if destination.newWindow, let initial = owner.active, !initial.dirty, initial.fileURL == nil,
+           initial.mindNodeArchive == nil, owner.documents.count == 1 {
+            initial.installDocument(loaded)
+            return initial
+        }
+        let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
+        let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
+        canvas.onImageError = { [weak self] error in self?.alert("Could not import image", detail: error.localizedDescription) }
+        canvas.onVideoError = { [weak self] error in self?.alert("Could not import video", detail: error.localizedDescription) }
+        let document = installSession(canvas: canvas, in: owner.window, register: false)
+        document.installDocument(loaded)
+        owner.insert(document)
+        owner.activate(document)
+        return document
+    }
+    func openMapInWindow(_ url: URL, preferred: WindowSession?) throws -> DocumentSession {
+        // A URL already assigned to a live editor stays assigned even after external replacement.
+        if let owner = windowSessions.first(where: { $0.documents.contains(where: { $0.fileURL == url }) }),
+           let existing = owner.documents.first(where: { $0.fileURL == url }) {
+            owner.activate(existing)
+            do { try existing.verifyNativeBaseline() }
+            catch {
+                #if HEADLESS_TEST
+                fputs("Map changed on disk: \(error.localizedDescription)\n", stderr)
+                #else
+                alert("Could not reopen map", detail: error.localizedDescription)
+                #endif
+            }
+            return existing
+        }
+        let preflight = DocumentSession(canvas: MapCanvas(model: MapModel(roots: [], selected: UUID())), defaults: defaults)
+        let loaded = try preflight.preflightMap(at: url)
+        if let identity = loaded.identity,
+           let owner = windowSessions.first(where: { candidate in
+               candidate.documents.contains { $0.nativeIdentity == identity }
+           }), let existing = owner.documents.first(where: { $0.nativeIdentity == identity }) {
+            owner.activate(existing)
+            return existing
+        }
+        return installOpenedDocument(loaded, preferred: preferred)
+    }
+    func openMindNodeInWindow(_ url: URL, preferred: WindowSession?) throws -> DocumentSession {
+        let preflight = DocumentSession(canvas: MapCanvas(model: MapModel(roots: [], selected: UUID())), defaults: defaults)
+        let archive = try preflight.preflightMindNode(at: url)
+        let loaded = LoadedDocument(document: OwnMapDocument(roots: archive.imported.roots),
+                                    archive: archive, nativeURL: nil, digest: nil, identity: nil)
+        return installOpenedDocument(loaded, preferred: preferred)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
-        newWindow(nil)
+        let needsWindow = windowSessions.isEmpty
+        if needsWindow { newWindow(nil) }
+        #if !HEADLESS_TEST
+        if !needsWindow, let first = windowSessions.first {
+            first.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        #endif
         openPendingFinderDocument()
         if defaults.bool(forKey: "checkUpdatesAutomatically") { checkForUpdates(nil) }
     }
@@ -2555,7 +2641,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                                               archive: archive, nativeURL: nil, digest: nil, identity: nil))
     }
     @objc private func openFile(_ sender: Any?) {
-        guard commitPendingEditors() else { return }
+        guard let key = NSApp.keyWindow,
+              let destination = windowSessions.first(where: { $0.window === key }),
+              destination.active?.commitPendingEditors() == true else { return }
         let panel = NSOpenPanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -2567,12 +2655,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard ["Untitled.mflw", "Untitled.mindmap.json"].contains(url.lastPathComponent),
               url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
-        do { try loadMap(at: url) }
+        do { _ = try openMapInWindow(url, preferred: destination) }
         catch DocumentOperationError.cancelled { return }
         catch { alert("Could not open map", detail: error.localizedDescription) }
     }
     @objc private func openMindNode(_ sender: Any?) {
-        guard commitPendingEditors() else { return }
+        guard let key = NSApp.keyWindow,
+              let destination = windowSessions.first(where: { $0.window === key }),
+              destination.active?.commitPendingEditors() == true else { return }
         let panel = NSOpenPanel()
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory() else { return }
@@ -2588,7 +2678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard ["fixture.mindnode", "single.mindnode"].contains(url.lastPathComponent),
               url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
-        do { try loadMindNode(at: url) }
+        do { _ = try openMindNodeInWindow(url, preferred: destination) }
         catch DocumentOperationError.cancelled { return }
         catch ImportError.unsupported {
             alert("Could not open MindNode", detail: "Only MindNode v9 binary-plist files or directory packages can be imported into an editable .mflw document. The source remains untouched.")

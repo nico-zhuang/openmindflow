@@ -39,6 +39,13 @@ final class DocumentSession {
 
     private var savedNativeSHA256: Data?
     private var savedNativeIdentity: NativeMapFile.FileIdentity?
+    var nativeIdentity: NativeMapFile.FileIdentity? { savedNativeIdentity }
+    /// A same-path reopen keeps the editor's original baseline rather than silently loading replacement bytes.
+    func verifyNativeBaseline() throws {
+        guard let fileURL, let digest = savedNativeSHA256, let identity = savedNativeIdentity else { return }
+        let current = try NativeMapFile.readWithFileIdentity(fileURL)
+        guard current.identity == identity, current.digest == digest else { throw NativeMapFile.FileError.conflict }
+    }
     private var savedRoots: [MapNode]
     private var savedRelationships: [MapRelationship]
     private var savedTheme: String?
