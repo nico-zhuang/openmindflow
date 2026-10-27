@@ -2340,6 +2340,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #if HEADLESS_TEST
     private var fixtureAnchor: DocumentSession?
     var beforeGuardedSaveWriteForTesting: (() throws -> Void)?
+    var foregroundWindowForTesting: NSWindow?
+    var afterSavePanelForTesting: ((DocumentSession) -> URL?)?
+    func saveExplicitSessionForTesting(_ session: DocumentSession, chooseDestination: Bool = false) -> Bool {
+        save(chooseDestination: chooseDestination, for: session)
+    }
     func selectUnshownSessionForTesting(_ session: DocumentSession) {
         precondition(isLiveSession(session))
         fixtureAnchor = session
@@ -2378,6 +2383,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             owner.documents.contains { $0 === session }
         }
     }
+    private var foregroundDocumentWindow: NSWindow? {
+        #if HEADLESS_TEST
+        if let foregroundWindowForTesting { return foregroundWindowForTesting }
+        #endif
+        // The shared color panel can be key while its owning document remains main.
+        if NSApp.keyWindow is NSColorPanel { return NSApp.mainWindow }
+        return NSApp.keyWindow
+    }
+    private func isForegroundColorOwner(_ session: DocumentSession) -> Bool {
+        isActiveLiveSession(session) && session.window === foregroundDocumentWindow
+    }
+    private func stillOwnsModalDocument(_ session: DocumentSession) -> Bool {
+        activeSession === session && isActiveLiveSession(session)
+    }
+    private func savePanelURL(_ panel: NSSavePanel, for session: DocumentSession) -> URL? {
+        #if HEADLESS_TEST
+        if let afterSavePanelForTesting { return afterSavePanelForTesting(session) }
+        #endif
+        return panel.runModal() == .OK ? panel.url : nil
+    }
     private func requireCurrentSession() throws -> DocumentSession {
         #if HEADLESS_TEST
         if let fixtureAnchor { return fixtureAnchor }
@@ -2415,11 +2440,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let session = DocumentSession(canvas: canvas, defaults: defaults)
         session.inspector.canApplyPanelColor = { [weak self, weak session] in
             guard let self, let session else { return false }
-            return self.isActiveLiveSession(session)
+            return self.isForegroundColorOwner(session)
         }
         canvas.canApplyRelationshipPanelColor = { [weak self, weak session] in
             guard let self, let session else { return false }
-            return self.isActiveLiveSession(session)
+            return self.isForegroundColorOwner(session)
         }
         if register { session.window = window }
         session.onTitleChange = { [weak self, weak session] in
@@ -2812,19 +2837,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func saveAsMindNodeCopy(_ sender: Any?) { exportMindNodeCopy(sender) }
     @objc private func exportMindNodeCopy(_ sender: Any?) {
-        guard commitPendingEditors() else { return }
+        guard let session = activeSession, isActiveLiveSession(session),
+              session.commitPendingEditors() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
-        guard let directory = ownedPanelFixtureDirectory() else { return }
-        panel.directoryURL = directory
+        if afterSavePanelForTesting == nil {
+            guard let directory = ownedPanelFixtureDirectory() else { return }
+            panel.directoryURL = directory
+        }
         #endif
         panel.allowedContentTypes = [UTType(filenameExtension: "mindnode") ?? .data]
         panel.nameFieldStringValue = "OpenMindFlow-Copy.mindnode"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = savePanelURL(panel, for: session), stillOwnsModalDocument(session) else { return }
         #if HEADLESS_TEST
-        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        if afterSavePanelForTesting == nil {
+            guard let directory = ownedPanelFixtureDirectory(),
+                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        }
         #endif
-        do { try exportCurrentMindNode(to: url) }
+        do { try session.exportCurrentMindNode(to: url) }
         catch DocumentOperationError.cancelled { return }
         catch MindNodeArchive.ArchiveError.unsafe {
             alert("Could not export MindNode copy", detail:
@@ -2839,19 +2870,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         export(.markdown, extension: "md", type: UTType(filenameExtension: "md") ?? .plainText)
     }
     private func export(_ format: MapExportFormat, extension suffix: String, type: UTType) {
-        guard commitPendingEditors() else { return }
+        guard let session = activeSession, isActiveLiveSession(session),
+              session.commitPendingEditors() else { return }
         let panel = NSSavePanel()
         #if HEADLESS_TEST
-        guard let directory = ownedPanelFixtureDirectory() else { return }
-        panel.directoryURL = directory
+        if afterSavePanelForTesting == nil {
+            guard let directory = ownedPanelFixtureDirectory() else { return }
+            panel.directoryURL = directory
+        }
         #endif
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = "OpenMindFlow.\(suffix)"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = savePanelURL(panel, for: session), stillOwnsModalDocument(session) else { return }
         #if HEADLESS_TEST
-        guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        if afterSavePanelForTesting == nil {
+            guard let directory = ownedPanelFixtureDirectory(),
+                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
+        }
         #endif
-        do { try exportMap(canvas, as: format, to: url) }
+        do { try exportMap(session.canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
     }
     /// The native writer accepts only the system-owned /var and /tmp aliases for
@@ -2890,27 +2927,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     @objc private func saveAsNative(_ sender: Any?) { _ = save(chooseDestination: true) }
     private func save(chooseDestination: Bool = false, for explicitSession: DocumentSession? = nil) -> Bool {
-        guard let session = explicitSession ?? activeSession, session.commitPendingEditors() else { return false }
+        guard let session = explicitSession ?? activeSession, isLiveSession(session),
+              (explicitSession != nil || stillOwnsModalDocument(session)),
+              session.commitPendingEditors() else { return false }
         var destination = chooseDestination ? nil : session.fileURL
         if destination == nil {
             let panel = NSSavePanel()
             #if HEADLESS_TEST
-            guard let directory = ownedPanelFixtureDirectory() else { return false }
-            panel.directoryURL = directory
+            if afterSavePanelForTesting == nil {
+                guard let directory = ownedPanelFixtureDirectory() else { return false }
+                panel.directoryURL = directory
+            }
             #endif
             panel.allowedContentTypes = [UTType(exportedAs: "local.openmindflow.document", conformingTo: .data)]
             panel.nameFieldStringValue = session.fileURL?.lastPathComponent ?? "Untitled.mflw"
-            guard panel.runModal() == .OK else { return false }
-            destination = panel.url
+            destination = savePanelURL(panel, for: session)
+            guard isLiveSession(session),
+                  (explicitSession != nil || stillOwnsModalDocument(session)) else { return false }
         }
         guard let url = destination, url.pathExtension == "mflw" else {
             alert("Unsupported format", detail: "Save as an independent .mflw document; never overwrite a MindNode source.")
             return false
         }
         #if HEADLESS_TEST
-        guard let directory = ownedPanelFixtureDirectory(),
-              url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
+        if afterSavePanelForTesting == nil {
+            guard let directory = ownedPanelFixtureDirectory(),
+                  url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
+        }
         #endif
+        guard isLiveSession(session),
+              (explicitSession != nil || stillOwnsModalDocument(session)) else { return false }
         do { try guardedSave(session, to: url); return true }
         catch DocumentOperationError.cancelled { return false }
         catch { alert("Could not save map", detail: error.localizedDescription); return false }

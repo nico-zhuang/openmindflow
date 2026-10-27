@@ -94,14 +94,21 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         item.target = self
         return item
     }
-    private var commandSession: DocumentSession? { window.isKeyWindow ? active : nil }
-    @objc func undoEdit(_ sender: Any?) { if commandSession?.commitPendingEditors() == true { commandSession?.canvas.undo() } }
-    @objc func redoEdit(_ sender: Any?) { if commandSession?.commitPendingEditors() == true { commandSession?.canvas.redo() } }
-    @objc func newMainNode(_ sender: Any?) { commandSession?.canvas.addMainNode() }
-    @objc func newChild(_ sender: Any?) { commandSession?.canvas.addChild() }
-    @objc func newSibling(_ sender: Any?) { commandSession?.canvas.addSibling() }
-    @objc func foldNode(_ sender: Any?) { commandSession?.canvas.toggleFold() }
-    @objc func fitMap(_ sender: Any?) { commandSession?.canvas.fitMapInView() }
-    @objc func toggleOutline(_ sender: Any?) { commandSession?.toggleOutline() }
-    @objc func toggleStyle(_ sender: Any?) { commandSession?.toggleStyle() }
+    private func commandSession(for sender: Any?) -> DocumentSession? {
+        guard let item = sender as? NSToolbarItem, item.target as AnyObject? === self,
+              let toolbar = window.toolbar,
+              toolbarAllowedItemIdentifiers(toolbar).contains(item.itemIdentifier),
+              let document = active, document.window === window,
+              documents.contains(where: { $0 === document }) else { return nil }
+        return document
+    }
+    @objc func undoEdit(_ sender: Any?) { if let session = commandSession(for: sender), session.commitPendingEditors() { session.canvas.undo() } }
+    @objc func redoEdit(_ sender: Any?) { if let session = commandSession(for: sender), session.commitPendingEditors() { session.canvas.redo() } }
+    @objc func newMainNode(_ sender: Any?) { commandSession(for: sender)?.canvas.addMainNode() }
+    @objc func newChild(_ sender: Any?) { commandSession(for: sender)?.canvas.addChild() }
+    @objc func newSibling(_ sender: Any?) { commandSession(for: sender)?.canvas.addSibling() }
+    @objc func foldNode(_ sender: Any?) { commandSession(for: sender)?.canvas.toggleFold() }
+    @objc func fitMap(_ sender: Any?) { commandSession(for: sender)?.canvas.fitMapInView() }
+    @objc func toggleOutline(_ sender: Any?) { commandSession(for: sender)?.toggleOutline() }
+    @objc func toggleStyle(_ sender: Any?) { commandSession(for: sender)?.toggleStyle() }
 }

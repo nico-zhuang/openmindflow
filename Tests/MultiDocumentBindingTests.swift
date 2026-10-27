@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 @main enum MultiDocumentBindingTests {
     static func main() {
@@ -66,6 +67,11 @@ import AppKit
         panel.color = .systemRed
         let beforeCanvas = a.canvas.model.canvasColor
         let beforeRoots = a.canvas.model.roots
+        app.foregroundWindowForTesting = second.window
+        _ = a.inspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(a.canvas.model.canvasColor == beforeCanvas,
+               "old A must reject color when C in another window is foreground")
+        app.foregroundWindowForTesting = first.window
         assert(first.activate(b))
         _ = a.inspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
         _ = a.inspector.perform(NSSelectorFromString("changeRootPanelColor:"), with: panel)
@@ -83,12 +89,91 @@ import AppKit
         assert(a.canvas.model.relationships[0].color == previousColor,
                "inactive relationship callback must not edit A")
         assert(first.activate(a))
-        first.remove(a)
+        app.foregroundWindowForTesting = second.window
+        a.inspector.colorPanelModel = a.canvas.model
+        _ = a.inspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(a.canvas.model.canvasColor == beforeCanvas, "foreground C must reject A even while A remains active")
+        a.canvas.armRelationshipColorPanelForTesting(edge.id)
+        _ = a.canvas.perform(NSSelectorFromString("changeRelationshipPanelColor:"), with: panel)
+        assert(a.canvas.model.relationships[0].color == previousColor,
+               "foreground C must reject A's live relationship callback")
+        app.foregroundWindowForTesting = first.window
+        _ = a.inspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        let foregroundColor = a.canvas.model.canvasColor
+        assert(foregroundColor != beforeCanvas,
+               "foreground A must still accept its own color callback, as when shared panel is key")
+        let exportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omf-binding-\(UUID())", isDirectory: true)
+        try! FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: false,
+                                                 attributes: [.posixPermissions: 0o700])
+        var ownedDirectory = stat()
+        precondition(lstat(exportDirectory.path, &ownedDirectory) == 0 &&
+                     ownedDirectory.st_uid == getuid() &&
+                     ownedDirectory.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
+                     ownedDirectory.st_mode & 0o777 == 0o700)
+        defer {
+            var current = stat()
+            if lstat(exportDirectory.path, &current) == 0 &&
+                current.st_dev == ownedDirectory.st_dev && current.st_ino == ownedDirectory.st_ino &&
+                current.st_uid == getuid() && current.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
+                exportDirectory.deletingLastPathComponent().resolvingSymlinksInPath() ==
+                    FileManager.default.temporaryDirectory.resolvingSymlinksInPath() {
+                try? FileManager.default.removeItem(at: exportDirectory)
+            }
+        }
+        for action in ["saveAsNative:", "exportPDF:", "exportPNG:", "exportJPEG:",
+                       "exportMarkdownFile:", "exportMindNodeCopy:"] {
+            assert(first.activate(a))
+            app.selectUnshownSessionForTesting(a)
+            let suffix = action.replacingOccurrences(of: ":", with: "")
+            let destination = exportDirectory.appendingPathComponent("\(suffix).\(action == "saveAsNative:" ? "mflw" : action == "exportMindNodeCopy:" ? "mindnode" : "pdf")")
+            app.afterSavePanelForTesting = { captured in
+                assert(captured === a, "panel must capture active A before opening")
+                assert(first.activate(b))
+                app.selectUnshownSessionForTesting(b)
+                return destination
+            }
+            _ = app.perform(NSSelectorFromString(action), with: nil)
+            assert(!FileManager.default.fileExists(atPath: destination.path),
+                   "\(action) must not write after modal changes the active owner")
+        }
+        app.afterSavePanelForTesting = nil
+        let nativeURL = exportDirectory.appendingPathComponent("explicit.mflw")
+        try! a.saveCurrentMap(to: nativeURL)
+        a.canvas.addMainNode()
+        let pendingRoots = a.canvas.model.roots
+        assert(first.activate(b))
+        app.afterSavePanelForTesting = { _ in fatalError("existing file must not show a panel") }
+        assert(app.saveExplicitSessionForTesting(a), "close confirmation may save live inactive A")
+        assert((try! NativeMapFile.read(nativeURL)).document.roots == pendingRoots)
+        var writes = 0
+        app.beforeGuardedSaveWriteForTesting = { writes += 1 }
+        app.afterSavePanelForTesting = { captured in
+            assert(captured === a)
+            first.remove(a)
+            return exportDirectory.appendingPathComponent("detached.mflw")
+        }
+        assert(!app.saveExplicitSessionForTesting(a, chooseDestination: true) && writes == 0,
+               "explicit session removed during modal must not write")
+        app.afterSavePanelForTesting = nil
+        assert(!app.saveExplicitSessionForTesting(a) && writes == 0,
+               "already detached explicit session must not write")
+        app.beforeGuardedSaveWriteForTesting = nil
+        a.inspector.colorPanelModel = a.canvas.model
+        panel.color = .systemBlue
+        _ = a.inspector.perform(NSSelectorFromString("changeCanvasPanelColor:"), with: panel)
+        assert(a.canvas.model.canvasColor == foregroundColor,
+               "closed A cannot be recolored even with a stale model target")
         let bBeforeToolbar = b.canvas.model.roots
         first.newChild(nil)
         first.newMainNode(nil)
         assert(b.canvas.model.roots == bBeforeToolbar,
-               "toolbar commands must refuse a window that is not key")
+               "toolbar commands without sender must refuse non-key window")
+        let toolbarItem = first.toolbar(toolbarA, itemForItemIdentifier: .init("new-main"),
+                                        willBeInsertedIntoToolbar: true)!
+        assert(NSApp.sendAction(toolbarItem.action!, to: toolbarItem.target, from: toolbarItem))
+        assert(b.canvas.model.roots.count == bBeforeToolbar.count + 1,
+               "explicit toolbar sender must route to its own non-key window")
         _ = a.canvas.perform(NSSelectorFromString("changeRelationshipPanelColor:"), with: panel)
         assert(a.canvas.model.relationships[0].color == previousColor,
                "removed relationship callback must not edit A")
