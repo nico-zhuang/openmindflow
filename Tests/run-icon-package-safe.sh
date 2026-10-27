@@ -13,12 +13,13 @@ app="$fixture/OpenMindFlow-Test.app"
 [[ $(shasum -a 256 "$app/Contents/Resources/OpenMindFlow.icns" | awk '{print $1}') == "$expected" ]]
 [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist") == OpenMindFlow.icns ]]
 [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Contents/Info.plist") == OpenMindFlow ]]
-[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist") == local.openmindflow.native-editor ]]
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist") == local.openmindflow.nativeformat.20261027 ]]
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
-[[ "$version" == 0.3.0 && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'FAIL: expected semantic version 0.3.0, got %s\n' "$version" >&2; exit 1; }
-IFS=. read -r major minor patch <<< "$version"
-(( major > 0 || minor > 2 || (minor == 2 && patch >= 1) ))
-[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist") == 4 ]]
+[[ "$version" == 0.4.0 && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'FAIL: expected semantic version 0.4.0, got %s\n' "$version" >&2; exit 1; }
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist") == 5 ]]
+[[ $(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$app/Contents/Info.plist") == local.openmindflow.document ]]
+[[ $(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension' "$app/Contents/Info.plist") == mflw ]]
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeRole' "$app/Contents/Info.plist") == Editor ]]
 [[ $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist") == 26.0 ]]
 plutil -lint "$app/Contents/Info.plist"
 codesign --verify --deep --strict --verbose=2 "$app"

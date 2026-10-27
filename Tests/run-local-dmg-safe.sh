@@ -33,9 +33,10 @@ done
 app="$scratch/OpenMindFlow.app"
 dmg="$scratch/OpenMindFlow-local.dmg"
 bash "$repo/scripts/build-openmindflow-local.sh" "$app"
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == local.openmindflow.native-editor ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == 0.3.0 ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == 4 ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" == local.openmindflow.nativeformat.20261027 ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == 0.4.0 ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == 5 ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension' "$app/Contents/Info.plist")" == mflw ]]
 [[ "$(shasum -a 256 "$app/Contents/Resources/OpenMindFlow.icns" | awk '{print $1}')" == 3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3 ]]
 codesign --verify --deep --strict --verbose=2 "$app"
 [[ "$(codesign -dv "$app" 2>&1 | awk -F= '/^Signature=/{print $2}')" == adhoc ]]
@@ -67,16 +68,22 @@ done
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier wrong.id' "$app/Contents/Info.plist"
 if bash "$package" "$app" "$scratch/invalid-id.dmg"; then echo 'ERROR: invalid bundle ID accepted' >&2; exit 1; fi
 cp "$scratch/valid-info.plist" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 5' "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 6' "$app/Contents/Info.plist"
 if bash "$package" "$app" "$scratch/invalid-version.dmg"; then echo 'ERROR: invalid version accepted' >&2; exit 1; fi
 cp "$scratch/valid-info.plist" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension wrong' "$app/Contents/Info.plist"
+codesign --force --sign - --timestamp=none "$app"
+if bash "$package" "$app" "$scratch/invalid-uti.dmg"; then echo 'ERROR: invalid mflw UTType accepted' >&2; exit 1; fi
+cp "$scratch/valid-info.plist" "$app/Contents/Info.plist"
+codesign --force --sign - --timestamp=none "$app"
 printf altered >> "$app/Contents/Resources/OpenMindFlow.icns"
 if bash "$package" "$app" "$scratch/invalid-icon.dmg"; then echo 'ERROR: invalid icon accepted' >&2; exit 1; fi
 cp "$scratch/valid-icon.icns" "$app/Contents/Resources/OpenMindFlow.icns"
 printf altered >> "$app/Contents/MacOS/OpenMindFlow"
 if bash "$package" "$app" "$scratch/invalid-signature.dmg"; then echo 'ERROR: invalid signature accepted' >&2; exit 1; fi
 [[ ! -e "$scratch/invalid-id.dmg" && ! -e "$scratch/invalid-version.dmg" &&
-   ! -e "$scratch/invalid-icon.dmg" && ! -e "$scratch/invalid-signature.dmg" ]]
+   ! -e "$scratch/invalid-uti.dmg" && ! -e "$scratch/invalid-icon.dmg" &&
+   ! -e "$scratch/invalid-signature.dmg" ]]
 after=()
 for path in "${protected[@]}"; do
   if [[ -f "$path" && ! -L "$path" ]]; then after+=("$(shasum -a 256 "$path")"); fi

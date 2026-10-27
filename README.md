@@ -1,6 +1,16 @@
 # OpenMindFlow — 独立 macOS 思维导图编辑器
 
-## 最新 0.3.0 本地测试候选（2026-10-27；尚待用户人工验收）
+## 0.4.0 原生文稿独立候选（2026-10-27；离屏验证完成，人工验收待做）
+
+- **本机独立签名候选：**[App](build/OpenMindFlow-NativeFormatReview-20261027.app)、[DMG](dist/OpenMindFlow-0.4.0-NativeFormatReview-20261027.dmg)（SHA-256 `cf7fe6f3628602621efdb809fc743bad8213fbb16fa28a878863bbd164633e36`）、[ZIP](dist/OpenMindFlow-0.4.0-NativeFormatReview-20261027.zip)（SHA-256 `ee063b4b48c701306c3c0bbb27a121ac2fb70ee2a5ede3048f7c3101922ae526`）。可执行文件 SHA-256 `3a2b40864031739aef177cae38e033ad36e06b3e1da5a8030dd98fb04ee883e9`；bundle ID `local.openmindflow.nativeformat.20261027`、版本 `0.4.0`／build `5`、最低 macOS 26。`codesign --verify --deep --strict`、镜像 `hdiutil verify`、只读非 Finder 挂载检查、ZIP 解压包签名/可执行文件字节对比已通过。此包为本机 **ad-hoc** 签名，非 Developer ID 签名/公证或正式可分发版本。
+- **验证与保护：**全量 **65 个独立安全离屏 Swift 套件及 3 个交互子模式**、生产链接、两个构建/打包拒绝覆盖及错误元数据测试退出 0；不包含实时 AX 和真实鼠标/Finder 操作。仅对新 App 执行 `open -n`（验证新 PID 96063），历史仍存活的 PID 82862 在前后均存在，历史 App/DMG/ZIP 的 SHA-256 均未变化；更早两个 PID 在交付前自行退出，没有重新启动或关闭。
+- 新建/编辑默认保存 **`.mflw`**：文件魔数 `OMFLW001`，长度与 SHA-256 校验，负载为二进制 property list，**不是改后缀的 JSON**。文件菜单支持打开、保存、另存；Finder 可向本应用发送 `.mflw` 打开事件。旧 `.mindmap.json` 只作迁移输入，打开后 Save 转为新 `.mflw`，不回写旧文件。当前仍是单窗口，Finder 一次只接收一个文稿。
+- 支持导入 MindNode **v9 二进制 plist 目录包或普通文件**进行编辑，导入时将原包的未知字段、主题、连接与媒体资源保存在 `.mflw`。**原 `.mindnode` 永远不是自动保存目标**。File → Save As MindNode Copy…／Export MindNode… 只在原有节点纯文本标题、折叠和同父节点顺序等可保真修改时发布一个全新的独占副本；新增节点、未知主题修改等不支持的编辑会拒绝导出，但仍可安全保存在 `.mflw`。新建简单树可走经验证的合成 v9 子集。合成导出经**我们的 importer**复读，不意味着原 MindNode 应用已独立接受；真正 Finder 双击、原应用导入与实体标签拖动均待人工验证。
+- 保存使用私有目录原子暂存与新目标独占发布；对已打开文稿记住同一次文件读取的 SHA-256、设备与 inode，遇到外部修改、大小写/硬链接别名或 Finder 移走再复制回旧路径的冲突会拒绝覆盖。POSIX 原子重命名无法对主动竞速的同 UID 写入者提供真正的跨进程 CAS。
+- 现有 **⌘N 仍是“新建主节点”**。用户另外提出的新窗口、工具栏下方标签、横/竖标签与拖离/合并尚处设计待确认阶段，**未包含在 0.4.0 原生格式候选**，不得把它们算作已实现。
+- **手工验收建议：**先用新 App 将测试导图保存为 `.mflw` 并重开，再在 Finder 中双击此测试文稿以确认实际打开关联；只复制**自己有权使用的** MindNode v9 文件到测试目录，导入后编辑标题/折叠、另存 `.mflw`，导出至**全新的** `.mindnode` 副本路径。分别比较原始文件 SHA-256，尝试新增节点以确认不支持的 MindNode 导出被拒绝且 `.mflw` 仍可保存。愿意且安全时再由用户在原 MindNode 应用打开这个**副本**检查兼容性；我们的合成测试不能替代它。不要在真实原件、旧候选或未保存用户文稿上做破坏性演练。旧应用/导出/原件保留不覆盖，包未公证、未确定正式开源许可。
+
+## 上一版 0.3.0 本地测试候选（2026-10-27；历史记录，尚待用户人工验收）
 
 - **最终审查版：**[本地 DMG](dist/OpenMindFlow-0.3.0-TargetPinReview-20261027.dmg)（SHA-256 `eda5a30a2d065510a23a5f2f63df0007f0d55ecd33615ce18726c710ba9216e1`）、[ZIP](dist/OpenMindFlow-0.3.0-TargetPinReview-20261027.zip)（SHA-256 `fca832631eea9e95c4cfb75038c93f1b8010f901e1fad8939fd6eeac70e97277`），以及不覆盖前版的[独立 App](build/OpenMindFlow-TargetPinReview-20261027.app)。可执行文件 SHA-256 `856bde0c4c5f4d0200376cadfdac9b1aad02dc797d7982e24fb9a0eb8e94664e`；bundle ID `local.openmindflow.native-editor`，版本 `0.3.0`/build `4`，最低 macOS 26。用户提供的图标包 v2.1 中 fallback `.icns` 已置入包，SHA-256 `3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3`。较早的[本机首次打包副本](dist/OpenMindFlow-0.3.0-Local-20261027.dmg)保留作内部比对，**不要**作为最新手测版本；它同样未启动且没有覆盖旧候选。
 - 右侧三页改为随语言切换的 **Style／Notes／Themes** 文字标签；离屏 260/320pt 测量使 Style 首节可见顶空从约 75pt 收紧到约 12pt。默认原生工具栏精简为七项；Undo/Redo 保留 Edit 菜单和自定义项。空白左键/右键清除选择，再粘贴文字/图片/视频创建独立根；Finder 有界图像或视频文件拖放可落成根或目标子节点；无效或超大小素材在落点前拒绝。内部拖动遇到合法动画目标时固定该目标显示位置（包括第三分支碰撞的二次避碰），区分 65% 子目标、同级索引、遮挡目标以及取消状态。
