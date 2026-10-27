@@ -58,6 +58,7 @@ import Darwin
         assert(savedA.document.roots.first?.title == "Alpha changed")
         assert(savedB.document.roots == [rootB])
         canvasA.undo()
+        assert(canvasA.model.roots == [rootA])
         assert(canvasB.model.roots == [rootB])
 
         let source = folder.appendingPathComponent("Source.mindnode", isDirectory: true)
