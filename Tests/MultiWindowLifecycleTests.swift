@@ -110,11 +110,17 @@ import Darwin
             assert(NSApp.sendAction(item.action!, to: item.target, from: item))
         }
         let saveItem = NSApp.mainMenu!.item(withTitle: "File")!.submenu!.item(withTitle: "Save")!
+        var beforeSaveFile = stat()
+        assert(lstat(target.path, &beforeSaveFile) == 0)
         assert(NSApp.sendAction(saveItem.action!, to: saveItem.target, from: saveItem))
+        var afterSaveFile = stat()
+        assert(lstat(target.path, &afterSaveFile) == 0)
         let afterSaveBytes = try Data(contentsOf: target)
         assert(first.canvas.model.roots == closedRoots && second.canvas.model.roots == closedBRoots &&
                afterSaveBytes == savedBytes,
-               "Node actions and Save must fail closed after the last window closes")
+               "Node actions and Save must not change closed documents or saved bytes")
+        assert(afterSaveFile.st_dev == beforeSaveFile.st_dev && afterSaveFile.st_ino == beforeSaveFile.st_ino,
+               "Final-window Save must not replace the saved file with identical bytes")
         assert(NSApp.sendAction(sender.action!, to: app, from: sender))
         assert(app.windowSessions.count == 1 && app.windowSessions[0].active?.fileURL == nil)
         assert(!app.windowSessions[0].window.isVisible)
