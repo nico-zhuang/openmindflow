@@ -2386,7 +2386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     private func installSession(canvas: MapCanvas, in window: NSWindow, register: Bool = true) -> DocumentSession {
         let session = DocumentSession(canvas: canvas, defaults: defaults)
-        session.window = window
+        if register { session.window = window }
         session.onTitleChange = { [weak self, weak session] in
             guard let self, let session, let window = session.window else { return }
             if let owner = self.windowSessions.first(where: { $0.window === window }),
@@ -2513,14 +2513,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         }
         #endif
     }
-    private func preparedWindow(for preferred: WindowSession?) -> (session: WindowSession, newWindow: Bool) {
-        if let preferred, windowSessions.contains(where: { $0 === preferred }) { return (preferred, false) }
+    private func preparedWindow(for preferred: WindowSession?) throws -> (session: WindowSession, newWindow: Bool) {
+        if let preferred {
+            guard windowSessions.contains(where: { $0 === preferred }) else { throw DocumentOperationError.cancelled }
+            return (preferred, false)
+        }
         if let existing = windowSessions.first { return (existing, false) }
         return (createWindowSession(), true)
     }
-    private func installOpenedDocument(_ loaded: LoadedDocument, preferred: WindowSession?) -> DocumentSession {
-        let destination = preparedWindow(for: preferred)
+    private func installOpenedDocument(_ loaded: LoadedDocument, preferred: WindowSession?) throws -> DocumentSession {
+        let destination = try preparedWindow(for: preferred)
         let owner = destination.session
+        guard owner.active?.commitPendingEditors() ?? true else { throw DocumentOperationError.cancelled }
         if destination.newWindow, let initial = owner.active, !initial.dirty, initial.fileURL == nil,
            initial.mindNodeArchive == nil, owner.documents.count == 1 {
             initial.installDocument(loaded)
@@ -2533,14 +2537,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let document = installSession(canvas: canvas, in: owner.window, register: false)
         document.installDocument(loaded)
         owner.insert(document)
-        owner.activate(document)
+        guard owner.activate(document) else {
+            owner.remove(document)
+            throw DocumentOperationError.cancelled
+        }
         return document
     }
     func openMapInWindow(_ url: URL, preferred: WindowSession?) throws -> DocumentSession {
+        if let preferred, !windowSessions.contains(where: { $0 === preferred }) { throw DocumentOperationError.cancelled }
         // A URL already assigned to a live editor stays assigned even after external replacement.
         if let owner = windowSessions.first(where: { $0.documents.contains(where: { $0.fileURL == url }) }),
            let existing = owner.documents.first(where: { $0.fileURL == url }) {
-            owner.activate(existing)
+            guard owner.activate(existing) else { throw DocumentOperationError.cancelled }
             do { try existing.verifyNativeBaseline() }
             catch {
                 #if HEADLESS_TEST
@@ -2557,17 +2565,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
            let owner = windowSessions.first(where: { candidate in
                candidate.documents.contains { $0.nativeIdentity == identity }
            }), let existing = owner.documents.first(where: { $0.nativeIdentity == identity }) {
-            owner.activate(existing)
+            guard owner.activate(existing) else { throw DocumentOperationError.cancelled }
             return existing
         }
-        return installOpenedDocument(loaded, preferred: preferred)
+        return try installOpenedDocument(loaded, preferred: preferred)
     }
     func openMindNodeInWindow(_ url: URL, preferred: WindowSession?) throws -> DocumentSession {
+        if let preferred, !windowSessions.contains(where: { $0 === preferred }) { throw DocumentOperationError.cancelled }
         let preflight = DocumentSession(canvas: MapCanvas(model: MapModel(roots: [], selected: UUID())), defaults: defaults)
         let archive = try preflight.preflightMindNode(at: url)
         let loaded = LoadedDocument(document: OwnMapDocument(roots: archive.imported.roots),
                                     archive: archive, nativeURL: nil, digest: nil, identity: nil)
-        return installOpenedDocument(loaded, preferred: preferred)
+        return try installOpenedDocument(loaded, preferred: preferred)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

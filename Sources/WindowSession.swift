@@ -25,13 +25,16 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         documents.insert(document, at: max(0, min(index ?? documents.count, documents.count)))
         if active == nil { activate(document) }
     }
-    func activate(_ document: DocumentSession) {
-        guard documents.contains(where: { $0 === document }) else { return }
+    @discardableResult func activate(_ document: DocumentSession) -> Bool {
+        guard documents.contains(where: { $0 === document }) else { return false }
+        if active === document { return true }
+        guard active?.commitPendingEditors() ?? true else { return false }
         active = document
         document.window = window
         window.contentViewController = document.splitController
         document.onTitleChange?()
         window.makeFirstResponder(document.canvas)
+        return true
     }
     func remove(_ document: DocumentSession) {
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
