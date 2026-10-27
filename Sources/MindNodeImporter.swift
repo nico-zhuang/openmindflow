@@ -15,12 +15,12 @@ enum ImportError: LocalizedError {
     }
 }
 
-struct MindNodeVisualStyle {
+struct MindNodeVisualStyle: Codable {
     let rgba: [Double]
     let width: CGFloat
 }
 
-struct MindNodeFontMetadata {
+struct MindNodeFontMetadata: Codable {
     let family: String?
     let pointSize: Double?
     let color: [Double]?
@@ -30,7 +30,7 @@ struct MindNodeFontMetadata {
     let italic: Bool?
 }
 
-struct MindNodePresentation {
+struct MindNodePresentation: Codable {
     let location: CGPoint?
     let maxWidth: Double?
     let allowToShrinkWidth: Bool?
@@ -39,13 +39,13 @@ struct MindNodePresentation {
     let fillColor: [Double]?
 }
 
-struct MindNodeThemeStyle {
+struct MindNodeThemeStyle: Codable {
     let font: MindNodeFontMetadata?
     let fillColor: [Double]?
     let stroke: MindNodeVisualStyle?
 }
 
-struct MindNodeThemeMetadata {
+struct MindNodeThemeMetadata: Codable {
     let identifier: UUID?
     let backgroundColor: [Double]?
     let allowNodeStrokeColorVariation: Bool?
@@ -54,7 +54,7 @@ struct MindNodeThemeMetadata {
     let subnodeLevels: [MindNodeThemeStyle]
 }
 
-struct MindNodeDetailedImport {
+struct MindNodeDetailedImport: Codable {
     let roots: [MapNode]
     let styles: [UUID: MindNodeVisualStyle]
     let presentation: [UUID: MindNodePresentation]

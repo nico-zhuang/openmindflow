@@ -37,8 +37,14 @@ enum MindNodeTitlePatch {
         }
         var seen = Set<UUID>()
         func update(_ raw: inout [String: Any], _ before: MapNode, _ after: MapNode, depth: Int) throws {
+            var safeComparison = after
+            safeComparison.title = before.title
+            safeComparison.folded = before.folded
+            safeComparison.children = before.children
             guard depth <= 200, seen.count < 10_000, seen.insert(before.id).inserted,
-                  before.width == after.width else { throw PatchError.unsupported }
+                  safeComparison == before,
+                  Set(after.children.map(\.id)) == Set(before.children.map(\.id)),
+                  after.children.count == before.children.count else { throw PatchError.unsupported }
             guard before.id == after.id, let id = raw["nodeID"] as? String,
                   UUID(uuidString: id) == before.id,
                   let fold = raw["hasFoldedSubnodes"] as? NSNumber,
