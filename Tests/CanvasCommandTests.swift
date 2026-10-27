@@ -310,21 +310,24 @@ enum CanvasCommandTests {
         assert(outlineToggle.action.map(NSStringFromSelector) == "toggleOutline:")
         assert(outlineToggle.target as AnyObject? === appDelegate)
         let fileMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "File" }!
-        guard let mindNodeOpen = fileMenu.item(withTitle: "Open MindNode (Read-only)…"),
-              let ownJSONOpen = fileMenu.item(withTitle: "Open Own JSON…"),
+        guard let mindNodeOpen = fileMenu.item(withTitle: "Import MindNode…"),
+              let nativeOpen = fileMenu.item(withTitle: "Open Map…"),
               mindNodeOpen.keyEquivalent == "o", mindNodeOpen.keyEquivalentModifierMask == [.command, .shift],
               mindNodeOpen.action.map(NSStringFromSelector) == "openMindNode:",
               mindNodeOpen.target as AnyObject? === appDelegate,
-              ownJSONOpen.keyEquivalent == "o", ownJSONOpen.keyEquivalentModifierMask == [.command],
-              ownJSONOpen.action.map(NSStringFromSelector) == "openFile:",
-              ownJSONOpen.target as AnyObject? === appDelegate else {
-            fputs("File shortcuts must be Cmd+O Own JSON and Cmd+Shift+O read-only MindNode, preserving actions and targets\n", stderr)
+              nativeOpen.keyEquivalent == "o", nativeOpen.keyEquivalentModifierMask == [.command],
+              nativeOpen.action.map(NSStringFromSelector) == "openFile:",
+              nativeOpen.target as AnyObject? === appDelegate else {
+            fputs("File shortcuts must be Cmd+O native map and Cmd+Shift+O editable MindNode import\n", stderr)
             exit(1)
         }
-        let mindNodeCopy = fileMenu.item(withTitle: "Experimental MindNode v9 Plain-Tree Copy…")
-        assert(mindNodeCopy?.action.map(NSStringFromSelector) == "exportMindNodeCopy:" &&
-               mindNodeCopy?.target as AnyObject? === appDelegate,
-               "The limited v9 writer must be available only as an explicitly experimental new-copy export")
+        let mindNodeCopy = fileMenu.item(withTitle: "Save As MindNode Copy…")
+        let mindNodeExport = fileMenu.item(withTitle: "Export MindNode…")
+        assert(mindNodeCopy?.action.map(NSStringFromSelector) == "saveAsMindNodeCopy:" &&
+               mindNodeExport?.action.map(NSStringFromSelector) == "exportMindNodeCopy:" &&
+               mindNodeCopy?.target as AnyObject? === appDelegate &&
+               mindNodeExport?.target as AnyObject? === appDelegate,
+               "MindNode preserved-source copies must be discoverable without experimental plain-tree labels")
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let fontMenu = nodeMenu.item(withTitle: "Font…")
         assert(fontMenu?.keyEquivalent == "t" && fontMenu?.keyEquivalentModifierMask == [.command],

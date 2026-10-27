@@ -9,6 +9,11 @@ enum NativeMapFile {
         var mindNodeArchive: Data?
     }
 
+    struct FileIdentity: Equatable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
     enum FileError: LocalizedError {
         case invalidPath, invalidFile, tooLarge, invalidHeader, unsupportedVersion, corrupt
         case conflict, durabilityUncertain
@@ -74,8 +79,15 @@ enum NativeMapFile {
         try readWithSHA256(url).payload
     }
 
-    /// Decode and hash the same bounded bytes from one no-follow file descriptor.
+    /// Retain the two-value API for callers that do not need file identity.
     static func readWithSHA256(_ url: URL) throws -> (payload: Payload, digest: Data) {
+        let opened = try readWithFileIdentity(url)
+        return (opened.payload, opened.digest)
+    }
+
+    /// Decode, hash and identify the same bounded bytes through one no-follow descriptor.
+    static func readWithFileIdentity(_ url: URL) throws ->
+        (payload: Payload, digest: Data, identity: FileIdentity) {
         let (parent, name) = try parentDescriptor(for: url)
         defer { close(parent) }
         let descriptor = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
@@ -103,7 +115,8 @@ enum NativeMapFile {
         }
         let payload = try PropertyListDecoder().decode(Payload.self, from: body)
         try checkOwnDocument(payload.document)
-        return (payload, Data(SHA256.hash(data: bytes)))
+        let identity = FileIdentity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+        return (payload, Data(SHA256.hash(data: bytes)), identity)
     }
 
     private struct CurrentFile {

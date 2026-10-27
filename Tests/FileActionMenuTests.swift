@@ -11,13 +11,17 @@ import AppKit
         _ = delegate.makeWorkbench(canvas: canvas)
         delegate.installMenu()
         let file = NSApp.mainMenu!.item(withTitle: "File")!.submenu!
-        for title in ["Insert Image…", "Insert Video…", "Experimental MindNode v9 Plain-Tree Copy…",
+        for title in ["Open Map…", "Import MindNode…", "Save", "Save As…", "Save As MindNode Copy…", "Insert Image…", "Insert Video…", "Export MindNode…",
                       "Export PDF…", "Export PNG…", "Export JPG…", "Export Markdown…"] {
             guard let action = file.item(withTitle: title), action.target != nil,
                   action.action != nil else { fatalError("Missing native File menu action: \(title)") }
         }
+        for removed in ["Open Own JSON…", "Open MindNode (Read-only)…",
+                        "Experimental MindNode v9 Plain-Tree Copy…"] {
+            assert(file.item(withTitle: removed) == nil, "Superseded format label must not remain: \(removed)")
+        }
         assert(NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Paste") != nil,
                "Canvas should receive native Edit → Paste while it is first responder")
-        print("native image/video import, experimental v9 copy, and full-map export menu actions passed")
+        print("native mflw, editable MindNode import, preservation export, and media menu actions passed")
     }
 }

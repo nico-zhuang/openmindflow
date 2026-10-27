@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import Darwin
 
 // World or screen rectangles use the same coordinate space; only the caller supplies the zoomed inset.
 func branchConnectorEndpoints(parent: CGRect, child: CGRect, parentIsRoot: Bool,
@@ -2329,8 +2330,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var outline: MapOutlineView!
     private var inspector: StyleInspector!
     private var splitController: NSSplitViewController!
-    private var fileURL: URL?
-    private var importedMindNode: MindNodeDetailedImport?
+    private var fileURL: URL? // Only our .mflw document; imported MindNode/legacy JSON remain untouched.
+    private var mindNodeArchive: MindNodeArchive?
+    private var savedNativeSHA256: Data?
+    private var savedNativeIdentity: NativeMapFile.FileIdentity?
+    private var pendingOpenURLs: [URL] = []
     private var savedRoots: [MapNode] = []
     private var savedRelationships: [MapRelationship] = []
     private var savedTheme: String?
@@ -2350,6 +2354,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         super.init()
     }
     private func t(_ english: String) -> String { L10n.text(english, defaults: defaults) }
+
+    #if HEADLESS_TEST
+    /// Genuine AppDelegate document actions in a never-ordered synthetic window; no live AX/HID.
+    func installUnshownDocumentFixture(canvas fixture: MapCanvas) -> NSWindow {
+        savedRoots = fixture.model.roots
+        savedRelationships = fixture.model.relationships
+        savedTheme = fixture.model.theme
+        savedCanvasColor = fixture.model.canvasColor
+        _ = makeWorkbench(canvas: fixture)
+        let fixtureWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                                     styleMask: [.titled, .closable, .resizable],
+                                     backing: .buffered, defer: false)
+        window = fixtureWindow
+        fixtureWindow.contentViewController = splitController
+        fixture.onChange = { [weak self] in
+            self?.syncDirty(); self?.outline.reloadMap(); self?.inspector.refresh()
+        }
+        fixture.onSelectionChange = { [weak self] in
+            self?.outline.syncSelection(); self?.inspector.refresh()
+        }
+        updateTitle()
+        openPendingFinderDocument()
+        return fixtureWindow
+    }
+    #endif
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        pendingOpenURLs.append(contentsOf: urls.filter { $0.isFileURL && $0.pathExtension == "mflw" })
+        if window != nil { openPendingFinderDocument() }
+    }
+    private func openPendingFinderDocument() {
+        guard window != nil, !pendingOpenURLs.isEmpty else { return }
+        let urls = pendingOpenURLs
+        pendingOpenURLs.removeAll()
+        guard urls.count == 1 else {
+            alert("Could not open map", detail: "Open one .mflw document at a time in this candidate.")
+            return
+        }
+        do { try loadMap(at: urls[0]) }
+        catch DocumentOperationError.cancelled { return }
+        catch { alert("Could not open map", detail: error.localizedDescription) }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
@@ -2385,6 +2431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(canvas)
         NSApp.activate(ignoringOtherApps: true)
+        openPendingFinderDocument()
         if defaults.bool(forKey: "checkUpdatesAutomatically") { checkForUpdates(nil) }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -2428,6 +2475,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         default: return false
         }
     }
+    private enum DocumentOperationError: LocalizedError {
+        case unsupported, cancelled
+        var errorDescription: String? {
+            switch self {
+            case .unsupported: "Select a .mflw document, legacy .mindmap.json file, or use Import MindNode."
+            case .cancelled: "The document operation was cancelled."
+            }
+        }
+    }
+    private struct LoadedDocument {
+        let document: OwnMapDocument
+        let archive: MindNodeArchive?
+        let nativeURL: URL?
+        let digest: Data?
+        let identity: NativeMapFile.FileIdentity?
+    }
+    private func currentDocument() -> OwnMapDocument {
+        OwnMapDocument(roots: canvas.model.roots, relationships: canvas.model.relationships,
+                       theme: canvas.model.theme, canvasColor: canvas.model.canvasColor)
+    }
+    private func readMap(at url: URL) throws -> LoadedDocument {
+        if url.pathExtension == "mflw" {
+            let result = try NativeMapFile.readWithFileIdentity(url)
+            let archive = try result.payload.mindNodeArchive.map {
+                try PropertyListDecoder().decode(MindNodeArchive.self, from: $0)
+            }
+            return LoadedDocument(document: result.payload.document, archive: archive,
+                                  nativeURL: url, digest: result.digest, identity: result.identity)
+        }
+        guard url.lastPathComponent.hasSuffix(".mindmap.json") else { throw DocumentOperationError.unsupported }
+        return LoadedDocument(document: try readOwnDocument(url), archive: nil,
+                              nativeURL: nil, digest: nil, identity: nil)
+    }
+    private func installDocument(_ loaded: LoadedDocument) {
+        let document = loaded.document
+        canvas.replacingModel = true
+        defer { canvas.replacingModel = false }
+        canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID(),
+                                theme: document.theme, canvasColor: document.canvasColor)
+        canvas.model.relationships = document.relationships
+        canvas.branchStyles = loaded.archive?.imported.styles ?? [:]
+        canvas.nativePresentation = loaded.archive?.imported.presentation ?? [:]
+        canvas.embeddedTheme = loaded.archive?.imported.theme
+        mindNodeArchive = loaded.archive
+        fileURL = loaded.nativeURL
+        savedNativeSHA256 = loaded.digest
+        savedNativeIdentity = loaded.identity
+        savedRoots = document.roots
+        savedRelationships = document.relationships
+        savedTheme = document.theme
+        savedCanvasColor = document.canvasColor
+        dirty = false
+        outline.reloadMap()
+        inspector.refresh()
+        updateTitle()
+        canvas.fitMapInView()
+        refreshFindResults(navigate: false)
+        window.makeFirstResponder(canvas)
+    }
+    /// A preflight validates before asking to discard; re-read after a potential Save.
+    func loadMap(at url: URL) throws {
+        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        _ = try readMap(at: url)
+        guard confirmDiscardOrSave() else { throw DocumentOperationError.cancelled }
+        try installDocument(readMap(at: url))
+    }
+    /// Import into an editable native document; source bytes are never an automatic Save target.
+    func loadMindNode(at url: URL) throws {
+        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        _ = try MindNodeArchive(importing: url)
+        guard confirmDiscardOrSave() else { throw DocumentOperationError.cancelled }
+        let archive = try MindNodeArchive(importing: url)
+        installDocument(LoadedDocument(document: OwnMapDocument(roots: archive.imported.roots),
+                                       archive: archive, nativeURL: nil, digest: nil, identity: nil))
+    }
     @objc private func openFile(_ sender: Any?) {
         guard commitPendingEditors() else { return }
         let panel = NSOpenPanel()
@@ -2435,42 +2557,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard let directory = ownedPanelFixtureDirectory() else { return }
         panel.directoryURL = directory
         #endif
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [UTType(exportedAs: "local.openmindflow.document", conformingTo: .data), .json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #if HEADLESS_TEST
-        guard url.resolvingSymlinksInPath() == directory.appendingPathComponent("Untitled.mindmap.json") else { return }
+        guard ["Untitled.mflw", "Untitled.mindmap.json"].contains(url.lastPathComponent),
+              url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
-        guard url.lastPathComponent.hasSuffix(".mindmap.json") else {
-            alert("Unsupported format", detail: "Select an existing .mindmap.json file; use Open MindNode for a read-only import.")
-            return
-        }
-        do {
-            _ = try readOwnDocument(url) // Reject invalid files without prompting to discard edits.
-            guard confirmDiscardOrSave() else { return }
-            // Saving may have changed this same path; never install the pre-save tree.
-            let document = try readOwnDocument(url)
-            canvas.replacingModel = true
-            canvas.model = MapModel(roots: document.roots, selected: document.roots.first?.id ?? UUID(),
-                                    theme: document.theme, canvasColor: document.canvasColor)
-            canvas.model.relationships = document.relationships
-            canvas.branchStyles = [:]
-            canvas.nativePresentation = [:]
-            canvas.embeddedTheme = nil
-            importedMindNode = nil
-            outline.reloadMap()
-            inspector.refresh()
-            fileURL = url
-            savedRoots = document.roots
-            savedRelationships = document.relationships
-            savedTheme = document.theme
-            savedCanvasColor = document.canvasColor
-            dirty = false
-            updateTitle()
-            canvas.replacingModel = false
-            canvas.fitMapInView()
-            refreshFindResults(navigate: false)
-            window.makeFirstResponder(canvas)
-        } catch { alert("Could not open map", detail: error.localizedDescription) }
+        do { try loadMap(at: url) }
+        catch DocumentOperationError.cancelled { return }
+        catch { alert("Could not open map", detail: error.localizedDescription) }
     }
     @objc private func openMindNode(_ sender: Any?) {
         guard commitPendingEditors() else { return }
@@ -2483,40 +2578,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.delegate = self
-        panel.message = t("Select a MindNode v9 binary-plist file or directory package. Import is read-only; Save creates a new .mindmap.json file.")
+        panel.message = t("Select a MindNode v9 binary-plist file or directory package. Import is editable; Save creates an independent .mflw document.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #if HEADLESS_TEST
         guard ["fixture.mindnode", "single.mindnode"].contains(url.lastPathComponent),
               url.resolvingSymlinksInPath().deletingLastPathComponent() == directory else { return }
         #endif
-        do {
-            let imported = try MindNodeImporter.loadDetailed(url)
-            guard confirmDiscardOrSave() else { return }
-            canvas.replacingModel = true
-            canvas.model = MapModel(roots: imported.roots, selected: imported.roots.first?.id ?? UUID())
-            canvas.branchStyles = imported.styles
-            canvas.embeddedTheme = imported.theme
-            canvas.nativePresentation = imported.presentation
-            importedMindNode = imported
-            outline.reloadMap()
-            inspector.refresh()
-            fileURL = nil // Never save into the source package.
-            savedRoots = imported.roots
-            savedRelationships = []
-            savedTheme = nil
-            savedCanvasColor = nil
-            dirty = false
-            updateTitle()
-            canvas.replacingModel = false
-            canvas.fitMapInView()
-            refreshFindResults(navigate: false)
-            window.makeFirstResponder(canvas)
-            if imported.hasUnimportedConnections || imported.hasUnimportedAttachments ||
-               imported.hasUnimportedRichTitles || imported.theme != nil || imported.hasUnimportedTheme {
-                alert("MindNode content not imported", detail:
-                    "This source has connections, attachments, rich titles or a theme that cannot be fully saved in .mindmap.json. The source remains unchanged.")
-            }
-        } catch { alert("Could not open MindNode", detail: error.localizedDescription) }
+        do { try loadMindNode(at: url) }
+        catch DocumentOperationError.cancelled { return }
+        catch ImportError.unsupported {
+            alert("Could not open MindNode", detail: "Only MindNode v9 binary-plist files or directory packages can be imported into an editable .mflw document. The source remains untouched.")
+        }
+        catch { alert("Could not open MindNode", detail: error.localizedDescription) }
     }
     func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
         let kind = (try? FileManager.default.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType
@@ -2566,6 +2639,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try canvas.insertVideoFile(url) }
         catch { alert("Could not import video", detail: error.localizedDescription) }
     }
+    /// Only a supported patch of an imported source may retain all opaque MindNode bytes.
+    func exportCurrentMindNode(to url: URL) throws {
+        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        let document = currentDocument()
+        if let mindNodeArchive {
+            try mindNodeArchive.export(document: document, to: url)
+        } else {
+            try MindNodeWriter.write(document.roots, to: url, imported: nil,
+                                     relationships: document.relationships,
+                                     theme: document.theme, canvasColor: document.canvasColor)
+        }
+    }
+    @objc private func saveAsMindNodeCopy(_ sender: Any?) { exportMindNodeCopy(sender) }
     @objc private func exportMindNodeCopy(_ sender: Any?) {
         guard commitPendingEditors() else { return }
         let panel = NSSavePanel()
@@ -2579,12 +2665,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         #if HEADLESS_TEST
         guard url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return }
         #endif
-        do {
-            try MindNodeWriter.write(canvas.model.roots, to: url,
-                                     imported: importedMindNode,
-                                     relationships: canvas.model.relationships,
-                                     theme: canvas.model.theme, canvasColor: canvas.model.canvasColor)
-        } catch { alert("Could not export MindNode copy", detail: error.localizedDescription) }
+        do { try exportCurrentMindNode(to: url) }
+        catch DocumentOperationError.cancelled { return }
+        catch MindNodeArchive.ArchiveError.unsafe {
+            alert("Could not export MindNode copy", detail:
+                  "MindNode export supports plain titles, folding and same-parent order of existing nodes only. Other edits remain safe in .mflw; no MindNode copy was written.")
+        }
+        catch { alert("Could not export MindNode copy", detail: error.localizedDescription) }
     }
     @objc private func exportPDF(_ sender: Any?) { export(.pdf, extension: "pdf", type: .pdf) }
     @objc private func exportPNG(_ sender: Any?) { export(.png, extension: "png", type: .png) }
@@ -2608,49 +2695,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try exportMap(canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
     }
+    /// Case-only aliases and hardlinks still refer to the current document on normal macOS volumes.
+    private func refersToCurrentNativeFile(_ destination: URL) -> Bool {
+        guard let fileURL else { return false }
+        if fileURL == destination { return true }
+        var opened = stat(), chosen = stat()
+        guard lstat(destination.path, &chosen) == 0,
+              chosen.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { return false }
+        // If Finder moved or replaced the opened file, an occupied Save As name
+        // may be that document even if another copy at the old path has equal bytes.
+        // Fail closed for occupied targets; a brand-new unoccupied name stays usable.
+        guard let lastRead = savedNativeSHA256, let openedIdentity = savedNativeIdentity,
+              lstat(fileURL.path, &opened) == 0,
+              opened.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              openedIdentity == NativeMapFile.FileIdentity(device: UInt64(opened.st_dev),
+                                                           inode: UInt64(opened.st_ino)) else { return true }
+        do { try NativeMapFile.verifyExpectedCurrent(fileURL, expectedCurrentSHA256: lastRead) }
+        catch { return true }
+        return opened.st_dev == chosen.st_dev && opened.st_ino == chosen.st_ino
+    }
+    /// A native Save commits file URL and clean state only after verified publication.
+    func saveCurrentMap(to url: URL) throws {
+        guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
+        guard url.pathExtension == "mflw" else { throw DocumentOperationError.unsupported }
+        let document = currentDocument()
+        let archiveData: Data?
+        if let mindNodeArchive {
+            let encoder = PropertyListEncoder()
+            encoder.outputFormat = .binary
+            archiveData = try encoder.encode(mindNodeArchive)
+        } else { archiveData = nil }
+        let payload = NativeMapFile.Payload(document: document, mindNodeArchive: archiveData)
+        if fileURL != nil && savedNativeSHA256 == nil { throw NativeMapFile.FileError.conflict }
+        #if HEADLESS_TEST
+        if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
+        #endif
+        try NativeMapFile.write(payload, to: url,
+                                expectedCurrentSHA256: refersToCurrentNativeFile(url) ? savedNativeSHA256 : nil)
+        let result = try NativeMapFile.readWithFileIdentity(url)
+        guard result.payload.document.roots == document.roots,
+              result.payload.document.relationships == document.relationships,
+              result.payload.document.theme == document.theme,
+              result.payload.document.canvasColor == document.canvasColor,
+              result.payload.mindNodeArchive == archiveData else { throw NativeMapFile.FileError.conflict }
+        fileURL = url
+        savedNativeSHA256 = result.digest
+        savedNativeIdentity = result.identity
+        savedRoots = document.roots
+        savedRelationships = document.relationships
+        savedTheme = document.theme
+        savedCanvasColor = document.canvasColor
+        dirty = false
+        updateTitle()
+    }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
-    private func save() -> Bool {
+    @objc private func saveAsNative(_ sender: Any?) { _ = save(chooseDestination: true) }
+    private func save(chooseDestination: Bool = false) -> Bool {
         guard commitPendingEditors() else { return false }
-        var destination = fileURL
+        var destination = chooseDestination ? nil : fileURL
         if destination == nil {
             let panel = NSSavePanel()
             #if HEADLESS_TEST
             guard let directory = ownedPanelFixtureDirectory() else { return false }
             panel.directoryURL = directory
             #endif
-            panel.allowedContentTypes = [.json]
-            panel.nameFieldStringValue = "Untitled.mindmap.json"
+            panel.allowedContentTypes = [UTType(exportedAs: "local.openmindflow.document", conformingTo: .data)]
+            panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "Untitled.mflw"
             guard panel.runModal() == .OK else { return false }
             destination = panel.url
         }
-        guard let url = destination, url.lastPathComponent.hasSuffix(".mindmap.json") else {
-            alert("Unsupported format", detail: "Save only as .mindmap.json; original .mindnode documents cannot be overwritten.")
+        guard let url = destination, url.pathExtension == "mflw" else {
+            alert("Unsupported format", detail: "Save as an independent .mflw document; never overwrite a MindNode source.")
             return false
         }
         #if HEADLESS_TEST
         guard let directory = ownedPanelFixtureDirectory(),
-              url.standardizedFileURL == directory.appendingPathComponent("Untitled.mindmap.json").standardizedFileURL else { return false }
+              url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
         #endif
-        do {
-            #if HEADLESS_TEST
-            if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
-            #endif
-            try writeOwnDocument(OwnMapDocument(roots: canvas.model.roots,
-                                                relationships: canvas.model.relationships,
-                                                theme: canvas.model.theme,
-                                                canvasColor: canvas.model.canvasColor), to: url)
-            fileURL = url
-            savedRoots = canvas.model.roots
-            savedRelationships = canvas.model.relationships
-            savedTheme = canvas.model.theme
-            savedCanvasColor = canvas.model.canvasColor
-            dirty = false
-            updateTitle()
-            return true
-        } catch {
-            alert("Could not save map", detail: error.localizedDescription)
-            return false
-        }
+        do { try saveCurrentMap(to: url); return true }
+        catch DocumentOperationError.cancelled { return false }
+        catch { alert("Could not save map", detail: error.localizedDescription); return false }
     }
     @objc private func undoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.undo() } }
     @objc private func redoEdit(_ sender: Any?) { if commitPendingEditors() { canvas.redo() } }
@@ -2922,7 +3046,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         credits.frame = CGRect(x: 28, y: 226, width: 484, height: 24)
         credits.isHidden = true
         panel.contentView?.addSubview(credits)
-        let statement = NSTextField(wrappingLabelWithString: t("OpenMindFlow is independently developed. MindNode files are imported read-only; edits are saved as .mindmap.json. It is not affiliated with IdeasOnCanvas. Open-source license terms are not yet specified."))
+        let statement = NSTextField(wrappingLabelWithString: t("OpenMindFlow is independently developed. Editable maps save as .mflw; MindNode v9 packages import, and supported edits export as copies without touching originals. It is not affiliated with or endorsed by IdeasOnCanvas. Open-source license unspecified."))
         statement.identifier = NSUserInterfaceItemIdentifier("about-statement")
         statement.frame = CGRect(x: 28, y: 137, width: 484, height: 80)
         statement.isHidden = true
@@ -3072,7 +3196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                 view.setAccessibilityLabel(t("Restore Defaults"))
             case "about-heading": (view as? NSTextField)?.stringValue = t("About OpenMindFlow")
             case "about-statement":
-                (view as? NSTextField)?.stringValue = t("OpenMindFlow is independently developed. MindNode files are imported read-only; edits are saved as .mindmap.json. It is not affiliated with IdeasOnCanvas. Open-source license terms are not yet specified.")
+                (view as? NSTextField)?.stringValue = t("OpenMindFlow is independently developed. Editable maps save as .mflw; MindNode v9 packages import, and supported edits export as copies without touching originals. It is not affiliated with or endorsed by IdeasOnCanvas. Open-source license unspecified.")
             case "about-auto-updates":
                 (view as? NSButton)?.title = t("Automatically check for updates")
                 view.setAccessibilityLabel(t("Automatically check for updates"))
@@ -3119,17 +3243,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         main.addItem(app)
         let file = NSMenuItem(title: t("File"), action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: t("File"))
-        let readOnlyOpen = fileMenu.addItem(withTitle: t("Open MindNode (Read-only)…"), action: #selector(openMindNode(_:)), keyEquivalent: "o")
-        readOnlyOpen.keyEquivalentModifierMask = [.command, .shift]
-        readOnlyOpen.target = self
-        fileMenu.addItem(withTitle: t("Open Own JSON…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: t("Open Map…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
+        let importMindNode = fileMenu.addItem(withTitle: t("Import MindNode…"), action: #selector(openMindNode(_:)), keyEquivalent: "o")
+        importMindNode.keyEquivalentModifierMask = [.command, .shift]
+        importMindNode.target = self
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: t("Save"), action: #selector(saveFile(_:)), keyEquivalent: "s").target = self
+        let saveAs = fileMenu.addItem(withTitle: t("Save As…"), action: #selector(saveAsNative(_:)), keyEquivalent: "S")
+        saveAs.keyEquivalentModifierMask = [.command, .shift]
+        saveAs.target = self
+        fileMenu.addItem(withTitle: t("Save As MindNode Copy…"), action: #selector(saveAsMindNodeCopy(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: t("Insert Image…"), action: #selector(insertImageFile(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: t("Insert Video…"), action: #selector(insertVideoFile(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
-        fileMenu.addItem(withTitle: t("Experimental MindNode v9 Plain-Tree Copy…"),
-                         action: #selector(exportMindNodeCopy(_:)), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: t("Export MindNode…"), action: #selector(exportMindNodeCopy(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         for (title, selector) in [("Export PDF…", #selector(exportPDF(_:))),
                                   ("Export PNG…", #selector(exportPNG(_:))),

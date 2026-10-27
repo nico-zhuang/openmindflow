@@ -19,7 +19,17 @@ enum VideoCanvasTests {
               info.st_mode & mode_t(0o777) == mode_t(0o700) else {
             fatalError("Synthetic video directory must be owned 0700")
         }
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let fixtureInode = info.st_ino, fixtureDevice = info.st_dev
+        defer {
+            var current = stat()
+            if lstat(folder.path, &current) == 0, current.st_ino == fixtureInode,
+               current.st_dev == fixtureDevice, current.st_uid == getuid(),
+               current.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+               folder.deletingLastPathComponent() == base,
+               folder.resolvingSymlinksInPath().standardizedFileURL == folder {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
 
         let source = folder.appendingPathComponent("synthetic.mov")
         let writer = try AVAssetWriter(outputURL: source, fileType: .mov)
@@ -88,6 +98,14 @@ enum VideoCanvasTests {
         try writeOwnDocument(document, to: url)
         let reopened = try readOwnDocument(url)
         assert(reopened.roots == model.roots && reopened.roots[0].children[0].video == video)
+        let native = folder.appendingPathComponent("embedded-video.mflw")
+        let nativeCanvas = MapCanvas(model: MapModel(roots: model.roots, selected: childID))
+        let nativeApp = AppDelegate()
+        let nativeWindow = nativeApp.installUnshownDocumentFixture(canvas: nativeCanvas)
+        try nativeApp.saveCurrentMap(to: native)
+        let nativeSaved = try NativeMapFile.read(native)
+        assert(nativeSaved.document.roots == model.roots && nativeSaved.document.roots[0].children[0].video == video,
+               "mflw must embed original video bytes, not an external path")
         var mediaInfo = stat()
         guard source.deletingLastPathComponent() == folder,
               source.resolvingSymlinksInPath().standardizedFileURL == source.standardizedFileURL,
@@ -95,7 +113,12 @@ enum VideoCanvasTests {
               mediaInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
             fatalError("Only the owned synthetic media file can be removed")
         }
-        try FileManager.default.removeItem(at: source) // The persisted document must own its video bytes.
+        try FileManager.default.removeItem(at: source) // Both persisted documents must own video bytes.
+        try nativeApp.loadMap(at: native)
+        assert(nativeCanvas.model.roots[0].children[0].video == video,
+               "mflw must reopen and play from embedded bytes after the imported movie is gone")
+        assert(!nativeWindow.isVisible)
+        nativeWindow.orderOut(nil)
         let reopenedModel = MapModel(roots: reopened.roots, selected: childID)
         var untitledVideo = reopened.roots
         untitledVideo[0].children[0].title = ""
@@ -149,6 +172,6 @@ enum VideoCanvasTests {
         let oversized = MapModel(roots: [oversizedRoot], selected: oversizedRoot.id)
         assert(!oversized.addVideoChild(video) && oversized.roots == [oversizedRoot],
                "A video cannot create an unsavable >32 MiB document or partial undo")
-        print("video node add, resize, caption, file/clipboard import, JSON reopen, native player and budget passed (offscreen)")
+        print("video nodes, embedded mflw/legacy reopen after source removal, native player and budget passed (offscreen)")
     }
 }

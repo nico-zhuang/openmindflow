@@ -62,6 +62,13 @@ enum OpenMindFlowFileTests {
         let (snapshot, snapshotDigest) = try NativeMapFile.readWithSHA256(file)
         assert(snapshot.document.roots == document.roots && snapshot.mindNodeArchive == provenance)
         assert(snapshotDigest == Data(SHA256.hash(data: bytes)), "Read digest covers the entire original file")
+        let identified = try NativeMapFile.readWithFileIdentity(file)
+        var openedInfo = stat()
+        assert(lstat(file.path, &openedInfo) == 0)
+        assert(identified.digest == snapshotDigest && identified.payload.document.roots == document.roots)
+        assert(identified.identity.device == UInt64(openedInfo.st_dev) &&
+               identified.identity.inode == UInt64(openedInfo.st_ino),
+               "Identity and payload must originate from one opened regular file")
 
         func badFile(_ name: String, _ contents: Data) throws {
             let url = scratch.appendingPathComponent("\(name).mflw")
