@@ -31,14 +31,29 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>local.openmindflow.native-editor</string>
+  <key>CFBundleIdentifier</key><string>local.openmindflow.nativeformat.20261027</string>
   <key>CFBundleName</key><string>OpenMindFlow</string>
   <key>CFBundleDisplayName</key><string>OpenMindFlow</string>
   <key>CFBundleExecutable</key><string>OpenMindFlow</string>
   <key>CFBundleIconFile</key><string>OpenMindFlow.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>4</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>local.openmindflow.document</string>
+    <key>UTTypeDescription</key><string>OpenMindFlow Document</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><string>mflw</string>
+      <key>public.mime-type</key><string>application/vnd.openmindflow.mflw</string>
+    </dict>
+  </dict></array>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>OpenMindFlow Document</string>
+    <key>LSItemContentTypes</key><array><string>local.openmindflow.document</string></array>
+    <key>CFBundleTypeRole</key><string>Editor</string>
+    <key>LSHandlerRank</key><string>Owner</string>
+  </dict></array>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -27,17 +27,27 @@ fi
 plist="$app/Contents/Info.plist"
 icon="$app/Contents/Resources/OpenMindFlow.icns"
 if [[ ! -f "$plist" || ! -f "$icon" || ! -f "$app/Contents/MacOS/OpenMindFlow" ||
-      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" != local.openmindflow.native-editor ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" != local.openmindflow.nativeformat.20261027 ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist" 2>/dev/null)" != OpenMindFlow ||
        "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$plist" 2>/dev/null)" != OpenMindFlow ||
        "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$plist" 2>/dev/null)" != APPL ||
        "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist" 2>/dev/null)" != 26.0 ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null)" != OpenMindFlow ||
       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist" 2>/dev/null)" != OpenMindFlow.icns ||
-      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" != 0.3.0 ||
-      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null)" != 4 ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" != 0.4.0 ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null)" != 5 ||
       "$(shasum -a 256 "$icon" | awk '{print $1}')" != 3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3 ]]; then
   echo 'Refusing unexpected app metadata or icon' >&2
+  exit 2
+fi
+# Refuse bundles which omit or alter their exported native document association.
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$plist" 2>/dev/null)" != local.openmindflow.document ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeConformsTo:0' "$plist" 2>/dev/null)" != public.data ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension' "$plist" 2>/dev/null)" != mflw ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$plist" 2>/dev/null)" != application/vnd.openmindflow.mflw ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:LSItemContentTypes:0' "$plist" 2>/dev/null)" != local.openmindflow.document ||
+      "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeRole' "$plist" 2>/dev/null)" != Editor ]]; then
+  echo 'Refusing missing or altered native document registration' >&2
   exit 2
 fi
 codesign --verify --deep --strict --verbose=2 "$app"
