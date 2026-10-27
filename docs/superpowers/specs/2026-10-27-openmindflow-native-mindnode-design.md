@@ -16,7 +16,7 @@
 
 - `Sources/OpenMindFlowFile.swift`：`readNativeMap(_:)`/`writeNativeMap(_:to:)`，二进制封装、校验及原子文件写入；只依赖现有 `OwnMapDocument` 验证，不修改 legacy JSON 编码。返回文稿与可选 `Data` 来源快照；不解析 MindNode。
 - `Sources/MindNodeArchive.swift`：从 v9 来源捕获目录普通文件/目录路径或单文件字节（最多 64 MiB/1000 项），同时留存导入时的树和视觉元数据；独立解码/验证，拒绝路径逃逸、链接及损坏；向同一/不同父目录中的**新** `.mindnode` 原子发布。导出首先在私有暂存包里用 `MindNodeTitlePatch` 修补原始 binary plist，保留所有未知字典项、主题文件、附件、连接和不改动资源字节。`MindNodeWriter` 只作为**无导入来源且全部字段属于已验证简单树子集**的生成路径。
-- `Sources/App.swift`：文件菜单提供 Open Map、Import MindNode、Save、Export MindNode；若提供 Save As MindNode Copy，同样明确为新副本而不把导入原件变成自动覆盖目标。`fileURL` 只跟踪 `.mflw`；导入保存时附带来源快照；导出失败不得修改 dirty、选区、原始路径或用户文件。打开文件先验证，再询问已有未保存编辑是否丢弃，提交编辑器后才写盘。随系统语言更新中英提示与 About 文案。
+- `Sources/App.swift`：文件菜单提供 Open Map、Import MindNode、Save、Export MindNode；若提供 Save As MindNode Copy，同样明确为新副本而不把导入原件变成自动覆盖目标。`fileURL` 只跟踪 `.mflw`；实现 Finder 双击 `.mflw` 的 NSApplication 打开文件回调（含应用启动阶段排队及运行中已有脏文稿确认）。导入保存时附带来源快照；导出失败不得修改 dirty、选区、原始路径或用户文件。打开文件先验证，再询问已有未保存编辑是否丢弃，提交编辑器后才写盘。随系统语言更新中英提示与 About 文案。
 - `scripts/build-openmindflow-local.sh` 在 bundle Info.plist 中声明 `.mflw` UTType/文稿角色；旧签名候选及原 `.mindnode`、历史包均不覆盖。
 
 ## MindNode 编辑兼容边界
