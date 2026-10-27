@@ -892,6 +892,8 @@ enum CanvasCommandTests {
         let centerModel = MapModel(roots: [MapNode(id: UUID(), title: "Root", children: [centerParent, centerSource], folded: false)],
                                    selected: centerSource.id)
         let centerCanvas = MapCanvas(model: centerModel)
+        var cueTime: TimeInterval = 200
+        centerCanvas.cueClock = { cueTime }
         centerCanvas.frame = dragCanvas.frame
         let centerRows = mapLayout(centerModel.roots)
         let parentFrame = centerRows.first { $0.node.id == centerParent.id }!.frame
@@ -899,23 +901,28 @@ enum CanvasCommandTests {
         let centerStart = CGPoint(x: centerSourceFrame.midX + 80,
                                   y: centerCanvas.bounds.height - centerSourceFrame.midY - 90)
         let centerTarget = CGPoint(x: parentFrame.midX + 80, y: centerCanvas.bounds.height - parentFrame.midY - 90)
-        func parentLinePixel(_ data: Data) -> NSColor? {
-            let baseline = Int(parentFrame.maxY + 90 - 7)
-            return NSBitmapImageRep(data: data)?.colorAt(x: Int(parentFrame.minX + 80 + 28),
-                y: baseline)
+        func parentHaloPixel(_ data: Data) -> NSColor? {
+            let haloX = Int(parentFrame.minX + 80 - 2)
+            return NSBitmapImageRep(data: data)?.colorAt(x: haloX,
+                y: Int(parentFrame.midY + 90))
         }
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             centerCanvas.appearance = NSAppearance(named: appearance)
             centerCanvas.mouseDown(with: mouse(.leftMouseDown, centerStart))
             let noParentHover = image(centerCanvas)
             centerCanvas.mouseDragged(with: mouse(.leftMouseDragged, centerTarget))
-            guard let before = parentLinePixel(noParentHover), let active = parentLinePixel(image(centerCanvas)),
+            if centerCanvas.dropFeedback() != nil {
+                fputs("Center-parent halo must wait for a stable hover\n", stderr); exit(1)
+            }
+            cueTime += 0.45
+            guard let before = parentHaloPixel(noParentHover),
+                  let active = parentHaloPixel(image(centerCanvas)),
                   before != active, centerModel.roots[0].children == [centerParent, centerSource] else {
-                fputs("Center-parent drop needs an accent branch line in light and dark\n", stderr); exit(1)
+                fputs("Delayed subtle target halo must render in both light and dark\n", stderr); exit(1)
             }
             centerCanvas.mouseUp(with: mouse(.leftMouseUp, centerStart))
-            if parentLinePixel(image(centerCanvas)) != before || centerModel.roots[0].children != [centerParent, centerSource] {
-                fputs("Invalid release must clear parent accent without committing\n", stderr); exit(1)
+            if parentHaloPixel(image(centerCanvas)) != before || centerModel.roots[0].children != [centerParent, centerSource] {
+                fputs("Invalid release must clear the target halo without committing\n", stderr); exit(1)
             }
         }
         let tallBranch = MapNode(id: UUID(), title: "Tall", children: (0..<9).map {

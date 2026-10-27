@@ -72,7 +72,7 @@ enum L10n {
         "Language changes immediately": "语言更改立即生效",
         "Simplified Chinese": "简体中文", "English": "英语", "Fit Map": "适合窗口",
         "New idea": "新想法", "Central idea": "中心主题", "Add Child": "添加子节点",
-        "Attach": "附加", "Insert": "插入",
+        "Attach": "附加",
         "Collapsed": "已折叠", "Expanded": "已展开", "child": "个子节点", "children": "个子节点",
         "Map outline": "导图大纲", "Empty map — press Tab to create the first idea.": "导图为空——按 Tab 创建第一个想法。",
         "Edit Title": "编辑标题", "Font…": "字体…", "New Child": "新建子节点",

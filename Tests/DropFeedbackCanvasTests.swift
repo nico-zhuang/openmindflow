@@ -14,6 +14,8 @@ import AppKit
         let model = MapModel(roots: [root], selected: source.id)
         let canvas = MapCanvas(model: model)
         canvas.localizationDefaults = defaults
+        var cueTime: TimeInterval = 100
+        canvas.cueClock = { cueTime }
         canvas.frame = CGRect(x: 0, y: 0, width: 1200, height: 800)
         func mouse(_ type: NSEvent.EventType, at point: CGPoint) -> NSEvent {
             NSEvent.mouseEvent(with: type,
@@ -40,6 +42,8 @@ import AppKit
         assert(canvas.dropFeedback() == nil, "No snap outline or hint before the drag starts")
         canvas.mouseDown(with: mouse(.leftMouseDown, at: start))
         canvas.mouseDragged(with: mouse(.leftMouseDragged, at: center(targetBefore)))
+        assert(canvas.dropFeedback() == nil, "Stable child hover has a brief quiet dwell")
+        cueTime += 0.45
         guard let attach = canvas.dropFeedback() else {
             fatalError("A valid child hover needs a visible target halo and Attach cue")
         }
@@ -61,7 +65,9 @@ import AppKit
         assert(canvas.dropFeedback()?.label == "Attach", "English cue follows the canvas language setting")
         assert(L10n.setLanguage("zh-Hans", defaults: defaults))
         canvas.mouseDragged(with: mouse(.leftMouseDragged, at: CGPoint(x: 1080, y: 640)))
-        assert(canvas.dropFeedback() == nil, "An invalid blank hover clears outline and tip immediately")
+        assert((canvas.dropFeedback()?.opacity ?? 0) > 0, "Leaving the target starts a short fade-out")
+        cueTime += 0.15
+        assert(canvas.dropFeedback() == nil, "An invalid blank hover clears outline and tip after its fade-out")
         canvas.mouseUp(with: mouse(.leftMouseUp, at: CGPoint(x: 1080, y: 640)))
         assert(model.roots == before && canvas.dropFeedback() == nil,
                "Releasing away from a child target makes no false attachment")
@@ -69,11 +75,10 @@ import AppKit
         let nearTop = CGPoint(x: targetBefore.midX, y: targetBefore.minY + 3)
         canvas.mouseDown(with: mouse(.leftMouseDown, at: start))
         canvas.mouseDragged(with: mouse(.leftMouseDragged, at: nearTop))
-        guard let insert = canvas.dropFeedback() else {
-            fatalError("A valid sibling hover needs its distinct Insert cue")
-        }
-        assert(insert.targetID == target.id && insert.kind == .insert && insert.label == "插入",
-               "Sibling insertion zone must not falsely claim the node will attach as a child")
+        assert(canvas.dropFeedback() == nil)
+        cueTime += 0.45
+        assert(canvas.dropFeedback() == nil,
+               "Sibling insertion still works after a long dwell, but never displays Insert or Attach")
         assert(canvas.frameForAccessibility(target.id)! == targetBefore && model.roots == before)
         canvas.mouseUp(with: mouse(.leftMouseUp, at: nearTop))
         assert(model.roots[0].children.map(\.id) == [source.id, target.id, other.id] &&
@@ -82,6 +87,8 @@ import AppKit
         model.undo()
         canvas.mouseDown(with: mouse(.leftMouseDown, at: start))
         canvas.mouseDragged(with: mouse(.leftMouseDragged, at: center(targetBefore)))
+        assert(canvas.dropFeedback() == nil)
+        cueTime += 0.45
         assert(canvas.dropFeedback() != nil)
         canvas.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
             timestamp: 0, windowNumber: 0, context: nil, characters: "\u{1b}",
@@ -94,6 +101,8 @@ import AppKit
         let windowRoot = MapNode(id: UUID(), title: "Window main", children: [windowTarget, windowSource], folded: false)
         let windowModel = MapModel(roots: [windowRoot], selected: windowSource.id)
         let inWindow = MapCanvas(model: windowModel)
+        var windowCueTime: TimeInterval = 300
+        inWindow.cueClock = { windowCueTime }
         let syntheticWindow = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 1100, height: 700),
             styleMask: [.borderless], backing: .buffered, defer: false)
         syntheticWindow.contentView = inWindow // Never shown, made key or activated.
@@ -106,12 +115,14 @@ import AppKit
         let unmoved = inWindow.frameForAccessibility(windowTarget.id)!
         inWindow.mouseDown(with: windowMouse(.leftMouseDown, positions[windowSource.id]!))
         inWindow.mouseDragged(with: windowMouse(.leftMouseDragged, positions[windowTarget.id]!))
+        assert(inWindow.dropFeedback() == nil)
+        windowCueTime += 0.45
         assert(inWindow.dropFeedback()?.targetID == windowTarget.id &&
                inWindow.frameForAccessibility(windowTarget.id)! == unmoved &&
                !syntheticWindow.isVisible && !syntheticWindow.isKeyWindow,
                "A real but unshown native NSWindow retains its destination cue without moving target or stealing focus")
         inWindow.mouseUp(with: windowMouse(.leftMouseUp, positions[windowTarget.id]!))
         syntheticWindow.orderOut(nil)
-        print("attach/insert badges, stationary target ring, localization, native offscreen window, invalid hover and Escape passed")
+        print("delayed small Attach-only cue, stationary target, localization, native offscreen window, fade-out and Escape passed")
     }
 }

@@ -79,16 +79,17 @@ private enum NodeShortcuts {
 }
 
 struct MapDropFeedback {
-    enum Kind { case attach, insert }
+    enum Kind { case attach }
     let targetID: UUID
     let kind: Kind
     let label: String
+    let opacity: CGFloat
     let outline: CGRect
     let badge: CGRect? // A crowded viewport may allow a halo but no non-obscuring text position.
 }
 
 final class MapCanvas: NSView, NSTextFieldDelegate {
-    var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
+    var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; clearDragCandidate(); resetCue(); dragPresentedFrames.removeAll(); stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
     var replacingModel = false
     private(set) var selectedRelationshipID: UUID? {
         didSet { if oldValue != selectedRelationshipID && !replacingModel { onSelectionChange?() } }
@@ -114,7 +115,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     var embeddedTheme: MindNodeThemeMetadata? { didSet { needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
-            if springTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
+            if springTick || cueTick || (springTimer != nil && !needsDisplay) { return } // Reuse painted spring frames; preserve old offscreen invalidation.
             previewCache = nil
             let visible = visibleNodes()
             let visibleIDs = Set(visible.map { $0.node.id })
@@ -176,6 +177,15 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var springTimer: Timer?
     private var springLastTick: TimeInterval?
     private var springTick = false
+    private var cueTick = false
+    private var cueTimer: Timer?
+    private var cuePhase: (feedback: MapDropFeedback, since: TimeInterval,
+                           initialOpacity: CGFloat, delay: TimeInterval,
+                           leaving: (since: TimeInterval, opacity: CGFloat)?)?
+    var cueClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    private let cueDelay: TimeInterval = 0.18
+    private let cueFadeIn: TimeInterval = 0.16
+    private let cueFadeOut: TimeInterval = 0.12
     // ponytail: drag-only spring; release/Escape snap until Gate B owns settling and interruption.
     private let springResponse: CGFloat = 0.26, springDamping: CGFloat = 0.95
     private let childOverlapThreshold: CGFloat = 0.65
@@ -191,7 +201,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         videoPosters.totalCostLimit = 128 * 1024 * 1024
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
-    deinit { springTimer?.invalidate() }
+    deinit { springTimer?.invalidate(); cueTimer?.invalidate() }
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         if editor != nil { revealSelection(); needsDisplay = true }
@@ -200,6 +210,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     override var acceptsFirstResponder: Bool { true }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil { resetCue() }
         window?.acceptsMouseMovedEvents = true
     }
     override func updateTrackingAreas() {
@@ -859,20 +870,23 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         editor?.frame = selectedNode().map(editorFrame) ?? .zero
     }
 
-    func dropFeedback() -> MapDropFeedback? {
+    private func attachmentGeometry() -> MapDropFeedback? {
         guard dragSource != nil, dragPoint != nil else { return nil }
         let preview = previewGeometry()
-        guard let drop = preview.drop,
+        guard let drop = preview.drop, drop.parent == drop.target.node.id,
               let target = preview.nodes.first(where: { $0.node.id == drop.target.node.id }) else { return nil }
-        let kind: MapDropFeedback.Kind = drop.parent == drop.target.node.id ? .attach : .insert
-        let label = t(kind == .attach ? "Attach" : "Insert")
-        let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-        let width = ceil((label as NSString).size(withAttributes: [.font: font]).width) + 28
-        let outline = screen(target.frame).insetBy(dx: -3, dy: -3)
-        let height: CGFloat = 32
+        return attachmentGeometry(for: target, among: preview.nodes)
+    }
+
+    private func attachmentGeometry(for target: LaidOutNode, among nodes: [LaidOutNode]) -> MapDropFeedback {
+        let label = t("Attach")
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let width = ceil((label as NSString).size(withAttributes: [.font: font]).width) + 20
+        let outline = screen(target.frame).insetBy(dx: -2, dy: -2)
+        let height: CGFloat = 22
         let centerX = outline.midX - width / 2
         let centerY = outline.midY - height / 2
-        let occupied = preview.nodes.filter { $0.node.id != target.node.id && !draggedIDs.contains($0.node.id) }
+        let occupied = nodes.filter { $0.node.id != target.node.id && !draggedIDs.contains($0.node.id) }
             .map { screen($0.frame).insetBy(dx: -4, dy: -4) }
         let safeArea = bounds.insetBy(dx: 8, dy: 8)
         var badge: CGRect?
@@ -889,14 +903,85 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             clearance += height + 16
         }
-        return MapDropFeedback(targetID: target.node.id, kind: kind, label: label,
-                               outline: outline, badge: badge)
+        return MapDropFeedback(targetID: target.node.id, kind: .attach, label: label,
+                               opacity: 1, outline: outline, badge: badge)
+    }
+
+    private func resetCue() {
+        cueTimer?.invalidate()
+        cueTimer = nil
+        cuePhase = nil
+    }
+
+    private func refreshCueTimer(whileAnimating: Bool) {
+        guard whileAnimating, window?.isVisible == true else {
+            cueTimer?.invalidate()
+            cueTimer = nil
+            return
+        }
+        guard cueTimer == nil else { return }
+        let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.window?.isVisible == true else { self.resetCue(); return }
+            self.cueTick = true
+            self.needsDisplay = true
+            self.cueTick = false
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        cueTimer = timer
+    }
+
+    private func smoothCue(_ progress: TimeInterval) -> CGFloat {
+        let t = CGFloat(min(1, max(0, progress)))
+        return t * t * (3 - 2 * t)
+    }
+
+    func dropFeedback(now suppliedTime: TimeInterval? = nil) -> MapDropFeedback? {
+        let now = suppliedTime ?? cueClock()
+        let current = attachmentGeometry()
+        if let current {
+            if let previous = cuePhase, previous.feedback.targetID == current.targetID,
+               let leaving = previous.leaving {
+                let onscreen = leaving.opacity * (1 - smoothCue((now - leaving.since) / cueFadeOut))
+                cuePhase = (current, now, onscreen, 0, nil) // Reverse from the live value.
+            } else if cuePhase?.feedback.targetID != current.targetID {
+                cuePhase = (current, now, 0, cueDelay, nil) // New target waits before appearing.
+            } else { cuePhase?.feedback = current }
+        } else if let phase = cuePhase {
+            let preview = previewGeometry()
+            guard let target = preview.nodes.first(where: { $0.node.id == phase.feedback.targetID }) else {
+                resetCue() // The old node disappeared; never paint a disconnected halo.
+                return nil
+            }
+            cuePhase?.feedback = attachmentGeometry(for: target, among: preview.nodes)
+            if phase.leaving == nil {
+                let visibility = phase.initialOpacity + (1 - phase.initialOpacity) *
+                    smoothCue((now - phase.since - phase.delay) / cueFadeIn)
+                if visibility > 0 { cuePhase?.leaving = (now, visibility) }
+                else { resetCue() } // Leaving before the delay must never flash.
+            }
+        }
+        guard let phase = cuePhase else { return nil }
+        let opacity: CGFloat
+        if let leaving = phase.leaving {
+            opacity = leaving.opacity * (1 - smoothCue((now - leaving.since) / cueFadeOut))
+        } else {
+            opacity = phase.initialOpacity + (1 - phase.initialOpacity) *
+                smoothCue((now - phase.since - phase.delay) / cueFadeIn)
+        }
+        if opacity <= 0, phase.leaving != nil { resetCue(); return nil }
+        refreshCueTimer(whileAnimating: phase.leaving != nil || opacity < 1)
+        guard opacity > 0 else { return nil }
+        let geometry = phase.feedback
+        return MapDropFeedback(targetID: geometry.targetID, kind: .attach, label: geometry.label,
+                               opacity: opacity, outline: geometry.outline, badge: geometry.badge)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         canvasBackground.setFill()
         bounds.fill()
         let (nodes, drop) = previewGeometry()
+        let cue = dropFeedback()
         if nodes.isEmpty {
             let message = t("Empty map — press Tab to create the first idea.")
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 17), .foregroundColor: NSColor.secondaryLabelColor]
@@ -1034,17 +1119,30 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             NSColor.controlAccentColor.setStroke()
             paper.stroke()
         }
-        // The dragged card may temporarily cross the drop target. Paint the
-        // actual target last so its title remains legible under the halo.
+        // A held card must never draw its title through an attachment target,
+        // even during the requested quiet 180ms before the hint appears.
+        let paintTargetID = (drop?.parent == drop?.target.node.id ? drop?.target.node.id : nil)
+            ?? cue?.targetID // Keep the old title above the held card while its hint fades away.
+        let targetHole = paintTargetID.flatMap { id in
+            nodes.first(where: { $0.node.id == id }).map { screen($0.frame) }
+        }
         var paintNodes = nodes
-        if let drop, drop.parent == drop.target.node.id,
-           let index = paintNodes.firstIndex(where: { $0.node.id == drop.target.node.id }) {
+        if let paintTargetID, let index = paintNodes.firstIndex(where: { $0.node.id == paintTargetID }) {
             paintNodes.append(paintNodes.remove(at: index))
         }
         for item in paintNodes {
+            let excludeHeldCard = draggedIDs.contains(item.node.id) && targetHole != nil
+            if excludeHeldCard, let targetHole {
+                NSGraphicsContext.saveGraphicsState()
+                let outside = NSBezierPath(rect: bounds)
+                outside.appendRect(targetHole)
+                outside.windingRule = .evenOdd
+                outside.addClip()
+            }
+            defer { if excludeHeldCard { NSGraphicsContext.restoreGraphicsState() } }
             let box = screen(item.frame)
-            let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
-            let active = item.node.id == model.selected || hovered
+            let hovered = cue?.targetID == item.node.id
+            let active = item.node.id == model.selected
             if item.parent == nil {
                 let radius: CGFloat = item.node.rootShape == "rectangle" ? 0 : 9 * zoom
                 let shape = NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius)
@@ -1056,34 +1154,26 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 if model.selectedIDs.contains(item.node.id) { drawSelectionBox(item) }
             } else {
                 if model.selectedIDs.contains(item.node.id) { drawSelectionBox(item) }
-                if hovered {
-                    // Only during a real child attach: an opaque-enough, quiet
-                    // surface keeps the destination text readable above the
-                    // held card without giving every child a permanent box.
+                if hovered, let opacity = cue?.opacity {
+                    // A restrained temporary surface keeps the target title
+                    // legible over the held card, fading with the outer ring.
                     let surface = NSBezierPath(roundedRect: box.insetBy(dx: 5 * zoom, dy: 4 * zoom),
                                                xRadius: 6 * zoom, yRadius: 6 * zoom)
-                    NSColor.windowBackgroundColor.withAlphaComponent(0.94).setFill()
+                    NSColor.windowBackgroundColor.withAlphaComponent(0.78 * opacity).setFill()
                     surface.fill()
-                    NSColor.controlAccentColor.withAlphaComponent(0.23).setFill()
+                    NSColor.controlAccentColor.withAlphaComponent(0.10 * opacity).setFill()
                     surface.fill()
                 }
                 let path = NSBezierPath()
                 path.move(to: CGPoint(x: box.minX, y: baseline(box)))
                 let lineEnd = item.node.id == model.selected ? max(box.maxX, editor?.frame.maxX ?? box.maxX) : box.maxX
                 path.line(to: CGPoint(x: lineEnd, y: baseline(box)))
-                path.lineWidth = strokeWidth(item) + (hovered ? 1 : 0)
+                path.lineWidth = strokeWidth(item)
                 path.lineCapStyle = .round
                 if dashed(item) { path.setLineDash([max(8 * zoom, path.lineWidth * 2),
                     max(6 * zoom, path.lineWidth * 1.6)], count: 2, phase: 0) }
-                (hovered ? NSColor.controlAccentColor : color[item.node.id] ?? .systemTeal).setStroke()
+                (color[item.node.id] ?? .systemTeal).setStroke()
                 path.stroke()
-                if hovered {
-                    let connectionX = goesLeft(item, among: nodes) ? box.maxX : box.minX
-                    let dot = NSBezierPath(ovalIn: CGRect(x: connectionX - 4 * zoom,
-                        y: baseline(box) - 4 * zoom, width: 8 * zoom, height: 8 * zoom))
-                    NSColor.controlAccentColor.setFill()
-                    dot.fill()
-                }
             }
             if let rect = imageRect(item), let data = item.node.image?.data,
                let image = NSImage(data: data) {
@@ -1155,31 +1245,29 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 handle.stroke()
             }
         }
-        if let cue = dropFeedback() {
-            // Keep the actual node still and make its destination unmistakable.
-            // Draw on top of the dragged card so the ring remains visible even
-            // while two cards temporarily intersect during the gesture.
-            let outer = NSBezierPath(roundedRect: cue.outline.insetBy(dx: -2, dy: -2),
-                                     xRadius: 10, yRadius: 10)
-            NSColor.controlAccentColor.withAlphaComponent(0.25).setStroke()
-            outer.lineWidth = 6
+        if let cue {
+            // Delayed, interruptible opacity only; the destination never moves.
+            let outer = NSBezierPath(roundedRect: cue.outline.insetBy(dx: -1.5, dy: -1.5),
+                                     xRadius: 9, yRadius: 9)
+            NSColor.controlAccentColor.withAlphaComponent(0.10 * cue.opacity).setStroke()
+            outer.lineWidth = 3
             outer.stroke()
             let ring = NSBezierPath(roundedRect: cue.outline,
                                     xRadius: 8, yRadius: 8)
-            NSColor.controlAccentColor.setStroke()
-            ring.lineWidth = 2
+            NSColor.controlAccentColor.withAlphaComponent(0.54 * cue.opacity).setStroke()
+            ring.lineWidth = 1.1
             ring.stroke()
             if let badge = cue.badge {
-                let pill = NSBezierPath(roundedRect: badge, xRadius: 11, yRadius: 11)
-                NSColor.windowBackgroundColor.withAlphaComponent(0.97).setFill()
+                let pill = NSBezierPath(roundedRect: badge, xRadius: 8, yRadius: 8)
+                NSColor.windowBackgroundColor.withAlphaComponent(0.88 * cue.opacity).setFill()
                 pill.fill()
-                NSColor.controlAccentColor.withAlphaComponent(0.78).setStroke()
-                pill.lineWidth = 1
+                NSColor.controlAccentColor.withAlphaComponent(0.30 * cue.opacity).setStroke()
+                pill.lineWidth = 0.7
                 pill.stroke()
-                let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+                let font = NSFont.systemFont(ofSize: 11, weight: .medium)
                 let text = cue.label as NSString
                 let attributes: [NSAttributedString.Key: Any] = [
-                    .font: font, .foregroundColor: NSColor.labelColor
+                    .font: font, .foregroundColor: NSColor.labelColor.withAlphaComponent(0.88 * cue.opacity)
                 ]
                 let textSize = text.size(withAttributes: attributes)
                 text.draw(at: CGPoint(x: badge.midX - textSize.width / 2,
@@ -1840,7 +1928,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             handTool = false; marquee = nil; dragOrigin = nil
             window?.invalidateCursorRects(for: self); needsDisplay = true
         case 53 where dragSource != nil || marquee != nil || relationshipDrag != nil || selectedRelationshipID != nil:
-            clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
+            clearDragCandidate(); resetCue(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; marquee = nil
             relationshipDrag = nil; selectedRelationshipID = nil; needsDisplay = true
         case 51, 117:
             guard commitEditing() else { return }
@@ -1898,6 +1986,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         let wasPresented = !springPositions.isEmpty
         let hitNodes = wasPresented ? previewGeometry().nodes : visibleNodes()
         clearDragCandidate()
+        resetCue()
         dragPresentedFrames.removeAll()
         stopSpring()
         dragSource = nil
@@ -2086,7 +2175,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         return .zero // Never persist a new overlap when no legal free slot remains.
     }
     override func mouseUp(with event: NSEvent) {
-        defer { clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
+        defer { clearDragCandidate(); resetCue(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
         if let drag = relationshipDrag,
            let edge = model.relationships.first(where: { $0.id == drag.id }) {
             let nodes = visibleNodes()

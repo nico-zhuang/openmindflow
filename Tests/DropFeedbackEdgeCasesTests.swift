@@ -72,10 +72,14 @@ import AppKit
             let left = blocker("Left", Double(targetBox.minX) - 10 - badgeWidth / 2 - width / 2,
                                Double(targetBox.midY))
             let view = canvas([main, below, above, right, left], selected: dragged.id)
+            var cueTime: TimeInterval = 500
+            view.cueClock = { cueTime }
             let from = center(view.frameForAccessibility(dragged.id)!)
             let to = center(view.frameForAccessibility(target.id)!)
             view.mouseDown(with: mouse(view, .leftMouseDown, from))
             view.mouseDragged(with: mouse(view, .leftMouseDragged, to))
+            assert(view.dropFeedback() == nil)
+            cueTime += 0.45
             guard let feedback = view.dropFeedback() else {
                 fatalError("A valid central child attach still needs a nearby cue")
             }
