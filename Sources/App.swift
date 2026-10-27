@@ -2830,14 +2830,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try exportMap(canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
     }
+    /// The native writer accepts only the system-owned /var and /tmp aliases for
+    /// /private; its no-follow parent descriptor rejects all other linked parents.
+    /// Call only for a snapshotted destination or an already-open native URL.
+    private func writerCanonicalPath(_ url: URL) -> String {
+        let path = url.path
+        if path.hasPrefix("/var/") || path.hasPrefix("/tmp/") { return "/private" + path }
+        return path
+    }
+
     /// Check all registered documents against the same verified destination snapshot
     /// that the writer must observe through its own parent descriptor before staging.
     private func guardedSave(_ session: DocumentSession, to url: URL) throws {
         let expected: NativeMapFile.ExpectedDestination
         do { expected = try NativeMapFile.destinationSnapshot(url) }
         catch { throw NativeMapFile.FileError.conflict }
+        let destinationPath = writerCanonicalPath(url)
         for other in windowSessions.flatMap(\.documents) where other !== session {
-            if other.fileURL == url || (other.fileURL != nil && other.nativeIdentity == nil) {
+            if other.fileURL.map(writerCanonicalPath) == destinationPath ||
+                (other.fileURL != nil && other.nativeIdentity == nil) {
                 throw NativeMapFile.FileError.conflict
             }
             if case .existing(let identity, _) = expected, other.nativeIdentity == identity {

@@ -30,7 +30,10 @@ import Darwin
         }
         func identity(_ url: URL) -> NativeMapFile.FileIdentity {
             var info = stat()
-            precondition(url.path == url.standardizedFileURL.path && url.deletingLastPathComponent() == directory &&
+            precondition(url.path == url.standardizedFileURL.path ||
+                         url.deletingLastPathComponent().path == "/private" + directory.path)
+            precondition((url.deletingLastPathComponent() == directory ||
+                          url.deletingLastPathComponent().path == "/private" + directory.path) &&
                          lstat(url.path, &info) == 0 && info.st_uid == getuid() &&
                          info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG))
             return .init(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
@@ -62,6 +65,74 @@ import Darwin
             assert(aliasBytes == original && identity(alias) == originalID)
             assert(a.fileURL == aURL && a.dirty && a.canvas.model.roots == roots)
             assert(b.fileURL == bURL && b.canvas.model.roots == [bNode] && !b.dirty)
+        }
+        // Open B under the writer-allowed /var or /tmp spelling, then target
+        // /private/var or /private/tmp after B's original inode is moved away.
+        precondition(directory.path.hasPrefix("/var/") || directory.path.hasPrefix("/tmp/"))
+        let canonicalDirectory = URL(fileURLWithPath: "/private" + directory.path, isDirectory: true)
+        precondition(canonicalDirectory.path != directory.path)
+        var aliasParent = stat()
+        var canonicalParent = stat()
+        precondition(lstat(directory.path, &aliasParent) == 0 &&
+                     lstat(canonicalDirectory.path, &canonicalParent) == 0 &&
+                     aliasParent.st_dev == canonicalParent.st_dev && aliasParent.st_ino == canonicalParent.st_ino &&
+                     aliasParent.st_uid == getuid() && canonicalParent.st_uid == getuid() &&
+                     aliasParent.st_mode & 0o777 == 0o700 && canonicalParent.st_mode & 0o777 == 0o700)
+        func verifyAbsent(_ url: URL) {
+            var entry = stat()
+            precondition(url.path == url.standardizedFileURL.path &&
+                         (url.deletingLastPathComponent() == directory ||
+                          url.deletingLastPathComponent() == canonicalDirectory) &&
+                         lstat(url.path, &entry) != 0 && errno == ENOENT)
+        }
+        for replace in [true, false] {
+            let name = replace ? "alias-replaced" : "alias-absent"
+            let canonicalB = canonicalDirectory.appendingPathComponent("\(name).mflw")
+            let aliasedB = directory.appendingPathComponent("\(name).mflw")
+            let parkedB = directory.appendingPathComponent("\(name)-parked.mflw")
+            let incomingB = directory.appendingPathComponent("\(name)-incoming.mflw")
+            try NativeMapFile.write(.init(document: OwnMapDocument(roots: [bNode]), mindNodeArchive: nil), to: aliasedB)
+            let originalBBytes = try Data(contentsOf: canonicalB)
+            let originalBID = identity(canonicalB)
+            let aliasApp = AppDelegate(defaults: UserDefaults(suiteName: "local.openmindflow.alias-save-as.\(UUID())")!)
+            let aWindow = aliasApp.makeUnshownWindowSession()
+            let bWindow = aliasApp.makeUnshownWindowSession()
+            let aliasA = try aliasApp.openMapInWindow(aURL, preferred: aWindow)
+            let aliasB = try aliasApp.openMapInWindow(aliasedB, preferred: bWindow)
+            aliasApp.selectUnshownSessionForTesting(aliasA)
+            aliasA.canvas.addMainNode()
+            let dirtyRoots = aliasA.canvas.model.roots
+            precondition(aliasB.fileURL == aliasedB && aliasApp.windowSessions.flatMap(\.documents).contains { $0 === aliasB })
+            // All source and target pathnames are absolute, owned by this 0700 fixture,
+            // and the source's dev/inode is checked immediately before each move.
+            precondition(identity(canonicalB) == originalBID)
+            verifyAbsent(parkedB)
+            try fm.moveItem(at: canonicalB, to: parkedB)
+            precondition(identity(parkedB) == originalBID)
+            var incomingBytes: Data? = nil
+            var incomingID: NativeMapFile.FileIdentity? = nil
+            if replace {
+                try NativeMapFile.write(.init(document: OwnMapDocument(roots: [aNode]), mindNodeArchive: nil), to: incomingB)
+                incomingBytes = try Data(contentsOf: incomingB)
+                incomingID = identity(incomingB)
+                precondition(incomingID != originalBID)
+                verifyAbsent(canonicalB)
+                precondition(identity(incomingB) == incomingID)
+                try fm.moveItem(at: incomingB, to: canonicalB)
+            }
+            do { try aliasApp.saveCurrentMap(to: canonicalB); fatalError("Aliased B's owned pathname must conflict") }
+            catch NativeMapFile.FileError.conflict { }
+            catch { fatalError("Unexpected save error: \(error)") }
+            let parkedBytes = try Data(contentsOf: parkedB)
+            assert(identity(parkedB) == originalBID && parkedBytes == originalBBytes)
+            if replace {
+                let currentBytes = try Data(contentsOf: canonicalB)
+                assert(identity(canonicalB) == incomingID && currentBytes == incomingBytes)
+            } else { verifyAbsent(canonicalB) }
+            assert(aliasB.fileURL == aliasedB && aliasApp.windowSessions.flatMap(\.documents).contains { $0 === aliasB })
+            assert(aliasB.canvas.model.roots == [bNode] && !aliasB.dirty)
+            assert(aliasA.fileURL == aURL && aliasA.dirty && aliasA.canvas.model.roots == dirtyRoots)
+            assert(!aWindow.window.isVisible && !bWindow.window.isVisible)
         }
         let swap = directory.appendingPathComponent("swap.mflw")
         let parked = directory.appendingPathComponent("parked.mflw")
