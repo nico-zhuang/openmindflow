@@ -2337,6 +2337,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private weak var findSession: DocumentSession?
     #if HEADLESS_TEST
     private var fixtureAnchor: DocumentSession?
+    var beforeGuardedSaveWriteForTesting: (() throws -> Void)?
+    func selectUnshownSessionForTesting(_ session: DocumentSession) {
+        precondition(isLiveSession(session))
+        fixtureAnchor = session
+    }
     #endif
     private var pendingOpenURLs: [URL] = []
     private var settingsWindow: NSWindow?
@@ -2825,8 +2830,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         do { try exportMap(canvas, as: format, to: url) }
         catch { alert("Could not export map", detail: error.localizedDescription) }
     }
+    /// Check all registered documents against the same verified destination snapshot
+    /// that the writer must observe through its own parent descriptor before staging.
+    private func guardedSave(_ session: DocumentSession, to url: URL) throws {
+        let expected: NativeMapFile.ExpectedDestination
+        do { expected = try NativeMapFile.destinationSnapshot(url) }
+        catch { throw NativeMapFile.FileError.conflict }
+        for other in windowSessions.flatMap(\.documents) where other !== session {
+            if other.fileURL == url || (other.fileURL != nil && other.nativeIdentity == nil) {
+                throw NativeMapFile.FileError.conflict
+            }
+            if case .existing(let identity, _) = expected, other.nativeIdentity == identity {
+                throw NativeMapFile.FileError.conflict
+            }
+        }
+        #if HEADLESS_TEST
+        try beforeGuardedSaveWriteForTesting?()
+        #endif
+        try session.saveCurrentMap(to: url, expectedDestination: expected)
+    }
     func saveCurrentMap(to url: URL) throws {
-        try requireCurrentSession().saveCurrentMap(to: url)
+        try guardedSave(requireCurrentSession(), to: url)
     }
     @objc private func saveFile(_ sender: Any?) { _ = save() }
     @objc private func saveAsNative(_ sender: Any?) { _ = save(chooseDestination: true) }
@@ -2852,7 +2876,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard let directory = ownedPanelFixtureDirectory(),
               url.deletingLastPathComponent().resolvingSymlinksInPath() == directory else { return false }
         #endif
-        do { try session.saveCurrentMap(to: url); return true }
+        do { try guardedSave(session, to: url); return true }
         catch DocumentOperationError.cancelled { return false }
         catch { alert("Could not save map", detail: error.localizedDescription); return false }
     }

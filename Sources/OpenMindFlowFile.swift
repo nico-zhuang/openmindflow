@@ -14,6 +14,11 @@ enum NativeMapFile {
         let inode: UInt64
     }
 
+    enum ExpectedDestination: Equatable {
+        case absent
+        case existing(identity: FileIdentity, digest: Data)
+    }
+
     enum FileError: LocalizedError {
         case invalidPath, invalidFile, tooLarge, invalidHeader, unsupportedVersion, corrupt
         case conflict, durabilityUncertain
@@ -181,9 +186,19 @@ enum NativeMapFile {
               current.digest == expectedCurrentSHA256 else { throw FileError.conflict }
     }
 
-    /// A nil digest preserves the original save API: overwrite an existing regular document.
-    /// Supplying a digest rejects stale and missing destinations.
-    static func write(_ payload: Payload, to url: URL, expectedCurrentSHA256: Data? = nil) throws {
+    /// Capture the destination through the same descriptor-relative identity and bounded hash
+    /// that the writer observes before staging. Missing is distinct from an uncertain entry.
+    static func destinationSnapshot(_ url: URL) throws -> ExpectedDestination {
+        let (parent, name) = try parentDescriptor(for: url)
+        defer { close(parent) }
+        guard let current = try currentFile(parent: parent, name: name) else { return .absent }
+        return .existing(identity: FileIdentity(device: UInt64(current.device), inode: UInt64(current.inode)),
+                         digest: current.digest)
+    }
+
+    /// A nil digest and nil expectedDestination preserve the original save API.
+    static func write(_ payload: Payload, to url: URL, expectedCurrentSHA256: Data? = nil,
+                      expectedDestination: ExpectedDestination? = nil) throws {
         let (parent, name) = try parentDescriptor(for: url)
         defer { close(parent) }
         try checkOwnDocument(payload.document)
@@ -193,6 +208,12 @@ enum NativeMapFile {
         guard body.count <= maxBytes - headerSize else { throw FileError.tooLarge }
         guard body.starts(with: Data("bplist00".utf8)) else { throw FileError.corrupt }
         let lastSeen = try currentFile(parent: parent, name: name)
+        if let expectedDestination {
+            let observed: ExpectedDestination = lastSeen.map {
+                .existing(identity: FileIdentity(device: UInt64($0.device), inode: UInt64($0.inode)), digest: $0.digest)
+            } ?? .absent
+            guard observed == expectedDestination else { throw FileError.conflict }
+        }
         if let expectedCurrentSHA256, lastSeen?.digest != expectedCurrentSHA256 {
             throw FileError.conflict
         }

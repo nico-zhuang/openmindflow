@@ -179,7 +179,8 @@ final class DocumentSession {
         catch { return true }
         return opened.st_dev == chosen.st_dev && opened.st_ino == chosen.st_ino
     }
-    func saveCurrentMap(to url: URL) throws {
+    func saveCurrentMap(to url: URL,
+                        expectedDestination: NativeMapFile.ExpectedDestination? = nil) throws {
         guard commitPendingEditors() else { throw DocumentOperationError.cancelled }
         guard url.pathExtension == "mflw" else { throw DocumentOperationError.unsupported }
         let document = currentDocument()
@@ -195,7 +196,8 @@ final class DocumentSession {
         if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
         #endif
         try NativeMapFile.write(payload, to: url,
-                                expectedCurrentSHA256: refersToCurrentNativeFile(url) ? savedNativeSHA256 : nil)
+                                expectedCurrentSHA256: refersToCurrentNativeFile(url) ? savedNativeSHA256 : nil,
+                                expectedDestination: expectedDestination)
         let result = try NativeMapFile.readWithFileIdentity(url)
         guard result.payload.document.roots == document.roots,
               result.payload.document.relationships == document.relationships,
