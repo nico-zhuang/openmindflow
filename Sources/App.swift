@@ -1897,8 +1897,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                                                defaults: localizationDefaults),
            performNodeShortcut(action) { return }
         if event.modifierFlags.contains(.command) {
-            if event.modifierFlags.intersection([.shift, .option, .control]).isEmpty,
-               event.charactersIgnoringModifiers?.lowercased() == "n" { addMainNode(); return }
             if !event.modifierFlags.contains(.shift),
                !event.modifierFlags.contains(.option),
                !event.modifierFlags.contains(.control),
@@ -2326,6 +2324,7 @@ private func ownedPanelFixtureDirectory() -> URL? {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
+    private(set) var windowSessions: [WindowSession] = []
     private var sessionsByWindow: [ObjectIdentifier: DocumentSession] = [:]
     private var primarySession: DocumentSession?
     private weak var findSession: DocumentSession?
@@ -2333,7 +2332,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var fixtureAnchor: DocumentSession?
     #endif
     private var pendingOpenURLs: [URL] = []
-    private var closeApproved = false
     private var settingsWindow: NSWindow?
     // Legacy menu/toolbar and Find entry points forward through the selected session.
     private var activeSession: DocumentSession? {
@@ -2341,7 +2339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if let fixtureAnchor { return fixtureAnchor }
         #endif
         if let key = NSApp.keyWindow {
-            if let session = sessionsByWindow[ObjectIdentifier(key)] { return session }
+            if let session = windowSessions.first(where: { $0.window === key })?.active ?? sessionsByWindow[ObjectIdentifier(key)] { return session }
             if key === findSession?.findWindow { return findSession }
         }
         // Legacy unshown workbench fixture has no native window to register.
@@ -2352,7 +2350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if let fixtureAnchor { return fixtureAnchor }
         #endif
         guard let key = NSApp.keyWindow,
-              let session = sessionsByWindow[ObjectIdentifier(key)] else { throw DocumentOperationError.cancelled }
+              let session = windowSessions.first(where: { $0.window === key })?.active ?? sessionsByWindow[ObjectIdentifier(key)] else { throw DocumentOperationError.cancelled }
         return session
     }
     private var canvas: MapCanvas! { activeSession?.canvas }
@@ -2406,6 +2404,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     private func t(_ english: String) -> String { L10n.text(english, defaults: defaults) }
 
+    private func createWindowSession() -> WindowSession {
+        let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
+        let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
+        canvas.onImageError = { [weak self] error in
+            self?.alert("Could not import image", detail: error.localizedDescription)
+        }
+        canvas.onVideoError = { [weak self] error in
+            self?.alert("Could not import video", detail: error.localizedDescription)
+        }
+        let nativeWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
+                                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                    backing: .buffered, defer: false)
+        nativeWindow.isReleasedWhenClosed = false
+        nativeWindow.minSize = NSSize(width: 640, height: 400)
+        let coordinator = WindowSession(window: nativeWindow, toolbarTemplate: self)
+        coordinator.confirmClose = { [weak self] document in
+            self?.confirmDiscardOrSave(for: document) ?? false
+        }
+        coordinator.onClose = { [weak self] closed in
+            self?.windowSessions.removeAll { $0 === closed }
+            self?.sessionsByWindow.removeValue(forKey: ObjectIdentifier(closed.window))
+            if self?.window === closed.window { self?.window = self?.windowSessions.first?.window }
+        }
+        windowSessions.append(coordinator)
+        let document = installSession(canvas: canvas, in: nativeWindow)
+        coordinator.insert(document)
+        if window == nil { window = nativeWindow }
+        nativeWindow.setContentSize(NSSize(width: 1280, height: 700))
+        nativeWindow.center()
+        nativeWindow.contentView?.layoutSubtreeIfNeeded()
+        canvas.fitMapInView()
+        return coordinator
+    }
+    #if HEADLESS_TEST
+    func makeUnshownWindowSession() -> WindowSession { createWindowSession() }
+    #endif
+    @objc private func newWindow(_ sender: Any?) {
+        let created = createWindowSession()
+        #if !HEADLESS_TEST
+        created.window.makeKeyAndOrderFront(nil)
+        created.window.makeFirstResponder(created.active?.canvas)
+        NSApp.activate(ignoringOtherApps: true)
+        #endif
+    }
+
     #if HEADLESS_TEST
     /// Genuine AppDelegate document actions in a never-ordered synthetic window; no live AX/HID.
     func installUnshownDocumentFixture(canvas fixture: MapCanvas) -> NSWindow {
@@ -2442,41 +2485,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
-        let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
-        canvas.onImageError = { [weak self] error in
-            self?.alert("Could not import image", detail: error.localizedDescription)
-        }
-        canvas.onVideoError = { [weak self] error in
-            self?.alert("Could not import video", detail: error.localizedDescription)
-        }
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
-        window.title = "\(t("Untitled")) — \(t("OpenMindFlow"))"
-        window.delegate = self
-        window.minSize = NSSize(width: 640, height: 400)
-        _ = installSession(canvas: canvas, in: window)
-        window.toolbar = makeToolbar()
-        window.setContentSize(NSSize(width: 1280, height: 700))
-        window.center()
         installMenu()
-        window.contentView?.layoutSubtreeIfNeeded()
-        canvas.fitMapInView()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(canvas)
-        NSApp.activate(ignoringOtherApps: true)
+        newWindow(nil)
         openPendingFinderDocument()
         if defaults.bool(forKey: "checkUpdatesAutomatically") { checkForUpdates(nil) }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard confirmDiscardOrSave() else { return false }
-        closeApproved = true
-        NSApp.terminate(nil) // Exit the single-window app instead of stranding its map.
-        return false
+        guard let coordinator = windowSessions.first(where: { $0.window === sender }) else { return false }
+        return coordinator.prepareClose(documents: coordinator.documents)
     }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        closeApproved || confirmDiscardOrSave() ? .terminateNow : .terminateCancel
+        for coordinator in windowSessions {
+            guard coordinator.prepareClose(documents: coordinator.documents) else { return .terminateCancel }
+        }
+        return .terminateNow
     }
     private func updateTitle() { activeSession?.onTitleChange?() }
     private func alert(_ message: String, detail: String) {
@@ -3114,6 +3137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         main.addItem(app)
         let file = NSMenuItem(title: t("File"), action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: t("File"))
+        fileMenu.addItem(withTitle: t("New Window"), action: #selector(newWindow(_:)), keyEquivalent: "n").target = self
         fileMenu.addItem(withTitle: t("Open Map…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
         let importMindNode = fileMenu.addItem(withTitle: t("Import MindNode…"), action: #selector(openMindNode(_:)), keyEquivalent: "o")
         importMindNode.keyEquivalentModifierMask = [.command, .shift]
@@ -3180,7 +3204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             ("New Sibling", #selector(newSibling(_:)), "", []),
             ("New Sibling Before", #selector(newSiblingBefore(_:)), "\r", [.option]),
             ("New Parent", #selector(newParent(_:)), "\t", [.option]),
-            ("New Main Node", #selector(newMainNode(_:)), "n", [.command]),
+            ("New Main Node", #selector(newMainNode(_:)), "", []),
             ("Detach Node", #selector(detachNode(_:)), "D", [.command, .shift])
         ]
         for (title, action, key, modifiers) in entries {

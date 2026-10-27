@@ -339,9 +339,13 @@ enum CanvasCommandTests {
         assert(before.keyEquivalent == "\r" && before.keyEquivalentModifierMask == [.option])
         let parent = nodeMenu.item(withTitle: "New Parent")!
         assert(parent.keyEquivalent == "\t" && parent.keyEquivalentModifierMask == [.option])
+        let newWindow = fileMenu.item(withTitle: "New Window")!
+        assert(newWindow.keyEquivalent == "n" && newWindow.keyEquivalentModifierMask == [.command] &&
+               newWindow.action.map(NSStringFromSelector) == "newWindow:" && newWindow.target as AnyObject? === appDelegate,
+               "Command-N belongs to File → New Window")
         let main = nodeMenu.item(withTitle: "New Main Node")!
-        assert(main.keyEquivalent == "n" && main.keyEquivalentModifierMask == [.command],
-               "New Main Node needs the native Command-N equivalent")
+        assert(main.keyEquivalent.isEmpty,
+               "New Main Node cannot claim the global Command-N equivalent")
         let shortcutRoot = MapNode(id: UUID(), title: "Root", children: [], folded: false)
         let shortcutModel = MapModel(roots: [shortcutRoot], selected: shortcutRoot.id)
         let shortcutCanvas = MapCanvas(model: shortcutModel)
@@ -349,9 +353,9 @@ enum CanvasCommandTests {
             timestamp: 0, windowNumber: 0, context: nil, characters: "n",
             charactersIgnoringModifiers: "n", isARepeat: false, keyCode: 45)!
         shortcutCanvas.keyDown(with: commandN)
-        assert(shortcutModel.roots.count == 2 && shortcutModel.selected == shortcutModel.roots[1].id &&
-               shortcutCanvas.subviews.contains(where: { $0 is NSTextField }),
-               "Command-N should add and edit one main/root node")
+        assert(shortcutModel.roots.count == 1 && shortcutModel.selected == shortcutRoot.id &&
+               !shortcutCanvas.subviews.contains(where: { $0 is NSTextField }),
+               "Command-N must not add or edit a root in the canvas")
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
         assert(identifiers.map(\.rawValue) == ["outline", "new-main", "new-child", "new-sibling", "fold-node", "fit-map", "style"])

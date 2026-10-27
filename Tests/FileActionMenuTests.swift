@@ -11,11 +11,15 @@ import AppKit
         _ = delegate.makeWorkbench(canvas: canvas)
         delegate.installMenu()
         let file = NSApp.mainMenu!.item(withTitle: "File")!.submenu!
-        for title in ["Open Map…", "Import MindNode…", "Save", "Save As…", "Save As MindNode Copy…", "Insert Image…", "Insert Video…", "Export MindNode…",
+        for title in ["New Window", "Open Map…", "Import MindNode…", "Save", "Save As…", "Save As MindNode Copy…", "Insert Image…", "Insert Video…", "Export MindNode…",
                       "Export PDF…", "Export PNG…", "Export JPG…", "Export Markdown…"] {
             guard let action = file.item(withTitle: title), action.target != nil,
                   action.action != nil else { fatalError("Missing native File menu action: \(title)") }
         }
+        let newWindow = file.item(withTitle: "New Window")!
+        assert(newWindow.keyEquivalent == "n" && newWindow.keyEquivalentModifierMask == [.command] &&
+               newWindow.action.map(NSStringFromSelector) == "newWindow:" && newWindow.target as AnyObject? === delegate)
+        assert(NSApp.mainMenu!.item(withTitle: "Node")!.submenu!.item(withTitle: "New Main Node")!.keyEquivalent.isEmpty)
         for removed in ["Open Own JSON…", "Open MindNode (Read-only)…",
                         "Experimental MindNode v9 Plain-Tree Copy…"] {
             assert(file.item(withTitle: removed) == nil, "Superseded format label must not remain: \(removed)")

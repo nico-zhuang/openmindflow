@@ -34,7 +34,7 @@ enum L10n {
         "MindMap": "思维导图", "Quit MindMap": "退出思维导图", "File": "文件", "Edit": "编辑",
         "View": "视图", "Node": "节点", "Save": "保存", "Undo": "撤销", "Redo": "重做",
         "Cut": "剪切", "Copy": "复制", "Paste": "粘贴", "Select All": "全选",
-        "Open Map…": "打开导图…", "Import MindNode…": "导入 MindNode…",
+        "New Window": "新建窗口", "Open Map…": "打开导图…", "Import MindNode…": "导入 MindNode…",
         "Save As…": "另存为…", "Save As MindNode Copy…": "另存 MindNode 副本…",
         "Export MindNode…": "导出 MindNode…",
         "Show/Hide Outline": "显示/隐藏大纲", "Show/Hide Style": "显示/隐藏样式",
