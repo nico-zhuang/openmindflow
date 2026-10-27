@@ -664,9 +664,15 @@ enum CanvasCommandTests {
         let originalNested = crossRows.first { $0.node.id == nestedLeaf.id }!.frame
         let nestedAtPointer = originalNested.offsetBy(dx: sourceAtPointer.minX - crossSourceFrame.minX,
                                                        dy: sourceAtPointer.minY - crossSourceFrame.minY)
-        if paintedInterior(beforeReflow, crossSourceFrame) != paintedInterior(duringReflow, sourceAtPointer) ||
+        // The new target halo may cross the bottom of the held card near a
+        // sibling gap; compare its unobscured title area and the full nested leaf.
+        let topOfSource = CGRect(x: crossSourceFrame.minX, y: crossSourceFrame.minY,
+                                 width: crossSourceFrame.width, height: 30)
+        let topAtPointer = CGRect(x: sourceAtPointer.minX, y: sourceAtPointer.minY,
+                                  width: sourceAtPointer.width, height: 30)
+        if paintedInterior(beforeReflow, topOfSource) != paintedInterior(duringReflow, topAtPointer) ||
            paintedInterior(beforeReflow, originalNested) != paintedInterior(duringReflow, nestedAtPointer) {
-            fputs("Dragged child and nested leaf must retain their original typography and text\n", stderr); exit(1)
+            fputs("Dragged card title and nested leaf must retain their typography outside the target halo\n", stderr); exit(1)
         }
         for frame in [sourceAtPointer, nestedAtPointer] {
             let first = paintedInterior(duringReflow, frame)

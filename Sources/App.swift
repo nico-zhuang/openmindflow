@@ -78,6 +78,15 @@ private enum NodeShortcuts {
     }
 }
 
+struct MapDropFeedback {
+    enum Kind { case attach, insert }
+    let targetID: UUID
+    let kind: Kind
+    let label: String
+    let outline: CGRect
+    let badge: CGRect? // A crowded viewport may allow a halo but no non-obscuring text position.
+}
+
 final class MapCanvas: NSView, NSTextFieldDelegate {
     var model: MapModel { didSet { let alreadyReplacing = replacingModel; replacingModel = true; clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); endEditingWithoutSaving(); stopVideo(); videoPosters.removeAllObjects(); selectedRelationshipID = nil; relationshipColorPanelID = nil; revealSelection(); needsDisplay = true; replacingModel = alreadyReplacing } }
     var replacingModel = false
@@ -662,6 +671,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         return goesLeft(placement.target, among: nodes) ? "left" : "right"
     }
+    private func oppositeRootBranchSide(at point: CGPoint, source: UUID,
+                                        nodes: [LaidOutNode]) -> String? {
+        guard model.selectedIDs.count == 1,
+              let anchor = nodes.first(where: { $0.node.id == source }),
+              let parentID = anchor.parent,
+              let parent = nodes.first(where: { $0.node.id == parentID && $0.parent == nil })
+        else { return nil }
+        let movesLeft = point.x < screen(parent.frame).midX
+        return movesLeft != goesLeft(anchor, among: nodes) ? (movesLeft ? "left" : "right") : nil
+    }
     private func dragDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
         -> (target: LaidOutNode, parent: UUID, index: Int)? {
         let fresh = validDrop(at: point, source: source, nodes: nodes)
@@ -753,8 +772,13 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         var nodes = visibleNodes()
         let committed = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame.origin) })
         draggedIDs.removeAll()
-        let drop = dragSource.flatMap { source in
+        var drop = dragSource.flatMap { source in
             dragPoint.flatMap { dragDrop(at: $0, source: source, nodes: nodes) }
+        }
+        if let source = dragSource, let point = dragPoint,
+           oppositeRootBranchSide(at: point, source: source, nodes: nodes) != nil {
+            drop = nil // Release switches branch direction, not attachment to the hovered node.
+            clearDragCandidate()
         }
         if let source = dragSource, let point = dragPoint,
            let sourceNode = nodes.first(where: { $0.node.id == source }) {
@@ -771,15 +795,16 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             let dragged = nodes.filter { moving.contains($0.node.id) }.map {
                 LaidOutNode(node: $0.node, frame: $0.frame.offsetBy(dx: dx, dy: dy), parent: $0.parent)
             }
-            if let drop {
+            if let candidate = drop {
                 // ponytail: O(n) tree copy/layout per drag frame; cache candidate placement or affected branches if large maps stutter.
                 let preview = MapModel(roots: model.roots, selected: source)
                 for id in model.selectedIDs where id != source { preview.toggleSelection(id) }
                 let proposed = sourceNode.parent == nil && model.selectedIDs.count == 1
-                    ? preview.moveNode(source, to: drop.parent, at: drop.index,
-                        branchSide: rootDropSide(at: point, placement: drop, nodes: nodes))
-                    : preview.moveSelectedNodes(to: drop.parent, at: drop.index)
+                    ? preview.moveNode(source, to: candidate.parent, at: candidate.index,
+                        branchSide: rootDropSide(at: point, placement: candidate, nodes: nodes))
+                    : preview.moveSelectedNodes(to: candidate.parent, at: candidate.index)
                 if proposed { nodes = visibleNodes(for: preview.roots) }
+                else { drop = nil; clearDragCandidate() }
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
@@ -832,6 +857,40 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         else if box.minY < bounds.minY + margin { offset.y += bounds.minY + margin - box.minY }
         else if box.maxY > bounds.maxY - margin { offset.y -= box.maxY - bounds.maxY + margin }
         editor?.frame = selectedNode().map(editorFrame) ?? .zero
+    }
+
+    func dropFeedback() -> MapDropFeedback? {
+        guard dragSource != nil, dragPoint != nil else { return nil }
+        let preview = previewGeometry()
+        guard let drop = preview.drop,
+              let target = preview.nodes.first(where: { $0.node.id == drop.target.node.id }) else { return nil }
+        let kind: MapDropFeedback.Kind = drop.parent == drop.target.node.id ? .attach : .insert
+        let label = t(kind == .attach ? "Attach" : "Insert")
+        let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        let width = ceil((label as NSString).size(withAttributes: [.font: font]).width) + 28
+        let outline = screen(target.frame).insetBy(dx: -3, dy: -3)
+        let height: CGFloat = 32
+        let centerX = outline.midX - width / 2
+        let centerY = outline.midY - height / 2
+        let occupied = preview.nodes.filter { $0.node.id != target.node.id && !draggedIDs.contains($0.node.id) }
+            .map { screen($0.frame).insetBy(dx: -4, dy: -4) }
+        let safeArea = bounds.insetBy(dx: 8, dy: 8)
+        var badge: CGRect?
+        var clearance: CGFloat = 10
+        while badge == nil && clearance < max(bounds.width, bounds.height) {
+            let candidates = [
+                CGRect(x: centerX, y: outline.maxY + clearance, width: width, height: height),
+                CGRect(x: centerX, y: outline.minY - height - clearance, width: width, height: height),
+                CGRect(x: outline.maxX + clearance, y: centerY, width: width, height: height),
+                CGRect(x: outline.minX - width - clearance, y: centerY, width: width, height: height)
+            ]
+            badge = candidates.first { candidate in
+                safeArea.contains(candidate) && occupied.allSatisfy { !$0.intersects(candidate) }
+            }
+            clearance += height + 16
+        }
+        return MapDropFeedback(targetID: target.node.id, kind: kind, label: label,
+                               outline: outline, badge: badge)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -975,7 +1034,14 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             NSColor.controlAccentColor.setStroke()
             paper.stroke()
         }
-        for item in nodes {
+        // The dragged card may temporarily cross the drop target. Paint the
+        // actual target last so its title remains legible under the halo.
+        var paintNodes = nodes
+        if let drop, drop.parent == drop.target.node.id,
+           let index = paintNodes.firstIndex(where: { $0.node.id == drop.target.node.id }) {
+            paintNodes.append(paintNodes.remove(at: index))
+        }
+        for item in paintNodes {
             let box = screen(item.frame)
             let hovered = drop?.parent == item.node.id && drop?.target.node.id == item.node.id
             let active = item.node.id == model.selected || hovered
@@ -990,6 +1056,17 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 if model.selectedIDs.contains(item.node.id) { drawSelectionBox(item) }
             } else {
                 if model.selectedIDs.contains(item.node.id) { drawSelectionBox(item) }
+                if hovered {
+                    // Only during a real child attach: an opaque-enough, quiet
+                    // surface keeps the destination text readable above the
+                    // held card without giving every child a permanent box.
+                    let surface = NSBezierPath(roundedRect: box.insetBy(dx: 5 * zoom, dy: 4 * zoom),
+                                               xRadius: 6 * zoom, yRadius: 6 * zoom)
+                    NSColor.windowBackgroundColor.withAlphaComponent(0.94).setFill()
+                    surface.fill()
+                    NSColor.controlAccentColor.withAlphaComponent(0.23).setFill()
+                    surface.fill()
+                }
                 let path = NSBezierPath()
                 path.move(to: CGPoint(x: box.minX, y: baseline(box)))
                 let lineEnd = item.node.id == model.selected ? max(box.maxX, editor?.frame.maxX ?? box.maxX) : box.maxX
@@ -1076,6 +1153,37 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 NSColor.controlAccentColor.setStroke()
                 handle.lineWidth = max(1.5, 1.5 * zoom)
                 handle.stroke()
+            }
+        }
+        if let cue = dropFeedback() {
+            // Keep the actual node still and make its destination unmistakable.
+            // Draw on top of the dragged card so the ring remains visible even
+            // while two cards temporarily intersect during the gesture.
+            let outer = NSBezierPath(roundedRect: cue.outline.insetBy(dx: -2, dy: -2),
+                                     xRadius: 10, yRadius: 10)
+            NSColor.controlAccentColor.withAlphaComponent(0.25).setStroke()
+            outer.lineWidth = 6
+            outer.stroke()
+            let ring = NSBezierPath(roundedRect: cue.outline,
+                                    xRadius: 8, yRadius: 8)
+            NSColor.controlAccentColor.setStroke()
+            ring.lineWidth = 2
+            ring.stroke()
+            if let badge = cue.badge {
+                let pill = NSBezierPath(roundedRect: badge, xRadius: 11, yRadius: 11)
+                NSColor.windowBackgroundColor.withAlphaComponent(0.97).setFill()
+                pill.fill()
+                NSColor.controlAccentColor.withAlphaComponent(0.78).setStroke()
+                pill.lineWidth = 1
+                pill.stroke()
+                let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+                let text = cue.label as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: font, .foregroundColor: NSColor.labelColor
+                ]
+                let textSize = text.size(withAttributes: attributes)
+                text.draw(at: CGPoint(x: badge.midX - textSize.width / 2,
+                                      y: badge.midY - textSize.height / 2), withAttributes: attributes)
             }
         }
         if let marquee {
@@ -2050,15 +2158,9 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if model.translateSelectedSubtrees(by: delta, visibleCenters: centers) { changed() }
             return
         }
-        if model.selectedIDs.count == 1, let parentID = anchor.parent,
-           let parent = nodes.first(where: { $0.node.id == parentID && $0.parent == nil }) {
-            let rootX = screen(parent.frame).midX
-            let side = point.x < rootX ? "left" : "right"
-            // Only a release on the opposite side changes direction; same-side drops retain normal behavior.
-            if (point.x < rootX) != goesLeft(anchor, among: nodes) {
-                if model.setRootBranchSide(side, for: source) { changed() }
-                return
-            }
+        if let side = oppositeRootBranchSide(at: point, source: source, nodes: nodes) {
+            if model.setRootBranchSide(side, for: source) { changed() }
+            return
         }
         let placement: (target: LaidOutNode, parent: UUID, index: Int)
         if let target = dragDrop(at: point, source: source, nodes: nodes) { placement = target }
