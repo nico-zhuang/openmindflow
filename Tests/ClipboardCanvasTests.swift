@@ -14,6 +14,7 @@ import AppKit
         assert(canvas.copySelection(to: pasteboard), "Canvas copies model selection into native clipboard")
         assert(pasteboard.data(forType: NSPasteboard.PasteboardType("local.mindmap.node-group.v1")) != nil,
                "Clipboard payload must be an application-private typed byte stream")
+        canvas.model.clearSelection() // This fixture exercises blank-root paste, not selected-parent paste.
         let blank = CGPoint(x: 1130, y: 520)
         assert(canvas.pasteSelection(from: pasteboard, at: blank), "Paste at blank screen point succeeds")
         assert(canvas.model.roots.count == 2 && canvas.model.selectedIDs == [canvas.model.roots[1].id],

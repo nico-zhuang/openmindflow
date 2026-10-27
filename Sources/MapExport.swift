@@ -82,6 +82,7 @@ func exportMap(_ canvas: MapCanvas, as format: MapExportFormat, to url: URL) thr
         snapshot.model.relationships = canvas.model.relationships
         snapshot.branchStyles = canvas.branchStyles
         snapshot.nativePresentation = canvas.nativePresentation
+        snapshot.nativePresentationPaths = canvas.nativePresentationPaths
         snapshot.embeddedTheme = canvas.embeddedTheme
         snapshot.localizationDefaults = canvas.localizationDefaults
         snapshot.appearance = canvas.effectiveAppearance

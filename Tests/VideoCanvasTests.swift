@@ -121,6 +121,11 @@ enum VideoCanvasTests {
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1)!
         canvas.mouseDown(with: mouse)
+        let mouseUp = NSEvent.mouseEvent(with: .leftMouseUp,
+            location: CGPoint(x: media.midX, y: canvas.bounds.height - media.midY),
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1)!
+        canvas.mouseUp(with: mouseUp)
         let player = canvas.subviews.compactMap { $0 as? MapVideoPlayerView }.first
         assert(player?.player?.currentItem != nil && player?.controlsStyle == .inline,
                "Clicking persisted video shows native player with play and progress/seek controls")

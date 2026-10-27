@@ -6,13 +6,10 @@ import UniformTypeIdentifiers
 func branchConnectorEndpoints(parent: CGRect, child: CGRect, parentIsRoot: Bool,
                               goesLeft: Bool, baselineInset: CGFloat) -> (start: CGPoint, end: CGPoint, controlX: CGFloat) {
     let end = CGPoint(x: goesLeft ? child.maxX : child.minX, y: child.maxY - baselineInset)
-    // Follow a left first-level underline along the root edge. Clamp near its
-    // corners so dragging a branch across the edge never snaps the trunk.
-    let rootLeftY = parent.height > 2 * baselineInset
-        ? min(max(end.y, parent.minY + baselineInset), parent.maxY - baselineInset)
-        : parent.midY
+    // First-level trunks leave either edge at the same root midpoint. The child
+    // still joins at its underline; moving it must never slide the root exit.
     let start = CGPoint(x: goesLeft ? parent.minX : parent.maxX,
-                        y: parentIsRoot ? (goesLeft ? rootLeftY : parent.midY) : parent.maxY - baselineInset)
+                        y: parentIsRoot ? parent.midY : parent.maxY - baselineInset)
     return (start, end, (start.x + end.x) / 2)
 }
 
@@ -89,7 +86,22 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     }
     private var relationshipColorPanelID: UUID?
     var branchStyles: [UUID: MindNodeVisualStyle] = [:] { didSet { needsDisplay = true } }
-    var nativePresentation: [UUID: MindNodePresentation] = [:] { didSet { needsDisplay = true } }
+    var nativePresentation: [UUID: MindNodePresentation] = [:] {
+        didSet {
+            // A native coordinate is valid only while this node remains in its
+            // imported ancestry. Reparenting must not resurrect the old center.
+            var paths: [UUID: [UUID]] = [:]
+            func record(_ node: MapNode, ancestors: [UUID]) {
+                let path = ancestors + [node.id]
+                if nativePresentation[node.id] != nil { paths[node.id] = path }
+                for child in node.children { record(child, ancestors: path) }
+            }
+            for root in model.roots { record(root, ancestors: []) }
+            nativePresentationPaths = paths
+            needsDisplay = true
+        }
+    }
+    var nativePresentationPaths: [UUID: [UUID]] = [:]
     var embeddedTheme: MindNodeThemeMetadata? { didSet { needsDisplay = true } }
     override var needsDisplay: Bool {
         didSet {
@@ -157,7 +169,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
     private var springTick = false
     // ponytail: drag-only spring; release/Escape snap until Gate B owns settling and interruption.
     private let springResponse: CGFloat = 0.26, springDamping: CGFloat = 0.95
-    private let childOverlapThreshold: CGFloat = 0.65, collisionGap: CGFloat = 8
+    private let childOverlapThreshold: CGFloat = 0.65
     private var announcedSelection: Set<UUID>
 
     init(model: MapModel) {
@@ -579,18 +591,20 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         }
         guard !nativePresentation.isEmpty || roots.contains(where: hasLocation) else { return mapLayout(roots) }
         var overrides: [UUID: MapLayoutOverride] = [:]
-        func add(_ node: MapNode, isRoot: Bool) {
+        func add(_ node: MapNode, ancestors: [UUID]) {
+            let path = ancestors + [node.id]
             let saved = nativePresentation[node.id]
             let width: CGFloat? = saved?.maxWidth.flatMap { value in
                 let points = CGFloat(value)
                 return MapNode.validWidth(points) ? points : nil
             }
-            overrides[node.id] = MapLayoutOverride(location: saved?.location, maxWidth: width,
+            let originalLocation = nativePresentationPaths[node.id] == path ? saved?.location : nil
+            overrides[node.id] = MapLayoutOverride(location: originalLocation, maxWidth: width,
                 allowToShrinkWidth: saved?.allowToShrinkWidth ?? true,
-                font: font(for: node, isRoot: isRoot))
-            for child in node.children { add(child, isRoot: false) }
+                font: font(for: node, isRoot: ancestors.isEmpty))
+            for child in node.children { add(child, ancestors: path) }
         }
-        for root in roots { add(root, isRoot: true) }
+        for root in roots { add(root, ancestors: []) }
         return mapLayout(roots, overrides: overrides)
     }
     private func selectedNode() -> LaidOutNode? {
@@ -637,6 +651,17 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         dragCandidate = nil
         dragCandidateFrame = nil
     }
+    private func rootDropSide(at point: CGPoint,
+                              placement: (target: LaidOutNode, parent: UUID, index: Int),
+                              nodes: [LaidOutNode]) -> String? {
+        guard let root = nodes.first(where: { $0.node.id == placement.parent && $0.parent == nil }) else {
+            return nil // A nested target inherits its branch's existing direction.
+        }
+        if placement.target.node.id == root.node.id {
+            return point.x < screen(root.frame).midX ? "left" : "right"
+        }
+        return goesLeft(placement.target, among: nodes) ? "left" : "right"
+    }
     private func dragDrop(at point: CGPoint, source: UUID, nodes: [LaidOutNode])
         -> (target: LaidOutNode, parent: UUID, index: Int)? {
         let fresh = validDrop(at: point, source: source, nodes: nodes)
@@ -673,69 +698,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             if !sameTarget { dragCandidateFrame = painted }
         } else { clearDragCandidate() }
         return fresh
-    }
-    private func repelNearby(_ nodes: [LaidOutNode], moving: Set<UUID>, pinnedTarget: UUID?) -> [LaidOutNode] {
-        guard !moving.isEmpty else { return nodes }
-        var frames = Dictionary(uniqueKeysWithValues: nodes.map { ($0.node.id, $0.frame) })
-        let dragged = nodes.filter { moving.contains($0.node.id) }.map(\.frame)
-        var groups = [Set<UUID>]()
-        func subtree(_ node: MapNode) -> Set<UUID> {
-            var ids: Set<UUID> = [node.id]
-            if !node.folded { node.children.forEach { ids.formUnion(subtree($0)) } }
-            return ids
-        }
-        func group(_ node: MapNode) {
-            let ids = subtree(node).intersection(frames.keys)
-            if ids.isDisjoint(with: moving) { groups.append(ids) }
-            else if !node.folded { node.children.forEach(group) }
-        }
-        for root in nodes where root.parent == nil && !root.node.folded {
-            root.node.children.forEach(group) // Roots stay anchored; each other visible branch moves only as a unit.
-        }
-        func shift(_ ids: Set<UUID>, _ dy: CGFloat) {
-            guard dy != 0 else { return }
-            for id in ids { frames[id] = frames[id]!.offsetBy(dx: 0, dy: dy) }
-        }
-        func separation(_ upper: Set<UUID>, _ lower: Set<UUID>) -> CGFloat {
-            var needed: CGFloat = 0
-            for a in upper { for b in lower {
-                let first = frames[a]!, second = frames[b]!
-                if first.minX < second.maxX && first.maxX > second.minX {
-                    needed = max(needed, first.maxY + collisionGap - second.minY)
-                }
-            } }
-            return needed
-        }
-        let movingMidY = dragged.reduce(CGRect.null) { $0.union($1) }.midY
-        for ids in groups {
-            if let pinnedTarget, ids.contains(pinnedTarget) { continue } // The acquired visual drop target stays under the pointer.
-            let box = ids.reduce(CGRect.null) { $0.union(frames[$1]!) }
-            let below = box.midY >= movingMidY
-            var dy: CGFloat = 0
-            for id in ids { for source in dragged {
-                let item = frames[id]!
-                guard item.minX < source.maxX, item.maxX > source.minX else { continue }
-                if below { dy = max(dy, source.maxY + collisionGap - item.minY) }
-                else { dy = min(dy, source.minY - collisionGap - item.maxY) }
-            } }
-            shift(ids, dy)
-        }
-        // ponytail: bounded pair sweeps can be cubic in branch count; use a spatial index if large maps stutter.
-        for _ in 0..<groups.count {
-            var changed = false
-            for i in groups.indices { for j in groups.indices where j > i {
-                let dy = separation(groups[i], groups[j])
-                guard dy > 0 else { continue }
-                let later = groups[j].reduce(CGRect.null) { $0.union(frames[$1]!) }
-                if let pinnedTarget, groups[i].contains(pinnedTarget) { shift(groups[j], dy) }
-                else if let pinnedTarget, groups[j].contains(pinnedTarget) { shift(groups[i], -dy) }
-                else if later.midY < movingMidY { shift(groups[i], -dy) }
-                else { shift(groups[j], dy) }
-                changed = true
-            } }
-            if !changed { break }
-        }
-        return nodes.map { LaidOutNode(node: $0.node, frame: frames[$0.node.id]!, parent: $0.parent) }
     }
     private func pauseSpring() {
         springTimer?.invalidate()
@@ -778,7 +740,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             return LaidOutNode(node: item.node,
                 frame: CGRect(origin: point, size: item.frame.size), parent: item.parent)
         }
-        cached.nodes = repelNearby(cached.nodes, moving: draggedIDs, pinnedTarget: cached.drop?.target.node.id)
         if let id = dragCandidate?.target {
             dragCandidateFrame = cached.nodes.first(where: { $0.node.id == id })?.frame
         }
@@ -814,9 +775,11 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 // ponytail: O(n) tree copy/layout per drag frame; cache candidate placement or affected branches if large maps stutter.
                 let preview = MapModel(roots: model.roots, selected: source)
                 for id in model.selectedIDs where id != source { preview.toggleSelection(id) }
-                if preview.moveSelectedNodes(to: drop.parent, at: drop.index) {
-                    nodes = visibleNodes(for: preview.roots)
-                }
+                let proposed = sourceNode.parent == nil && model.selectedIDs.count == 1
+                    ? preview.moveNode(source, to: drop.parent, at: drop.index,
+                        branchSide: rootDropSide(at: point, placement: drop, nodes: nodes))
+                    : preview.moveSelectedNodes(to: drop.parent, at: drop.index)
+                if proposed { nodes = visibleNodes(for: preview.roots) }
             }
             nodes = nodes.filter { !moving.contains($0.node.id) } + dragged
         }
@@ -853,7 +816,6 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
                 springTimer = timer
             }
         } else { stopSpring() }
-        nodes = repelNearby(nodes, moving: draggedIDs, pinnedTarget: pinnedID)
         if let id = dragCandidate?.target {
             dragCandidateFrame = nodes.first(where: { $0.node.id == id })?.frame
         }
@@ -1077,7 +1039,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             let title = item.node.title.isEmpty ? (item.node.image == nil && item.node.video == nil ? t("New idea") : "") : item.node.title
             let paragraph = NSMutableParagraphStyle()
-            switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? "left" {
+            switch item.node.textAlignment ?? nativePresentation[item.node.id]?.font?.alignment ?? (item.parent == nil ? "center" : "left") {
             case "center": paragraph.alignment = .center
             case "right": paragraph.alignment = .right
             case "justify": paragraph.alignment = .justified
@@ -1176,7 +1138,7 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         field.stringValue = node.node.title
         field.font = font(for: node.node, isRoot: node.parent == nil, zoom: max(zoom, 0.8))
         field.textColor = titleColor(for: node.node, isRoot: node.parent == nil)
-        switch node.node.textAlignment ?? nativePresentation[node.node.id]?.font?.alignment ?? "left" {
+        switch node.node.textAlignment ?? nativePresentation[node.node.id]?.font?.alignment ?? (node.parent == nil ? "center" : "left") {
         case "center": field.alignment = .center
         case "right": field.alignment = .right
         case "justify": field.alignment = .justified
@@ -1424,7 +1386,8 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
               let clip = try? JSONDecoder().decode(MapSelectionClip.self, from: data) else { return false }
         guard commitEditing() else { return false }
         let world = CGPoint(x: (point.x - offset.x) / zoom, y: (point.y - offset.y) / zoom)
-        guard model.pasteSelection(clip, at: world) else { return false }
+        let parent = model.selectedIDs.count == 1 && model.selectedIDs.contains(model.selected) ? model.selected : nil
+        guard model.pasteSelection(clip, at: world, into: parent) else { return false }
         changed()
         return true
     }
@@ -1874,8 +1837,10 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
         if event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty,
            let mediaNode = hitNodes.last(where: { videoRect($0)?.contains(point) == true }) {
             model.selectOnly(mediaNode.node.id)
-            _ = playVideo(mediaNode.node.id)
-            dragOrigin = nil
+            dragSource = mediaNode.node.id
+            let box = screen(mediaNode.frame)
+            dragGrab = CGPoint(x: point.x - box.minX, y: point.y - box.minY)
+            window?.makeFirstResponder(self)
             needsDisplay = true
             return
         }
@@ -1977,6 +1942,41 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             needsDisplay = true
         }
     }
+    private func safeFreeRootDisplacement(_ desired: CGPoint, nodes: [LaidOutNode]) -> CGPoint {
+        var movingIDs = Set<UUID>()
+        func collect(_ node: MapNode) {
+            movingIDs.insert(node.id)
+            node.children.forEach(collect)
+        }
+        func selectedBranches(_ node: MapNode) {
+            if model.selectedIDs.contains(node.id) { collect(node) }
+            else { node.children.forEach(selectedBranches) }
+        }
+        model.roots.forEach(selectedBranches)
+        let moving = nodes.filter { movingIDs.contains($0.node.id) }.map {
+            $0.frame.offsetBy(dx: desired.x, dy: desired.y)
+        }
+        let occupied = nodes.filter { !movingIDs.contains($0.node.id) }.map {
+            $0.frame.insetBy(dx: -8, dy: -8)
+        }
+        func clear(_ additionalY: CGFloat) -> Bool {
+            moving.allSatisfy { frame in
+                occupied.allSatisfy { !frame.offsetBy(dx: 0, dy: additionalY).intersects($0) }
+            }
+        }
+        if clear(0) { return desired }
+        var candidates: [CGFloat] = []
+        for frame in moving { for box in occupied
+            where frame.minX < box.maxX && frame.maxX > box.minX {
+            candidates.append(box.minY - frame.maxY - 0.01)
+            candidates.append(box.maxY - frame.minY + 0.01)
+        } }
+        for adjustment in candidates.sorted(by: { abs($0) < abs($1) }) {
+            guard abs(desired.y + adjustment) <= 1_000_000, clear(adjustment) else { continue }
+            return CGPoint(x: desired.x, y: desired.y + adjustment)
+        }
+        return .zero // Never persist a new overlap when no legal free slot remains.
+    }
     override func mouseUp(with event: NSEvent) {
         defer { clearDragCandidate(); dragPresentedFrames.removeAll(); stopSpring(); dragSource = nil; dragPoint = nil; dragOrigin = nil; resize = nil; marquee = nil; relationshipDrag = nil; needsDisplay = true }
         if let drag = relationshipDrag,
@@ -2024,12 +2024,26 @@ final class MapCanvas: NSView, NSTextFieldDelegate {
             }
             return
         }
+        if dragPoint == nil, let source = dragSource, let origin = dragOrigin,
+           let clicked = visibleNodes().first(where: { $0.node.id == source }),
+           videoRect(clicked)?.contains(origin) == true {
+            _ = playVideo(source) // A click plays; an actual drag moves the video node.
+            return
+        }
         guard let source = dragSource, dragPoint != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         let nodes = visibleNodes()
         guard let anchor = nodes.first(where: { $0.node.id == source }) else { return }
         if anchor.parent == nil, let origin = dragOrigin {
-            let delta = CGPoint(x: (point.x - origin.x) / zoom, y: (point.y - origin.y) / zoom)
+            if model.selectedIDs.count == 1,
+               let target = dragDrop(at: point, source: source, nodes: nodes),
+               model.moveNode(source, to: target.parent, at: target.index,
+                   branchSide: rootDropSide(at: point, placement: target, nodes: nodes)) {
+                changed()
+                return
+            }
+            let desired = CGPoint(x: (point.x - origin.x) / zoom, y: (point.y - origin.y) / zoom)
+            let delta = safeFreeRootDisplacement(desired, nodes: nodes)
             let centers = Dictionary(uniqueKeysWithValues: nodes.map {
                 ($0.node.id, CGPoint(x: $0.frame.midX, y: $0.frame.midY))
             })
@@ -2522,8 +2536,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         return toolbar
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.init("new-main"), .init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
-         .init("outline"), .flexibleSpace, .init("style")]
+        [.init("outline"), .flexibleSpace,
+         .init("new-main"), .init("new-child"), .init("new-sibling"), .init("fold-node"), .init("fit-map"),
+         .flexibleSpace, .init("style")]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar) + [.init("undo"), .init("redo")]

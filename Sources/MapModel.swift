@@ -158,23 +158,43 @@ final class MapModel {
     }
 
     @discardableResult
-    func pasteSelection(_ clip: MapSelectionClip, at anchor: CGPoint) -> Bool {
+    func pasteSelection(_ clip: MapSelectionClip, at anchor: CGPoint, into parentID: UUID? = nil) -> Bool {
         guard anchor.x.isFinite, anchor.y.isFinite,
               abs(anchor.x) <= 1_000_000, abs(anchor.y) <= 1_000_000,
-              !clip.roots.isEmpty, let first = clip.roots.first?.location,
+              !clip.roots.isEmpty, (parentID != nil || clip.roots.first?.location != nil),
               (try? JSONEncoder().encode(clip).count).map({ $0 <= Self.maxSavedJSONBytes }) ?? false else { return false }
-        // Clipboard roots become new main nodes: their former first-level side has no meaning here.
+        let parentPath = parentID.flatMap { Self.path(to: $0, in: roots) }
+        guard parentID == nil || parentPath != nil else { return false }
         var normalizedRoots = clip.roots
-        for index in normalizedRoots.indices { normalizedRoots[index].branchSide = nil }
-        guard let oldIDs = try? checkOwnJSONNodes(normalizedRoots),
+        func normalize(_ node: inout MapNode, isChildPaste: Bool, keepFirstLevelSide: Bool = false) {
+            if !keepFirstLevelSide { node.branchSide = nil }
+            if isChildPaste { node.rootShape = nil; node.rootFillColor = nil }
+            if isChildPaste {
+                for index in node.children.indices { normalize(&node.children[index], isChildPaste: true) }
+            }
+        }
+        for index in normalizedRoots.indices {
+            normalize(&normalizedRoots[index], isChildPaste: parentID != nil,
+                      keepFirstLevelSide: parentPath?.count == 1)
+        }
+        // The clipboard envelope treats selected branches as roots. Validate that
+        // envelope with root-only side cleared, then validate the actual attached
+        // document below so a preserved first-level left side is legal there.
+        var validationRoots = normalizedRoots
+        for index in validationRoots.indices { validationRoots[index].branchSide = nil }
+        guard let oldIDs = try? checkOwnJSONNodes(validationRoots),
               sanitizeRelationships(clip.relationships, nodeIDs: oldIDs).count == clip.relationships.count else { return false }
-        let delta = SIMD2(Double(anchor.x) - first.x, Double(anchor.y) - first.y)
+        let first = clip.roots.first?.location
+        let delta = parentID == nil ? SIMD2(Double(anchor.x) - first!.x, Double(anchor.y) - first!.y)
+                                    : SIMD2<Double>(0, 0)
         var idMap: [UUID: UUID] = [:]
         func clone(_ node: MapNode) -> MapNode? {
             var result = node
             result.id = UUID()
             idMap[node.id] = result.id
-            if let old = result.location {
+            if parentID != nil {
+                result.location = nil // Let the destination branch layout place the whole copied subtree.
+            } else if let old = result.location {
                 let next = old + delta
                 guard next.x.isFinite, next.y.isFinite,
                       abs(next.x) <= 1_000_000, abs(next.y) <= 1_000_000 else { return nil }
@@ -194,10 +214,17 @@ final class MapModel {
             copies.append(next)
         }
         let edges = remapRelationships(clip.relationships, nodeIDs: idMap)
-        guard edges.count == clip.relationships.count,
-              fitsSavedJSON(roots + copies, relationships: relationships + edges) else { return false }
+        guard edges.count == clip.relationships.count else { return false }
+        var updated = roots
+        if let parentPath {
+            Self.edit(&updated, at: parentPath[...]) { nodes, index in
+                nodes[index].folded = false
+                nodes[index].children.append(contentsOf: copies)
+            }
+        } else { updated.append(contentsOf: copies) }
+        guard fitsSavedJSON(updated, relationships: relationships + edges) else { return false }
         save()
-        roots.append(contentsOf: copies)
+        roots = updated
         relationships.append(contentsOf: edges)
         selected = copies[0].id
         selectedIDs = Set(copies.map(\.id))
@@ -466,7 +493,7 @@ final class MapModel {
     }
 
     func canMoveNode(_ id: UUID, to parentID: UUID, at index: Int) -> Bool {
-        guard let source = Self.path(to: id, in: roots), source.count > 1,
+        guard let source = Self.path(to: id, in: roots),
               let target = Self.path(to: parentID, in: roots),
               !target.starts(with: source),
               (0...Self.node(at: target[...], in: roots).children.count).contains(index) else { return false }
@@ -475,8 +502,10 @@ final class MapModel {
         return !sameParent || destination != source.last!
     }
 
-    func moveNode(_ id: UUID, to parentID: UUID, at index: Int, location: CGPoint? = nil) -> Bool {
+    func moveNode(_ id: UUID, to parentID: UUID, at index: Int, location: CGPoint? = nil,
+                  branchSide: String? = nil) -> Bool {
         guard canMoveNode(id, to: parentID, at: index),
+              (branchSide == nil || branchSide == "left" || branchSide == "right"),
               location.map({ $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 1_000_000 && abs($0.y) <= 1_000_000 }) ?? true
               else { return false }
         let sourcePath = Self.path(to: id, in: roots)!
@@ -484,7 +513,19 @@ final class MapModel {
         let sameParent = sourcePath.dropLast().elementsEqual(targetPath)
         let destinationIndex = index - (sameParent && sourcePath.last! < index ? 1 : 0)
         var moving = Self.node(at: sourcePath[...], in: roots)
-        if targetPath.count != 1 { moving.branchSide = nil }
+        if sourcePath.count == 1 {
+            // A free-position root becomes a laid-out branch. Neither its root
+            // appearance nor its former absolute subtree coordinates fit there.
+            moving.rootShape = nil
+            moving.rootFillColor = nil
+            func resetBranch(_ node: inout MapNode) {
+                node.location = nil
+                node.branchSide = nil
+                for index in node.children.indices { resetBranch(&node.children[index]) }
+            }
+            resetBranch(&moving)
+            if targetPath.count == 1 { moving.branchSide = branchSide }
+        } else if targetPath.count != 1 { moving.branchSide = nil }
         if let location {
             if let old = moving.location {
                 let dx = Double(location.x) - old.x, dy = Double(location.y) - old.y

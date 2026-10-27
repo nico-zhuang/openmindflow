@@ -11,9 +11,9 @@ enum ToolbarCompactTests {
                "Native toolbar should keep controls compact while inspector has text-only tabs")
         let defaultIDs = delegate.toolbarDefaultItemIdentifiers(toolbar)
         let expected: [NSToolbarItem.Identifier] = [
+            .init("outline"), .flexibleSpace,
             .init("new-main"), .init("new-child"), .init("new-sibling"),
-            .init("fold-node"), .init("fit-map"), .init("outline"),
-            .flexibleSpace, .init("style")
+            .init("fold-node"), .init("fit-map"), .flexibleSpace, .init("style")
         ]
         assert(defaultIDs == expected,
                "Default toolbar should expose seven grouped essentials, not duplicate Undo/Redo")

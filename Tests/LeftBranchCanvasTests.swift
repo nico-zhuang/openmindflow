@@ -12,22 +12,22 @@ import AppKit
         assert(rightRoot.start == CGPoint(x: 450, y: 110) && rightRoot.end == CGPoint(x: 520, y: 143) && rightRoot.controlX == 485)
         let leftRoot = branchConnectorEndpoints(parent: parent, child: left,
             parentIsRoot: true, goesLeft: true, baselineInset: 7)
-        assert(leftRoot.start == CGPoint(x: 300, y: 133) && leftRoot.end == CGPoint(x: 230, y: 153) && leftRoot.controlX == 265)
-        // A sole first-level left branch with descendants can have its underline below
-        // the root midpoint while still intersecting the root's left edge. Avoid the
-        // visible S-bend by attaching at the same height without moving either node.
+        assert(leftRoot.start == CGPoint(x: 300, y: 110) && leftRoot.end == CGPoint(x: 230, y: 153) && leftRoot.controlX == 265,
+               "Left and right root connectors must originate symmetrically at the root midpoint")
+        // Even with an off-center child underline, the left root exit stays vertically
+        // centered on the root rectangle, without changing the child's underline.
         let mixedRoot = CGRect(x: 300, y: 80, width: 150, height: 100)
         let leftTrunk = CGRect(x: 110, y: 105, width: 120, height: 60)
         let straightLeft = branchConnectorEndpoints(parent: mixedRoot, child: leftTrunk,
             parentIsRoot: true, goesLeft: true, baselineInset: 7)
-        assert(straightLeft.start == CGPoint(x: 300, y: 158) &&
+        assert(straightLeft.start == CGPoint(x: 300, y: 130) &&
                straightLeft.end == CGPoint(x: 230, y: 158))
         let nearLowerEdge = branchConnectorEndpoints(parent: mixedRoot,
             child: CGRect(x: 110, y: 120.1, width: 120, height: 60),
             parentIsRoot: true, goesLeft: true, baselineInset: 7)
-        assert(abs(nearLowerEdge.start.y - 173) < 0.01 &&
+        assert(abs(nearLowerEdge.start.y - mixedRoot.midY) < 0.01 &&
                abs(nearLowerEdge.end.y - 173.1) < 0.01,
-               "Crossing the root's lower attachment margin must not jump to midpoint")
+               "A moving child underline must not shift the root's centered left exit")
         let rightUnchanged = branchConnectorEndpoints(parent: mixedRoot, child: right,
             parentIsRoot: true, goesLeft: false, baselineInset: 7)
         assert(rightUnchanged.start.y == mixedRoot.midY && rightUnchanged.end.y == 143)

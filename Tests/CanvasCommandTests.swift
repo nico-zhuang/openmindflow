@@ -351,18 +351,18 @@ enum CanvasCommandTests {
                "Command-N should add and edit one main/root node")
         let toolbar = appDelegate.makeToolbar()
         let identifiers = appDelegate.toolbarDefaultItemIdentifiers(toolbar).filter { $0 != .flexibleSpace }
-        assert(identifiers.map(\.rawValue) == ["new-main", "new-child", "new-sibling", "fold-node", "fit-map", "outline", "style"])
+        assert(identifiers.map(\.rawValue) == ["outline", "new-main", "new-child", "new-sibling", "fold-node", "fit-map", "style"])
         let allowed = appDelegate.toolbarAllowedItemIdentifiers(toolbar)
         assert(allowed.contains(.init("undo")) && allowed.contains(.init("redo")),
                "Undo and Redo stay available as customizable toolbar items")
         for (index, pair) in zip(identifiers,
-                                 ["newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleOutline:", "toggleStyle:"]).enumerated() {
+                                 ["toggleOutline:", "newMainNode:", "newChild:", "newSibling:", "foldNode:", "fitMap:", "toggleStyle:"]).enumerated() {
             let (identifier, action) = pair
             let item = appDelegate.toolbar(toolbar, itemForItemIdentifier: identifier,
                                            willBeInsertedIntoToolbar: true)!
             assert(item.target as AnyObject? === appDelegate)
             assert(item.action.map(NSStringFromSelector) == action)
-            assert(item.label == ["New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Outline", "Show/Hide Style"][index])
+            assert(item.label == ["Show/Hide Outline", "New Main Node", "New Child", "New Sibling", "Fold/Unfold", "Fit Map", "Show/Hide Style"][index])
             assert(!(item.toolTip ?? "").isEmpty)
         }
         func selectedAppearance(_ menu: NSMenu) -> [String] {
@@ -470,12 +470,14 @@ enum CanvasCommandTests {
         let targetBox = repelRows.first { $0.node.id == repelTarget.id }!.frame
         let repelStart = CGPoint(x: sourceBox.midX + 80, y: repelCanvas.bounds.height - sourceBox.midY - 90)
         let nearTarget = CGPoint(x: targetBox.midX + 80, y: repelCanvas.bounds.height - targetBox.minY + 1 - 90)
+        let targetBeforeHover = repelCanvas.frameForAccessibility(repelTarget.id)!
         repelCanvas.mouseDown(with: mouse(.leftMouseDown, repelStart))
         repelCanvas.mouseDragged(with: mouse(.leftMouseDragged, nearTarget))
         guard let movingNear = repelCanvas.frameForAccessibility(repelSource.id),
               let targetNear = repelCanvas.frameForAccessibility(repelTarget.id),
-              !movingNear.intersects(targetNear), repelModel.roots[0].children.count == 2 else {
-            fputs("Nearby sibling cards must repel without overlap or early reparenting\n", stderr); exit(1)
+              movingNear.intersects(targetNear), targetNear == targetBeforeHover,
+              repelModel.roots[0].children.count == 2 else {
+            fputs("Hover may overlap temporarily; the nearby target must stay in place until release\n", stderr); exit(1)
         }
         repelCanvas.mouseUp(with: mouse(.leftMouseUp, nearTarget))
         let edgeStart = CGPoint(x: sourceBox.maxX - 5 + 80, y: repelStart.y)
@@ -509,15 +511,18 @@ enum CanvasCommandTests {
                                  y: childCanvas.bounds.height - childTargetBox.midY - 90 + 10)
         childCanvas.mouseDown(with: mouse(.leftMouseDown, childStart))
         childCanvas.mouseDragged(with: mouse(.leftMouseDragged, childHover))
-        let childFrames = childSource.children.compactMap { childCanvas.frameForAccessibility($0.id) }
-        let targetFrames = childParent.children.compactMap { childCanvas.frameForAccessibility($0.id) }
-        if childFrames.contains(where: { moved in targetFrames.contains(where: moved.intersects) }) {
-            fputs("Child-hover may overlap its target card, not an unrelated descendant\n", stderr); exit(1)
-        }
+        assert(childModel.roots[0].children.map(\.id) == [childSource.id, childParent.id],
+               "Temporary drag overlap must not mutate the tree before release")
+        // During drag the held branch may overlap a neighbor; only the committed
+        // layout has to make every separate node readable.
         childCanvas.mouseUp(with: mouse(.leftMouseUp, childHover))
         assert(childModel.roots[0].children.map(\.id) == [childParent.id] &&
                childModel.roots[0].children[0].children.last?.id == childSource.id,
-               "Descendant non-overlap must be checked during a real child-drop preview")
+               "A child drop must commit the previewed target")
+        let childFrames = childSource.children.compactMap { childCanvas.frameForAccessibility($0.id) }
+        let targetFrames = childParent.children.compactMap { childCanvas.frameForAccessibility($0.id) }
+        assert(!childFrames.contains(where: { moved in targetFrames.contains(where: moved.intersects) }),
+               "Separate descendants must not hide each other after committing the drop")
         childWindow.orderOut(nil)
         let linkedLeaf = MapNode(id: UUID(), title: "Linked leaf", children: [], folded: false)
         let linkedBranch = MapNode(id: UUID(), title: "Linked branch",

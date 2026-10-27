@@ -37,18 +37,44 @@ enum DragTargetLatchTests {
                 CGPoint(x: sourceBox.midX, y: pinnedBox.minY + 5)))
             let pinnedAfter = view.frameForAccessibility(pinned.id)!
             let nearbyAfter = view.frameForAccessibility(nearby.id)!
-            guard pinnedAfter == pinnedBefore,
-                  pinnedAfter.maxY + 8 <= nearbyAfter.minY + 0.01,
-                  nearbyAfter.midY > nearbyBefore.midY + 1, map.roots[0].children.count == 3 else {
-                fputs("Pair sweep must move unpinned collider, not target: pinned \(pinnedBefore) -> \(pinnedAfter), collider \(nearbyBefore) -> \(nearbyAfter)\n", stderr); exit(1)
+            guard pinnedAfter == pinnedBefore, nearbyAfter == nearbyBefore,
+                  map.roots[0].children.count == 3 else {
+                fputs("Dragging must not shove the visible target or adjacent node: target \(pinnedBefore) -> \(pinnedAfter), neighbor \(nearbyBefore) -> \(nearbyAfter)\n", stderr); exit(1)
             }
             view.advanceSpring(at: ProcessInfo.processInfo.systemUptime + 0.12)
             guard view.frameForAccessibility(pinned.id)! == pinnedBefore,
-                  pinnedBefore.maxY + 8 <= view.frameForAccessibility(nearby.id)!.minY + 0.01 else {
-                fputs("Subsequent spring ticks must preserve pinned target and pair separation\n", stderr); exit(1)
+                  view.frameForAccessibility(nearby.id)! == nearbyBefore else {
+                fputs("Neither target nor neighbor should move under a stationary pointer\n", stderr); exit(1)
             }
             view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: sourceBox.midX, y: pinnedBox.minY + 5)))
             offscreen.orderOut(nil)
+        }
+        do {
+            let source = MapNode(id: UUID(), title: "Source", children: [], folded: false)
+            let neighbor = MapNode(id: UUID(), title: "Static neighbor", children: [], folded: false)
+            let root = MapNode(id: UUID(), title: "Root", children: [source, neighbor], folded: false)
+            let map = MapModel(roots: [root], selected: source.id)
+            let view = MapCanvas(model: map)
+            view.frame = CGRect(x: 0, y: 0, width: 1100, height: 700)
+            let frames = Dictionary(uniqueKeysWithValues: mapLayout(map.roots).map { ($0.node.id, $0.frame) })
+            let before = view.frameForAccessibility(neighbor.id)!
+            func event(_ kind: NSEvent.EventType, _ world: CGPoint) -> NSEvent {
+                NSEvent.mouseEvent(with: kind,
+                    location: CGPoint(x: world.x + 80, y: view.bounds.height - world.y - 90),
+                    modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                    eventNumber: 1, clickCount: 1, pressure: 1)!
+            }
+            let start = CGPoint(x: frames[source.id]!.midX, y: frames[source.id]!.midY)
+            let nearEdge = CGPoint(x: frames[neighbor.id]!.minX - 3, y: frames[neighbor.id]!.midY)
+            view.mouseDown(with: event(.leftMouseDown, start))
+            view.mouseDragged(with: event(.leftMouseDragged, nearEdge))
+            guard view.frameForAccessibility(neighbor.id)! == before else {
+                fputs("Invalid hover must not repel an adjacent node\n", stderr); exit(1)
+            }
+            view.mouseUp(with: event(.leftMouseUp, nearEdge))
+            guard map.roots == [root] && view.frameForAccessibility(neighbor.id)! == before else {
+                fputs("Invalid neighboring drop must not move or reparent anything\n", stderr); exit(1)
+            }
         }
         do {
             let b = MapNode(id: UUID(), title: "B", children: [], folded: false)
