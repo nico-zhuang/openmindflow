@@ -52,6 +52,10 @@ import AppKit
             let actions = a.tabStrip.accessibilityCustomActions() ?? []
             assert(actions.map(\.name) == [horizontal, vertical], "orientation must be available through keyboard-accessible AX actions")
             assert(a.tabStrip.acceptsFirstResponder, "tab strip must accept keyboard focus")
+            a.window.recalculateKeyViewLoop()
+            assert(a.tabStrip.canBecomeKeyView && a.tabStrip.nextValidKeyView != nil &&
+                   a.tabStrip.previousValidKeyView != nil,
+                   "tab strip must belong to the synthetic AppKit key-view loop")
             assert(!a.tabStrip.accessibilityPerformShowMenu(), "never open native menus from an unshown fixture")
         }
         check("en", untitled: "Untitled", modified: "Modified", close: "Close Tab", new: "New Tab",
