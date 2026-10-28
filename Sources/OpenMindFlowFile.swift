@@ -11,7 +11,9 @@ enum NativeMapFile {
     }
 
     static func normalizedTabTitle(_ raw: String) -> String? {
-        guard !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        guard !raw.unicodeScalars.contains(where: {
+            CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0)
+        }) else { return nil }
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
         guard !title.isEmpty, title.count <= 128, title.utf8.count <= 255 else { return nil }
         return title
