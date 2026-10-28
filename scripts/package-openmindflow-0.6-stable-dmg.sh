@@ -93,14 +93,38 @@ try:
         ["/usr/sbin/diskutil", "info", "-plist", device], stderr=subprocess.DEVNULL))
     if disk.get("DeviceNode") != device or disk.get("WholeDisk") is not True or disk.get("BusProtocol") != "Disk Image":
         sys.exit(2)
-    # Attach reports a mounted volume (usually diskNsM), while the image
-    # attachment table begins with its whole disk (diskN).
+    # Attach reports a mounted volume; APFS can synthesize diskMsN from
+    # physical store diskNsN, so a direct diskN prefix is not always valid.
     volumes = [entity.get("dev-entry", "") for entity in entities
                if entity.get("mount-point") == sys.argv[2]]
-    if len(volumes) != 1 or not re.fullmatch(re.escape(device) + r"(?:s[0-9]+)?", volumes[0]):
+    if len(volumes) != 1:
         sys.exit(2)
-    print(volumes[0])
-except (KeyError, ValueError, OSError, subprocess.CalledProcessError):
+    volume = volumes[0]
+    if not re.fullmatch(re.escape(device) + r"(?:s[0-9]+)?", volume):
+        if not re.fullmatch(r"/dev/disk[0-9]+s[0-9]+", volume):
+            sys.exit(2)
+        mounted = plistlib.loads(subprocess.check_output(
+            ["/usr/sbin/diskutil", "info", "-plist", volume], stderr=subprocess.DEVNULL))
+        stores = mounted.get("APFSPhysicalStores", [])
+        container = mounted.get("APFSContainerReference", "")
+        if (mounted.get("DeviceNode") != volume or mounted.get("MountPoint") != sys.argv[2]
+                or mounted.get("BusProtocol") != "Disk Image" or len(stores) != 1
+                or not re.fullmatch(r"disk[0-9]+", container)
+                or "/dev/" + container not in [e.get("dev-entry") for e in entities]):
+            sys.exit(2)
+        store = stores[0].get("APFSPhysicalStore", "")
+        if (not re.fullmatch(re.escape(device.removeprefix("/dev/")) + r"s[0-9]+", store)
+                or "/dev/" + store not in [e.get("dev-entry") for e in entities]):
+            sys.exit(2)
+        physical = plistlib.loads(subprocess.check_output(
+            ["/usr/sbin/diskutil", "info", "-plist", "/dev/" + store], stderr=subprocess.DEVNULL))
+        if (physical.get("DeviceNode") != "/dev/" + store
+                or physical.get("ParentWholeDisk") != device.removeprefix("/dev/")
+                or physical.get("BusProtocol") != "Disk Image"
+                or physical.get("APFSContainerReference") != container):
+            sys.exit(2)
+    print(volume)
+except (AttributeError, IndexError, KeyError, TypeError, ValueError, OSError, subprocess.CalledProcessError):
     sys.exit(2)
 ' "$dmg" "$mountpoint" < "$infoPlist"
 }

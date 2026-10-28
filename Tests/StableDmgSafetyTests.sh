@@ -26,6 +26,74 @@ for literal in \
   /usr/bin/grep -Fq -- "$literal" "$packager" || fail "contract literal missing: $literal"
 done
 
+# Exercise the real embedded image-table parser with isolated read-only plist fixtures.
+# No hdiutil attach/detach, diskutil calls, or image creation occurs: diskutil output
+# is replaced only inside this fixture interpreter, not in the packager.
+/usr/bin/python3 - "$packager" <<'PY'
+import pathlib, plistlib, re, subprocess, sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+match = re.search(r"  /usr/bin/python3 -c '\n(.*?)\n' \"\$dmg\" \"\$mountpoint\" < \"\$infoPlist\"", source, re.S)
+if match is None:
+    raise SystemExit('FAIL: embedded image parser not found')
+parser = match.group(1)
+image = '/private/tmp/openmindflow-local-Test/OpenMindFlow-Stable-0.6-test.dmg'
+mountpoint = '/private/tmp/openmindflow-local-Test/.openmindflow-stable-0.6-verify-mount-Test'
+whole = '/dev/disk6'
+store = '/dev/disk6s1'
+volume = '/dev/disk7s1'
+
+def entity(device, mount=None):
+    result = {'dev-entry': device}
+    if mount is not None:
+        result['mount-point'] = mount
+    return result
+
+def probe(name, entities, disks, expected_status, expected_device=''):
+    table = plistlib.dumps({'images': [{'image-path': image, 'system-entities': entities}]})
+    # Shadow diskutil only in this Python interpreter. Unexpected devices fail
+    # closed, exactly as a real missing diskutil response would.
+    prelude = '''import plistlib, subprocess
+_real_check_output = subprocess.check_output
+def _fixture_diskutil(args, **kwargs):
+    if args[:3] != ['/usr/sbin/diskutil', 'info', '-plist'] or args[3] not in DISKS:
+        raise subprocess.CalledProcessError(1, args)
+    return plistlib.dumps(DISKS[args[3]])
+subprocess.check_output = _fixture_diskutil
+'''
+    program = 'DISKS = ' + repr(disks) + '\n' + prelude + parser
+    result = subprocess.run([sys.executable, '-c', program, image, mountpoint],
+                            input=table, capture_output=True)
+    if result.returncode != expected_status or result.stdout.decode().strip() != expected_device:
+        raise SystemExit(f'FAIL: {name}: expected exit {expected_status}, device {expected_device!r}; '
+                         f'got exit {result.returncode}, stdout {result.stdout!r}, stderr {result.stderr!r}')
+    print(f'PASS: {name} parser fixture (exit {result.returncode})')
+
+whole_info = {'DeviceNode': whole, 'WholeDisk': True, 'BusProtocol': 'Disk Image'}
+physical_info = {'DeviceNode': store, 'ParentWholeDisk': 'disk6',
+                 'APFSContainerReference': 'disk7', 'BusProtocol': 'Disk Image'}
+volume_info = {'DeviceNode': volume, 'MountPoint': mountpoint, 'BusProtocol': 'Disk Image',
+               'APFSContainerReference': 'disk7',
+               'APFSPhysicalStores': [{'APFSPhysicalStore': 'disk6s1'}]}
+probe('owned synthesized APFS volume',
+      [entity(whole), entity(store), entity('/dev/disk7'), entity(volume, mountpoint)],
+      {whole: whole_info, store: physical_info, volume: volume_info}, 0, volume)
+probe('unrelated APFS physical store rejected',
+      [entity(whole), entity(store), entity('/dev/disk7'), entity(volume, mountpoint)],
+      {whole: whole_info, store: physical_info,
+       volume: dict(volume_info, APFSPhysicalStores=[{'APFSPhysicalStore': 'disk9s1'}])}, 2)
+probe('malformed APFS store rejected ambiguously',
+      [entity(whole), entity(store), entity('/dev/disk7'), entity(volume, mountpoint)],
+      {whole: whole_info, store: physical_info,
+       volume: dict(volume_info, APFSPhysicalStores=['disk6s1'])}, 2)
+probe('unrelated APFS container rejected',
+      [entity(whole), entity(store), entity('/dev/disk7'), entity(volume, mountpoint)],
+      {whole: whole_info, store: dict(physical_info, APFSContainerReference='disk9'),
+       volume: volume_info}, 2)
+probe('direct disk partition preserved',
+      [entity(whole), entity(store, mountpoint)], {whole: whole_info}, 0, store)
+PY
+
 # Fixtures intentionally remain under this self-created private directory; never remove others' files.
 fixture="$(mktemp -d /private/tmp/openmindflow-local-XXXXXXXX)"
 [[ "$fixture" =~ ^/private/tmp/openmindflow-local-[A-Za-z0-9]+$ &&
