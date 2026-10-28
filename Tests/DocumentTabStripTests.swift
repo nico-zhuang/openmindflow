@@ -75,13 +75,78 @@ import AppKit
         assert(first.canvas.model.roots.count == rootCount && first.dirty)
         strip.onSelect(strip.id(for: newest))
         assert(a.active === newest && first.dirty)
+        // Background save/dirty changes update its tab, never the active window title.
+        let activeTitle = a.window.title
+        let backgroundURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("task79-background-\(UUID()).mflw")
+        defer { try? FileManager.default.removeItem(at: backgroundURL) }
+        try! first.saveCurrentMap(to: backgroundURL)
+        first.canvas.addMainNode()
+        first.onTitleChange?()
+        let backgroundButton = strip.subviews.compactMap { $0.subviews.first as? NSButton }
+            .first { $0.title.contains(backgroundURL.lastPathComponent) }
+        assert(backgroundButton?.title.contains("•") == true && a.window.title == activeTitle,
+               "Inactive live document must refresh its tab without replacing the active window title")
+        let detachedTitle = a.window.title
+        first.window = nil
+        first.onTitleChange?()
+        assert(a.window.title == detachedTitle, "Detached document cannot change registered window title")
+        first.window = a.window
         newest.inspector.noteTextView.string = String(repeating: "界", count: 22_000)
         strip.onSelect(strip.id(for: first))
         assert(a.active === newest, "Invalid pending editor must prevent tab selection")
         newest.inspector.noteTextView.string = ""
+        let staleClose = strip.subviews.compactMap { $0.subviews.last as? NSButton }.last!
         strip.onClose(strip.id(for: newest))
         assert(a.documents.count == 1 && a.active === first)
+        assert(NSApp.sendAction(staleClose.action!, to: staleClose.target, from: staleClose))
+        assert(a.documents.count == 1 && a.active === first,
+               "Retained close button from a removed row must not close another document")
+        let staleSelect = strip.subviews.compactMap { $0.subviews.first as? NSButton }.first!
+        a.refreshTabs()
+        assert(NSApp.sendAction(staleSelect.action!, to: staleSelect.target, from: staleSelect))
+        assert(a.documents.count == 1 && a.active === first,
+               "Detached select button cannot resolve an obsolete row")
+        let findItem = NSApp.mainMenu!.item(withTitle: "Edit")!.submenu!.item(withTitle: "Find…")
+        app.foregroundWindowForTesting = a.window
+        app.selectUnshownSessionForTesting(first)
+        if let findItem { assert(NSApp.sendAction(findItem.action!, to: findItem.target, from: findItem)) }
+        else { fatalError("Missing Find menu item") }
+        let findPanel = first.findWindow!
+        app.foregroundWindowForTesting = findPanel
+        app.mainWindowForTesting = b.window
+        let beforeFind = a.documents.count
+        app.newTab(nil)
+        assert(a.documents.count == beforeFind + 1 && b.documents.count == 1,
+               "Key Find panel targets its active live owner, not a different main document")
+        let findCreated = a.active!
+        app.closeTab(nil)
+        assert(a.documents.contains(where: { $0 === first }) && a.documents.contains(where: { $0 === findCreated }),
+               "Find panel may close only when its owning document is still active")
+        let settingsItem = NSApp.mainMenu!.items.first!.submenu!.item(withTitle: "Settings…")!
+        assert(NSApp.sendAction(settingsItem.action!, to: settingsItem.target, from: settingsItem))
+        let settings = NSApp.windows.first { $0.title == "Settings" }!
+        app.foregroundWindowForTesting = settings
+        app.mainWindowForTesting = nil
+        let beforeSettings = app.windowSessions.count
+        app.newTab(nil)
+        app.closeTab(nil)
+        assert(app.windowSessions.count == beforeSettings && a.documents.count == beforeFind + 1 &&
+               b.documents.count == 1, "Settings without live main document must fail closed")
+        app.mainWindowForTesting = b.window
+        app.newTab(nil)
+        assert(b.documents.count == 2 && a.documents.count == beforeFind + 1,
+               "Settings may use only an explicitly live main document")
+        app.closeTab(nil)
+        assert(b.documents.count == 1, "Command-W from Settings with live main document closes its tab")
+        app.foregroundWindowForTesting = nil
+        app.mainWindowForTesting = nil
         assert(!a.window.isVisible && !b.window.isVisible && !c.window.isVisible)
+        a.window.close()
+        let closedCount = a.documents.count
+        strip.onNewTab()
+        assert(!app.windowSessions.contains(where: { $0 === a }) && a.documents.count == closedCount,
+               "Retained plus callback must not create a ghost tab on a closed window")
         print("horizontal/vertical layout, viewport anchor, tab identity, editor rejection, plus and menu bindings passed")
     }
 }

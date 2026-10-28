@@ -39,6 +39,8 @@ final class DocumentTabStrip: NSView {
     private func rebuild() {
         for row in rows { row.view.removeFromSuperview() }
         rows.removeAll()
+        let live = Set(documents.map(ObjectIdentifier.init))
+        identifiers = identifiers.filter { live.contains($0.key) }
         for document in documents {
             let id = id(for: document)
             let row = NSView(frame: .zero)
@@ -46,14 +48,12 @@ final class DocumentTabStrip: NSView {
             let title = NSButton(title: name + (document.dirty ? " •" : ""), target: self,
                                  action: #selector(selectTab(_:)))
             title.bezelStyle = .recessed
-            title.tag = documents.firstIndex(where: { $0 === document }) ?? 0
             title.setAccessibilityLabel(name + (document.dirty ? ", " + L10n.text("Modified", defaults: defaults) : ""))
             title.setAccessibilityRole(.radioButton)
             title.state = selectedID == id ? .on : .off
             row.addSubview(title)
             let close = NSButton(title: "×", target: self, action: #selector(closeTab(_:)))
             close.bezelStyle = .recessed
-            close.tag = title.tag
             close.setAccessibilityLabel(L10n.text("Close Tab", defaults: defaults) + ": " + name)
             row.addSubview(close)
             addSubview(row)
@@ -80,8 +80,21 @@ final class DocumentTabStrip: NSView {
         let coordinate = orientation == .horizontal ? point.x : point.y
         return max(0, min(documents.count, Int(max(0, coordinate) / (orientation == .horizontal ? 154 : 35) + 0.5)))
     }
-    @objc private func selectTab(_ sender: NSButton) { onSelect(id(for: documents[sender.tag])) }
-    @objc private func closeTab(_ sender: NSButton) { onClose(id(for: documents[sender.tag])) }
+    private func liveDocument(for sender: NSButton, controlIndex: Int) -> DocumentSession? {
+        guard let row = rows.first(where: {
+            $0.view === sender.superview && $0.view.superview === self &&
+            $0.view.subviews.indices.contains(controlIndex) && $0.view.subviews[controlIndex] === sender
+        }), documents.contains(where: { $0 === row.document }) else { return nil }
+        return row.document
+    }
+    @objc private func selectTab(_ sender: NSButton) {
+        guard let document = liveDocument(for: sender, controlIndex: 0) else { return }
+        onSelect(id(for: document))
+    }
+    @objc private func closeTab(_ sender: NSButton) {
+        guard let document = liveDocument(for: sender, controlIndex: 1) else { return }
+        onClose(id(for: document))
+    }
     @objc private func addTab(_ sender: NSButton) { onNewTab() }
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()

@@ -2341,6 +2341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     private var fixtureAnchor: DocumentSession?
     var beforeGuardedSaveWriteForTesting: (() throws -> Void)?
     var foregroundWindowForTesting: NSWindow?
+    var mainWindowForTesting: NSWindow?
     var afterSavePanelForTesting: ((DocumentSession) -> URL?)?
     func saveExplicitSessionForTesting(_ session: DocumentSession, chooseDestination: Bool = false) -> Bool {
         save(chooseDestination: chooseDestination, for: session)
@@ -2449,10 +2450,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if register { session.window = window }
         session.onTitleChange = { [weak self, weak session] in
             guard let self, let session, let window = session.window else { return }
-            if let owner = self.windowSessions.first(where: { $0.window === window }),
-               owner.active !== session { return }
-            window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
-            self.windowSessions.first(where: { $0.window === window })?.refreshTabs()
+            if let owner = self.windowSessions.first(where: { $0.window === window }) {
+                guard owner.documents.contains(where: { $0 === session }) else { return }
+                if owner.active === session {
+                    window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+                }
+                owner.refreshTabs()
+            } else {
+                // Standalone fixture sessions retain their historical title behavior.
+                guard self.sessionsByWindow[ObjectIdentifier(window)] === session else { return }
+                window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+            }
         }
         session.onFindChange = { [weak self, weak session] in
             guard let self, let session, self.isLiveSession(session) else { return }
@@ -2534,7 +2542,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     func makeUnshownWindowSession() -> WindowSession { createWindowSession() }
     #endif
     private func createTab(in owner: WindowSession) {
-        guard owner.active?.commitPendingEditors() ?? true else { return }
+        guard windowSessions.contains(where: { $0 === owner }),
+              owner.active?.commitPendingEditors() ?? true else { return }
         let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
         let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         canvas.onImageError = { [weak self] error in self?.alert("Could not import image", detail: error.localizedDescription) }
@@ -2545,16 +2554,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         owner.window.contentView?.layoutSubtreeIfNeeded()
         canvas.fitMapInView()
     }
+    /// Menu tab actions use only a live foreground document, never a cached session.
+    private var menuTabOwner: WindowSession? {
+        #if HEADLESS_TEST
+        let key = foregroundWindowForTesting ?? NSApp.keyWindow
+        let main = mainWindowForTesting ?? NSApp.mainWindow
+        #else
+        let key = NSApp.keyWindow
+        let main = NSApp.mainWindow
+        #endif
+        func liveOwner(_ window: NSWindow?) -> WindowSession? {
+            windowSessions.first { owner in
+                owner.window === window && owner.active.map { document in
+                    document.window === owner.window && owner.documents.contains { $0 === document }
+                } == true
+            }
+        }
+        if let owner = liveOwner(key) { return owner }
+        if let panel = key as? NSPanel,
+           let session = windowSessions.flatMap(\.documents).first(where: { $0.findWindow === panel }) {
+            guard let owner = liveOwner(session.window), owner.active === session else { return nil }
+            return owner
+        }
+        // Settings and other floating panels may use a live main document, not a stale cached owner.
+        return liveOwner(main)
+    }
     @objc func newTab(_ sender: Any?) {
-        guard let owner = windowSessions.first(where: { $0.window === foregroundDocumentWindow }) else {
-            newWindow(sender)
+        guard let owner = menuTabOwner else {
+            if windowSessions.isEmpty { newWindow(sender) }
             return
         }
         createTab(in: owner)
     }
     @objc func closeTab(_ sender: Any?) {
-        guard let owner = windowSessions.first(where: { $0.window === foregroundDocumentWindow }),
-              let document = owner.active else { return }
+        guard let owner = menuTabOwner, let document = owner.active else { return }
         _ = closeDocument(document, in: owner)
     }
     @objc private func newWindow(_ sender: Any?) {
