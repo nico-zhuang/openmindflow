@@ -26,6 +26,7 @@ final class DocumentTabStrip: NSView {
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .tabGroup }
     func id(for document: DocumentSession) -> UUID {
@@ -101,11 +102,41 @@ final class DocumentTabStrip: NSView {
         onClose(id(for: document))
     }
     @objc private func addTab(_ sender: NSButton) { onNewTab() }
-    override func menu(for event: NSEvent) -> NSMenu? {
+    private var liveOwner: WindowSession? {
+        guard let owner = window?.delegate as? WindowSession,
+              owner.isTransferLive, owner.tabStrip === self else { return nil }
+        return owner
+    }
+    @discardableResult private func requestOrientation(_ value: DocumentTabOrientation) -> Bool {
+        guard liveOwner != nil else { return false }
+        onOrientationChange(value)
+        return true
+    }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        [DocumentTabOrientation.horizontal, .vertical].map { choice in
+            NSAccessibilityCustomAction(name: L10n.text(choice == .horizontal ? "Horizontal Tabs" : "Vertical Tabs", defaults: defaults)) { [weak self] in
+                self?.requestOrientation(choice) ?? false
+            }
+        }
+    }
+    override func accessibilityPerformShowMenu() -> Bool {
+        guard liveOwner != nil, let window, window.isVisible, window.isKeyWindow,
+              window.attachedSheet == nil, NSApp.modalWindow == nil else { return false }
+        return orientationMenu().popUp(positioning: nil, at: NSPoint(x: bounds.midX, y: bounds.midY), in: self)
+    }
+    override func keyDown(with event: NSEvent) {
+        if window?.firstResponder === self, event.keyCode == 109,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.shift],
+           accessibilityPerformShowMenu() { return }
+        super.keyDown(with: event)
+    }
+    override func menu(for event: NSEvent) -> NSMenu? { orientationMenu() }
+    private func orientationMenu() -> NSMenu {
         let menu = NSMenu()
         for choice in [DocumentTabOrientation.horizontal, .vertical] {
             let item = menu.addItem(withTitle: L10n.text(choice == .horizontal ? "Horizontal Tabs" : "Vertical Tabs", defaults: defaults),
-                                    action: #selector(selectOrientation(_:)), keyEquivalent: "")
+                                    action: #selector(selectOrientation(_:)),
+                                     keyEquivalent: "")
             item.target = self
             item.representedObject = choice.rawValue
             item.state = choice == orientation ? .on : .off
@@ -115,7 +146,7 @@ final class DocumentTabStrip: NSView {
     @objc private func selectOrientation(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let value = DocumentTabOrientation(rawValue: raw) else { return }
-        onOrientationChange(value)
+        _ = requestOrientation(value)
     }
 }
 
