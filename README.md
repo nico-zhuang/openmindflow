@@ -1,5 +1,12 @@
 # OpenMindFlow — 独立 macOS 思维导图编辑器
 
+## 0.5.0 多窗口标签候选（独立于 0.4；发布检查待 Lead 完成）
+
+- 独立构建/打包脚本使用 bundle ID `local.openmindflow.tabs.20261027`、版本 `0.5.0`／build `6`，保留 `.mflw` 的 `local.openmindflow.document` Editor 关联和 SHA-256 为 `3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3` 的图标。仅在新建的私有 `/private/tmp/openmindflow-local-*` 目录生成候选，绝不覆盖 0.4 原包。当前不在此处宣称已经发表 0.5 DMG/ZIP；后续只由独立审查和最终封装负责人验证并交付。ad-hoc 签名只能校验字节完整性，不证明发布者身份、代码来源或公证。
+- **用户已在 0.5 签名预览中亲手验证三项操作：**⌘N 后跨窗口拖入标签、拖出到桌面松手产生另一独立窗口、Escape 取消后再次拖动成功。这些手测不覆盖同窗口标签重排、关闭源窗口最后一个标签的行为、实际完整键盘访问（FKA）／Shift-F10／VoiceOver、Finder 双击文稿，或原 MindNode 应用对导出副本的接受；以上仍待分别验收，不将离屏/合成测试冒充实体交互验证，也不宣称功能完整。
+- 默认 `.mflw` 使用 `OMFLW001` 魔数、长度和 SHA-256 校验及二进制 property list 负载，**并非换后缀 JSON**。`.mindnode` 导入仅针对支持的 v9 二进制 plist 包/文件，原件不被自动保存覆盖；单独的导出副本仅允许可保真的有限改动，不支持的新增节点等编辑会拒绝 `.mindnode` 导出，但仍可另存 `.mflw`。合成文件经自己的 importer 复读不等于真实 MindNode 应用接受，不能承诺所有未知改动无损转换。
+- 以下 0.4 段落仅记载历史候选当时的功能和验收状态，其中“当前仍是单窗口”只对 **0.4** 成立，不应解读为本节 0.5 的现状。
+
 ## 0.4.0 原生文稿独立候选（2026-10-27；离屏验证完成，人工验收待做）
 
 - **本机独立签名候选：**[App](build/OpenMindFlow-NativeFormatReview-20261027.app)、[DMG](dist/OpenMindFlow-0.4.0-NativeFormatReview-20261027.dmg)（SHA-256 `cf7fe6f3628602621efdb809fc743bad8213fbb16fa28a878863bbd164633e36`）、[ZIP](dist/OpenMindFlow-0.4.0-NativeFormatReview-20261027.zip)（SHA-256 `ee063b4b48c701306c3c0bbb27a121ac2fb70ee2a5ede3048f7c3101922ae526`）。可执行文件 SHA-256 `3a2b40864031739aef177cae38e033ad36e06b3e1da5a8030dd98fb04ee883e9`；bundle ID `local.openmindflow.nativeformat.20261027`、版本 `0.4.0`／build `5`、最低 macOS 26。`codesign --verify --deep --strict`、镜像 `hdiutil verify`、只读非 Finder 挂载检查、ZIP 解压包签名/可执行文件字节对比已通过。此包为本机 **ad-hoc** 签名，非 Developer ID 签名/公证或正式可分发版本。
