@@ -1,3 +1,31 @@
+# OpenMindFlow 0.6 Task 2 — Release checker
+
+**Status: DONE_WITH_CONCERNS** — checker and injected tests pass; `Sources/App.swift` remains owned by the concurrent UI agent and still calls the obsolete API as of this task's verification. Lead must integrate and run the full application build after that owner updates the call. Board task-87 remains **in progress** for Lead review; Lead was asked to claim its latest revision because this delegated toolset exposes no board operation. No files staged or committed.
+
+## Scope
+
+Modified only `Sources/ReleaseChecker.swift` and `Tests/ReleaseCheckerTests.swift` for implementation/tests, and this report. Did not edit the app, tab strip, build scripts, docs, user documents or authentication. Existing unrelated historical Task 2 evidence below is retained verbatim. `git status --short` also showed another agent's untracked `Tests/TabStripSurfaceTests.swift`, not owned or touched here.
+
+## TDD RED / GREEN
+
+- **RED** after replacing the old single-object tests with release-array cases: `swiftc Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift -o /tmp/openmindflow-release-task87-tests` → exit **1**, compiler diagnostics `cannot find type 'ReleaseCheckOutcome' in scope`, `cannot find type 'ReleaseChannel' in scope`, old `check(currentVersion:completion:)` rejects `channel:`, and missing `ReleaseChecker.releasesPage`. These are missing-interface failures, not syntax errors.
+- **GREEN** after checker implementation: `swiftc Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift -o /tmp/openmindflow-release-task87-tests && /tmp/openmindflow-release-task87-tests` → exit **0**, `release list channels, semver, restrictions, trust boundaries and one-shot tests passed`. Repeated after extra numeric Beta test; exit **0** with the same output. `git diff --check -- Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift .superpowers/sdd/task-2-report.md` → exit **0** (no diagnostics).
+
+## Behavior verified and caveats
+
+- Exact HTTPS GitHub Release list endpoint with `?per_page=30`, no cookies, 10-second request timeout, and canonical `releasesPage`. Injected fetch retained. Default live fetch uses ephemeral cookie-free session, explicitly rejects redirects, and cancels streaming response once 128 KiB is exceeded; callbacks are one-shot.
+- Stable excludes prereleases; Beta includes both channels; numeric core and Beta ordinal comparison selects highest valid release regardless of list order, with stable final outranking same-core Beta. Rejects malformed/overflow/leading-zero versions and metadata type errors; drafts, mismatched tag/prerelease and noncanonical Release URLs cannot win. Empty/ineligible list reports `noPublishedRelease`, eligible but not newer reports `upToDate`, 403/404 report `accessRestricted`; all other HTTP/redirect/response-URL failures do not claim up-to-date.
+- Tests cover malicious URLs, invalid responses, oversized body/list, shuffled releases, numeric Beta ordering, current Beta downgrade prevention and duplicate callbacks. Live private GitHub access is deliberately not tested anonymously; no token or auto-install. Full app build **not claimed** while concurrent `App.swift` owner has not yet migrated the old checker call to the new channel/outcome API.
+
+## Important Task 2 reviewer finding — real URLSession delegate coverage
+
+- Reviewer identified that the synchronous injected-fetch assertions above never instantiated `BoundedReleaseFetch`. Added `ReleaseFixtureProtocol` with `URLSessionConfiguration.ephemeral.protocolClasses` and an internal `ReleaseChecker.sessionFetch(configuration:onRedirect:)` factory; the default live transport delegates to that same factory. The public `ReleaseChannel`, `ReleaseCheckOutcome`, and `check(currentVersion:channel:completion:)` interfaces are unchanged. Fixture intercepts requests in-process, never contacts GitHub, and uses no credentials or UI.
+- **Test-first RED:** `swiftc Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift -o /tmp/openmindflow-release-task87-delegate-tests && /tmp/openmindflow-release-task87-delegate-tests` → exit **1**, `type 'ReleaseChecker' has no member 'sessionFetch'` (with cascading `.stable` inference diagnostic). A later assertion-first redirect-observer step produced exit **1**, `extra argument 'onRedirect' in call`. An initial protocol redirect fixture hung (exit **133** after the 3-second guard) even though diagnostic instrumentation confirmed the real `willPerformHTTPRedirection` delegate was invoked; completing the URLProtocol load after reporting its redirect resolved that fixture-specific stall. Temporary diagnostic prints were removed.
+- The new tests assert the normal in-process response returns `.newer`, the real redirect delegate is invoked exactly once and the redirected URL is never fetched, and a streamed first **128 KiB** chunk plus one additional byte produces `.tooLarge` and calls `stopLoading` on the held transport. A bounded second-completion wait catches duplicate callbacks after redirect/cancel cleanup. **Mutation RED:** temporarily changing the redirect delegate's `completionHandler(nil)` to `completionHandler(request)` and rerunning the exact command failed with `Assertion failed: Delegate must not follow redirect` (exit **133**); the rejection was restored before final verification.
+- **GREEN:** `swiftc Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift -o /tmp/openmindflow-release-task87-delegate-tests && /tmp/openmindflow-release-task87-delegate-tests` → exit **0**, stdout `release list channels, semver, restrictions, trust boundaries and one-shot tests passed`. `git diff --check -- Sources/ReleaseChecker.swift Tests/ReleaseCheckerTests.swift .superpowers/sdd/task-2-report.md` → exit **0**, no stdout. No full app build claimed: concurrent `Sources/App.swift` integration remains Lead/app owner responsibility. No staging or commits.
+
+---
+
 # Task 2 — native editor evidence
 
 Branch: `feature/native-editor`. Scope: independent AppKit application; no original application launched, no REA MCP, no changes to `docs/static-evidence.md` or the import plan.
