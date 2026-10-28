@@ -3,7 +3,7 @@ import AppKit
 enum DocumentTabOrientation: String { case horizontal, vertical }
 
 /// The tab control is outside each document's three-pane workbench.
-final class DocumentTabStrip: NSView {
+final class DocumentTabStrip: NSView, NSTextFieldDelegate {
     var orientation: DocumentTabOrientation = .horizontal { didSet { needsLayout = true } }
     var documents: [DocumentSession] = [] { didSet { rebuild() } }
     var selectedID: UUID? { didSet { rebuild() } }
@@ -19,6 +19,9 @@ final class DocumentTabStrip: NSView {
     private(set) var previewIndex: Int? { didSet { needsDisplay = true } }
     private var identifiers: [ObjectIdentifier: UUID] = [:]
     private var rows: [(document: DocumentSession, view: NSView)] = []
+    private weak var editingDocument: DocumentSession?
+    private weak var titleEditor: NSTextField?
+    private var cancelEditing = false
     private let addButton = NSButton(title: "+", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
@@ -44,24 +47,57 @@ final class DocumentTabStrip: NSView {
     }
     func localize() { rebuild() }
     private func rebuild() {
+        if titleEditor != nil, let owner = liveOwner, editingDocument?.window === owner.window,
+           rows.count == documents.count,
+           zip(rows, documents).allSatisfy({ $0.document === $1 }) {
+            for row in rows {
+                (row.view as? TabChromeRow)?.selected = selectedID == id(for: row.document)
+                (row.view.subviews.first as? NSButton)?.state = selectedID == id(for: row.document) ? .on : .off
+            }
+            return // A background refresh cannot discard unsaved keystrokes or the field editor.
+        }
+        titleEditor = nil
+        editingDocument = nil
         for row in rows { row.view.removeFromSuperview() }
         rows.removeAll()
         let live = Set(documents.map(ObjectIdentifier.init))
         identifiers = identifiers.filter { live.contains($0.key) }
         for document in documents {
             let id = id(for: document)
-            let row = NSView(frame: .zero)
-            let name = document.fileURL?.lastPathComponent ?? L10n.text("Untitled", defaults: defaults)
+            let row = TabChromeRow(frame: .zero)
+            row.selected = selectedID == id
+            let name = document.displayTabTitle(defaults: defaults)
             let title = DragTabButton(title: name + (document.dirty ? " •" : ""), target: self,
                                      action: #selector(selectTab(_:)))
             title.strip = self
-            title.bezelStyle = .recessed
+            title.onCloseAccessibility = { [weak self, weak title] in
+                guard let self, let title else { return false }
+                return self.requestClose(from: title)
+            }
+            title.setAccessibilityCloseName(L10n.text("Close Tab", defaults: defaults))
+            title.isBordered = false
             title.setAccessibilityLabel(name + (document.dirty ? ", " + L10n.text("Modified", defaults: defaults) : ""))
             title.setAccessibilityRole(.radioButton)
             title.state = selectedID == id ? .on : .off
             row.addSubview(title)
             let close = NSButton(title: "×", target: self, action: #selector(closeTab(_:)))
             close.bezelStyle = .recessed
+            close.font = .systemFont(ofSize: 15, weight: .regular)
+            close.contentTintColor = .secondaryLabelColor
+            close.isHidden = true
+            close.alphaValue = 0
+            row.onHover = { [weak row, weak close] hovered in
+                guard let row, let close, row.superview != nil else { return }
+                row.hovered = hovered
+                close.isHidden = false
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                    close.animator().alphaValue = hovered ? 1 : 0
+                } completionHandler: { [weak row, weak close] in
+                    guard let row, let close, !row.hovered else { return }
+                    close.isHidden = true
+                }
+            }
             close.setAccessibilityLabel(L10n.text("Close Tab", defaults: defaults) + ": " + name)
             row.addSubview(close)
             addSubview(row)
@@ -79,10 +115,10 @@ final class DocumentTabStrip: NSView {
                                         : CGRect(x: 0, y: CGFloat(index) * extent, width: bounds.width, height: extent)
             let title = row.view.subviews[0], close = row.view.subviews[1]
             title.frame = CGRect(x: 4, y: 3, width: max(30, row.view.bounds.width - 32), height: row.view.bounds.height - 6)
-            close.frame = CGRect(x: row.view.bounds.width - 28, y: 3, width: 24, height: row.view.bounds.height - 6)
+            close.frame = CGRect(x: row.view.bounds.width - 28, y: max(0, (row.view.bounds.height - 26) / 2), width: 24, height: 26)
         }
         addButton.frame = horizontal ? CGRect(x: CGFloat(rows.count) * extent + 4, y: 3, width: 30, height: bounds.height - 6)
-                                     : CGRect(x: 4, y: CGFloat(rows.count) * extent + 3, width: 30, height: 29)
+                                     : CGRect(x: (bounds.width - 30) / 2, y: CGFloat(rows.count) * extent + 3, width: 30, height: 29)
     }
     func insertionIndex(at point: CGPoint) -> Int {
         let coordinate = orientation == .horizontal ? point.x : point.y
@@ -192,6 +228,69 @@ final class DocumentTabStrip: NSView {
         }), documents.contains(where: { $0 === row.document }) else { return nil }
         return row.document
     }
+    fileprivate func beginInlineRename(from sender: NSButton) {
+        guard titleEditor == nil, let document = liveDocument(for: sender, controlIndex: 0),
+              liveOwner != nil, let row = sender.superview else { return }
+        let field = NSTextField(frame: sender.frame)
+        field.stringValue = document.displayTabTitle(defaults: defaults)
+        field.delegate = self
+        field.font = sender.font
+        field.setAccessibilityLabel(L10n.text("Rename Tab", defaults: defaults))
+        row.addSubview(field, positioned: .above, relativeTo: sender)
+        editingDocument = document
+        titleEditor = field
+        _ = window?.makeFirstResponder(field)
+        // selectText tears down a field editor in an unshown test window.
+        if window?.isVisible == true { field.selectText(nil) }
+    }
+    fileprivate func selectAfterEditorBlur(from sender: NSButton) -> Bool {
+        guard let editor = titleEditor, let document = liveDocument(for: sender, controlIndex: 0),
+              editingDocument !== document else { return false }
+        let valid = NativeMapFile.normalizedTabTitle(editor.stringValue) != nil
+        if valid { window?.makeFirstResponder(self) }
+        guard valid else { return true }
+        // The blur rebuilds the original button before its mouse-up; deliver this click once.
+        if let current = liveOwner, current.documents.contains(where: { $0 === document }) {
+            onSelect(id(for: document))
+        }
+        return true
+    }
+    func control(_ control: NSControl, textShouldEndEditing fieldEditor: NSText) -> Bool {
+        guard control === titleEditor else { return true }
+        return cancelEditing || NativeMapFile.normalizedTabTitle(control.stringValue) != nil
+    }
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField, field === titleEditor else { return }
+        let document = editingDocument
+        let canceled = cancelEditing
+        titleEditor = nil
+        editingDocument = nil
+        cancelEditing = false
+        field.removeFromSuperview()
+        guard !canceled, let document, let owner = liveOwner,
+              owner.documents.contains(where: { $0 === document }), document.window === owner.window else { return }
+        _ = document.renameTab(to: field.stringValue)
+    }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === titleEditor else { return false }
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelEditing = true
+            window?.makeFirstResponder(self)
+            return true
+        }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            if NativeMapFile.normalizedTabTitle(control.stringValue) != nil {
+                window?.makeFirstResponder(self)
+            }
+            return true
+        }
+        return false
+    }
+    private func requestClose(from sender: NSButton) -> Bool {
+        guard let document = liveDocument(for: sender, controlIndex: 0), liveOwner != nil else { return false }
+        onClose(id(for: document))
+        return true
+    }
     @objc private func selectTab(_ sender: NSButton) {
         guard let document = liveDocument(for: sender, controlIndex: 0) else { return }
         onSelect(id(for: document))
@@ -278,10 +377,46 @@ extension DocumentTabStrip: NSDraggingSource {
     }
 }
 
+/// Draw in the row itself, leaving the title button's native action and dragging intact.
+private final class TabChromeRow: NSView {
+    var selected = false { didSet { needsDisplay = true } }
+    var hovered = false
+    var onHover: ((Bool) -> Void)?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard selected else { return }
+        let area = bounds.insetBy(dx: 2, dy: 2)
+        let path = NSBezierPath(roundedRect: area, xRadius: 6, yRadius: 6)
+        NSColor.controlAccentColor.withAlphaComponent(0.23).setFill()
+        path.fill()
+        NSColor.controlAccentColor.withAlphaComponent(0.78).setStroke()
+        path.lineWidth = 1.5
+        path.stroke()
+    }
+}
+
 /// Native button actions remain keyboard/AX-clickable; only pointer motion enters AppKit drag.
 private final class DragTabButton: NSButton {
     weak var strip: DocumentTabStrip?
+    var onCloseAccessibility: (() -> Bool)?
+    private var closeAccessibilityName = "Close Tab"
+    func setAccessibilityCloseName(_ name: String) { closeAccessibilityName = name }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        [NSAccessibilityCustomAction(name: closeAccessibilityName) { [weak self] in
+            self?.onCloseAccessibility?() ?? false
+        }]
+    }
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 { strip?.beginInlineRename(from: self); return }
+        if strip?.selectAfterEditorBlur(from: self) == true { return }
         let origin = convert(event.locationInWindow, from: nil)
         isHighlighted = true
         defer { isHighlighted = false }

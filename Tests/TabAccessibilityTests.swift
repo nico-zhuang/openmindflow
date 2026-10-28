@@ -36,6 +36,9 @@ import AppKit
                        "\(language) tab name and dirty status must be announced")
                 assert(row.0.state == (index == 1 ? .on : .off), "selected state must reflect active document")
                 assert(row.1.accessibilityLabel() == close + ": " + untitled)
+                assert(row.0.accessibilityCustomActions()?.first?.name == close,
+                       "tab title exposes Close even when hover-only button is hidden")
+                assert(row.1.isHidden, "at-rest close control cannot intercept pointer input")
                 assert(row.1.action != nil && row.1.target as AnyObject? === a.tabStrip)
             }
             assert(other[0].0.accessibilityLabel() == untitled && other[0].0.state == .on)
@@ -104,9 +107,11 @@ import AppKit
         assert(detachedStrip.accessibilityCustomActions()?.last?.handler?() == false && detachedCalls == 0,
                "orientation actions reject strips without a registered live window owner")
         let staleAction = b.tabStrip.accessibilityCustomActions()!.last!
+        let staleClose = controls(b)[0].0.accessibilityCustomActions()!.first!
         let staleMenuItem = b.tabStrip.menu(for: zhKey)!.item(withTitle: "垂直标签")!
         b.window.close()
         assert(staleAction.handler?() == false, "closed tabs reject delayed accessibility operations")
+        assert(staleClose.handler?() == false, "closed source rejects delayed Close action")
         assert(NSApp.sendAction(staleMenuItem.action!, to: staleMenuItem.target, from: staleMenuItem))
         assert(b.orientation == .horizontal, "closed tabs reject delayed context-menu actions")
         print("offscreen EN/ZH tab AX names, states, guarded orientation handlers and all-window language refresh passed; physical keyboard menu unverified")
