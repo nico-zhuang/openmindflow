@@ -161,6 +161,17 @@ import Darwin
         strip.orientation = .vertical
         assert(strip.insertionIndex(at: CGPoint(x: 0, y: 17)) == 0)
         assert(strip.insertionIndex(at: CGPoint(x: 0, y: 18)) == 1)
+        let registered = app.tabTransfer
+        let eligible = registered.begin(document: b, source: source)
+        assert(registered.liveSource(for: eligible) === source &&
+               registered.canAccept(token: eligible, in: target),
+               "registered live tabs permit only a current process-local drag token")
+        assert(!registered.canAccept(token: eligible, in: closeTarget),
+               "a closed former destination cannot accept a live source token")
+        registered.cancel(token: eligible)
+        assert(registered.liveSource(for: eligible) == nil &&
+               !registered.canAccept(token: eligible, in: target),
+               "cancellation revokes even previously eligible destination membership")
         print("transactional reorder, transfer rollback, identity, private bytes and last-tab close passed")
     }
 }

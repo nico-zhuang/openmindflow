@@ -2334,6 +2334,12 @@ private func ownedPanelFixtureDirectory() -> URL? {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOpenSavePanelDelegate, NSToolbarDelegate {
     private var window: NSWindow!
     private(set) var windowSessions: [WindowSession] = []
+    lazy var tabTransfer: DocumentTabTransfer = {
+        let coordinator = DocumentTabTransfer()
+        coordinator.eligibleWindows = { [weak self] in self?.windowSessions ?? [] }
+        coordinator.createEmptyWindow = { [weak self] in self?.createWindowSession(emptyForTransfer: true) }
+        return coordinator
+    }()
     private var sessionsByWindow: [ObjectIdentifier: DocumentSession] = [:]
     private var primarySession: DocumentSession?
     private weak var findSession: DocumentSession?
@@ -2484,7 +2490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     private func t(_ english: String) -> String { L10n.text(english, defaults: defaults) }
 
-    private func createWindowSession() -> WindowSession {
+    private func createWindowSession(emptyForTransfer: Bool = false) -> WindowSession {
         let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
         let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
         canvas.onImageError = { [weak self] error in
@@ -2499,6 +2505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         nativeWindow.isReleasedWhenClosed = false
         nativeWindow.minSize = NSSize(width: 640, height: 400)
         let coordinator = WindowSession(window: nativeWindow, toolbarTemplate: self, defaults: defaults)
+        coordinator.tabStrip.transfer = tabTransfer
         coordinator.onNewTab = { [weak self, weak coordinator] in
             guard let self, let coordinator else { return }
             self.createTab(in: coordinator)
@@ -2534,13 +2541,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             if self.window === closed.window { self.window = self.windowSessions.first?.window }
         }
         windowSessions.append(coordinator)
-        let document = installSession(canvas: canvas, in: nativeWindow)
-        coordinator.insert(document)
+        if !emptyForTransfer {
+            let document = installSession(canvas: canvas, in: nativeWindow)
+            coordinator.insert(document)
+        }
         if window == nil { window = nativeWindow }
         nativeWindow.setContentSize(NSSize(width: 1280, height: 700))
         nativeWindow.center()
         nativeWindow.contentView?.layoutSubtreeIfNeeded()
-        canvas.fitMapInView()
+        if !emptyForTransfer { canvas.fitMapInView() }
         return coordinator
     }
     #if HEADLESS_TEST
@@ -3584,7 +3593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
 @main
 enum MindMapApp {
     static func main() {
-        let app = NSApplication.shared
+        let app = DocumentDragApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.regular)

@@ -12,6 +12,11 @@ final class DocumentTabStrip: NSView {
     var onNewTab: () -> Void = {}
     var onOrientationChange: (DocumentTabOrientation) -> Void = { _ in }
     var defaults: UserDefaults = .standard { didSet { rebuild() } }
+    weak var transfer: DocumentTabTransfer?
+    // Each source gesture owns its own signal, so canceled UUIDs cannot accumulate across drags.
+    private var releaseSignal: DragReleaseSignal?
+    private var draggingToken: UUID?
+    private(set) var previewIndex: Int? { didSet { needsDisplay = true } }
     private var identifiers: [ObjectIdentifier: UUID] = [:]
     private var rows: [(document: DocumentSession, view: NSView)] = []
     private let addButton = NSButton(title: "+", target: nil, action: nil)
@@ -22,6 +27,7 @@ final class DocumentTabStrip: NSView {
         addButton.target = self
         addButton.action = #selector(addTab(_:))
         addSubview(addButton)
+        registerForDraggedTypes([DocumentTabTransfer.pasteboardType])
         rebuild()
     }
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
@@ -46,8 +52,9 @@ final class DocumentTabStrip: NSView {
             let id = id(for: document)
             let row = NSView(frame: .zero)
             let name = document.fileURL?.lastPathComponent ?? L10n.text("Untitled", defaults: defaults)
-            let title = NSButton(title: name + (document.dirty ? " •" : ""), target: self,
-                                 action: #selector(selectTab(_:)))
+            let title = DragTabButton(title: name + (document.dirty ? " •" : ""), target: self,
+                                     action: #selector(selectTab(_:)))
+            title.strip = self
             title.bezelStyle = .recessed
             title.setAccessibilityLabel(name + (document.dirty ? ", " + L10n.text("Modified", defaults: defaults) : ""))
             title.setAccessibilityRole(.radioButton)
@@ -85,6 +92,80 @@ final class DocumentTabStrip: NSView {
             return index
         }
         return documents.count
+    }
+    func token(from pasteboard: NSPasteboard) -> UUID? {
+        guard liveOwner != nil, let transfer,
+              let items = pasteboard.pasteboardItems, items.count == 1,
+              items[0].types == [DocumentTabTransfer.pasteboardType],
+              let bytes = items[0].data(forType: DocumentTabTransfer.pasteboardType), bytes.count == 36,
+              let text = String(data: bytes, encoding: .utf8),
+              let token = UUID(uuidString: text), token.uuidString == text,
+              transfer.liveSource(for: token) != nil else { return nil }
+        return token
+    }
+    func previewInsertion(token: UUID, at point: CGPoint) -> Int? {
+        guard bounds.contains(point), let owner = liveOwner,
+              transfer?.canAccept(token: token, in: owner) == true else {
+            cancelInsertionPreview(); return nil
+        }
+        let index = insertionIndex(at: point)
+        previewIndex = index
+        return index
+    }
+    func cancelInsertionPreview() { previewIndex = nil }
+    @discardableResult func accept(token: UUID, at point: CGPoint) -> Bool {
+        guard let index = previewInsertion(token: token, at: point),
+              let owner = liveOwner, let source = transfer?.liveSource(for: token),
+              transfer?.move(token: token, to: owner, insertion: index) == true else {
+            cancelInsertionPreview(); return false
+        }
+        source.tabStrip.finishAcceptedDrag(token: token)
+        cancelInsertionPreview()
+        return true
+    }
+    private func finishAcceptedDrag(token: UUID) {
+        guard draggingToken == token, let signal = releaseSignal else { return }
+        signal.disarm(token: token)
+        if DocumentDragApplication.activeReleaseSignal === signal {
+            DocumentDragApplication.activeReleaseSignal = nil
+        }
+        releaseSignal = nil
+        draggingToken = nil
+        for owner in transfer?.eligibleWindows?() ?? [] { owner.tabStrip.cancelInsertionPreview() }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let index = previewIndex else { return }
+        NSColor.controlAccentColor.setFill()
+        if orientation == .horizontal {
+            CGRect(x: CGFloat(index) * 154 - 1, y: 1, width: 3, height: max(0, bounds.height - 2)).fill()
+        } else {
+            CGRect(x: 1, y: CGFloat(index) * 35 - 1, width: max(0, bounds.width - 2), height: 3).fill()
+        }
+    }
+    @discardableResult func beginNativeDrag(from button: NSButton, event: NSEvent) -> Bool {
+        guard draggingToken == nil, releaseSignal == nil,
+              DocumentDragApplication.activeReleaseSignal == nil,
+              window?.isVisible == true, let owner = liveOwner, let transfer,
+              let document = liveDocument(for: button, controlIndex: 0),
+              let bitmap = button.bitmapImageRepForCachingDisplay(in: button.bounds) else { return false }
+        let token = transfer.begin(document: document, source: owner)
+        let item = NSPasteboardItem()
+        guard item.setData(Data(token.uuidString.utf8), forType: DocumentTabTransfer.pasteboardType) else {
+            transfer.cancel(token: token); return false
+        }
+        button.cacheDisplay(in: button.bounds, to: bitmap)
+        let image = NSImage(size: button.bounds.size)
+        image.addRepresentation(bitmap)
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        dragging.setDraggingFrame(button.convert(button.bounds, to: self), contents: image)
+        let signal = DragReleaseSignal()
+        draggingToken = token
+        releaseSignal = signal
+        signal.arm(token: token, after: event.timestamp, sourceWindowNumber: owner.window.windowNumber)
+        DocumentDragApplication.activeReleaseSignal = signal
+        _ = beginDraggingSession(with: [dragging], event: event, source: self)
+        return true
     }
     private func liveDocument(for sender: NSButton, controlIndex: Int) -> DocumentSession? {
         guard let row = rows.first(where: {
@@ -147,6 +228,66 @@ final class DocumentTabStrip: NSView {
         guard let raw = sender.representedObject as? String,
               let value = DocumentTabOrientation(rawValue: raw) else { return }
         _ = requestOrientation(value)
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let token = token(from: sender.draggingPasteboard),
+              let source = transfer?.liveSource(for: token),
+              sender.draggingSource as AnyObject? === source.tabStrip,
+              sender.draggingSourceOperationMask.contains(.move),
+              previewInsertion(token: token, at: convert(sender.draggingLocation, from: nil)) != nil else {
+            cancelInsertionPreview(); return []
+        }
+        return .move
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) { cancelInsertionPreview() }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard draggingUpdated(sender) == .move,
+              let token = token(from: sender.draggingPasteboard) else { return false }
+        return accept(token: token, at: convert(sender.draggingLocation, from: nil))
+    }
+    override func draggingEnded(_ sender: NSDraggingInfo) { cancelInsertionPreview() }
+}
+
+extension DocumentTabStrip: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let token = draggingToken, let signal = releaseSignal else { return }
+        defer {
+            signal.disarm(token: token)
+            if DocumentDragApplication.activeReleaseSignal === signal {
+                DocumentDragApplication.activeReleaseSignal = nil
+            }
+            releaseSignal = nil
+            draggingToken = nil
+            transfer?.cancel(token: token)
+            for owner in transfer?.eligibleWindows?() ?? [] { owner.tabStrip.cancelInsertionPreview() }
+        }
+        _ = transfer?.finish(token: token, locationOnScreen: screenPoint, operation: operation, signal: signal)
+    }
+}
+
+/// Native button actions remain keyboard/AX-clickable; only pointer motion enters AppKit drag.
+private final class DragTabButton: NSButton {
+    weak var strip: DocumentTabStrip?
+    override func mouseDown(with event: NSEvent) {
+        let origin = convert(event.locationInWindow, from: nil)
+        isHighlighted = true
+        defer { isHighlighted = false }
+        while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                         until: .distantFuture, inMode: .eventTracking, dequeue: true) {
+            if next.type == .keyDown { return } // Escape and uncertain key interruptions do not start a drag.
+            if next.type == .leftMouseUp {
+                if bounds.contains(convert(next.locationInWindow, from: nil)) { performClick(nil) }
+                return
+            }
+            let point = convert(next.locationInWindow, from: nil)
+            guard hypot(point.x - origin.x, point.y - origin.y) >= 8 else { continue }
+            if strip?.beginNativeDrag(from: self, event: next) == true { return }
+            return
+        }
     }
 }
 
