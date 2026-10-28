@@ -330,8 +330,15 @@ enum CanvasCommandTests {
                "MindNode preserved-source copies must be discoverable without experimental plain-tree labels")
         let nodeMenu = NSApp.mainMenu!.items.compactMap(\.submenu).first { $0.title == "Node" }!
         let fontMenu = nodeMenu.item(withTitle: "Font…")
-        assert(fontMenu?.keyEquivalent == "t" && fontMenu?.keyEquivalentModifierMask == [.command],
-               "Per-node native font panel must also be discoverable from Node menu via standard Command-T")
+        let newTab = fileMenu.item(withTitle: "New Tab")
+        assert(fontMenu?.action.map(NSStringFromSelector) == "showNodeFont:" &&
+               fontMenu?.target as AnyObject? === appDelegate &&
+               !(fontMenu?.keyEquivalent == "t" && fontMenu?.keyEquivalentModifierMask == [.command]),
+               "Node → Font… must retain its native action and target without claiming Command-T")
+        assert(newTab?.keyEquivalent == "t" && newTab?.keyEquivalentModifierMask == [.command] &&
+               newTab?.action.map(NSStringFromSelector) == "newTab:" &&
+               newTab?.target as AnyObject? === appDelegate,
+               "Command-T belongs to File → New Tab")
         let siblingMenu = nodeMenu.item(withTitle: "New Sibling")!
         assert(siblingMenu.keyEquivalent.isEmpty,
                "Plain Return must not be a global menu accelerator that preempts the text editor")
