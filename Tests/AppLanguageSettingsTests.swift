@@ -18,15 +18,17 @@ import AppKit
         delegate.installMenu()
         let settings = NSApp.mainMenu!.items[0].submenu!.item(withTitle: "Settings…")!
         assert(NSApp.sendAction(settings.action!, to: settings.target, from: settings))
+        func allViews(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + allViews($0) } }
         guard let panel = NSApp.windows.first(where: { $0.title == "Settings" }),
-              let popup = panel.contentView?.subviews.compactMap({ $0 as? NSPopUpButton }).first,
+              let popup = panel.contentView.map(allViews)?.compactMap({ $0 as? NSPopUpButton }).first,
               popup.itemArray.contains(where: { ($0.representedObject as? String) == "zh-Hans" }) else {
             fatalError("Native Settings must offer system/Chinese/English app language")
         }
-        let tabs = panel.contentView!.subviews.compactMap { $0 as? NSSegmentedControl }.first
-        let appearancePopup = panel.contentView!.subviews.compactMap { $0 as? NSPopUpButton }
+        let views = allViews(panel.contentView!)
+        let tabs = views.compactMap { $0 as? NSSegmentedControl }.first
+        let appearancePopup = views.compactMap { $0 as? NSPopUpButton }
             .first { $0.accessibilityLabel() == "Appearance" }
-        let shrink = panel.contentView!.subviews.compactMap { $0 as? NSButton }
+        let shrink = views.compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Shrink new nodes to fit content" }
         guard let tabs, tabs.segmentCount == 3,
               tabs.label(forSegment: 0) == "General",
@@ -34,12 +36,14 @@ import AppKit
                tabs.label(forSegment: 2) == "About",
               let appearancePopup, appearancePopup.itemTitles == ["System", "Light", "Dark"],
               let shrink, shrink.state == .on,
-              !panel.contentView!.subviews.compactMap({ ($0 as? NSControl)?.accessibilityLabel() })
+              !views.compactMap({ ($0 as? NSControl)?.accessibilityLabel() })
                 .contains(where: { ["License", "Account", "Dock Icon"].contains($0) }) else {
             fputs("Settings must expose General/Keyboard Shortcuts/About and real language/appearance/compact-width options\n", stderr)
             exit(1)
         }
-        let languageLabel = panel.contentView!.subviews.compactMap { $0 as? NSTextField }.first!
+        let languageLabel = views.first {
+            $0.identifier?.rawValue == "general-Interface Language"
+        } as! NSTextField
         assert(languageLabel.intrinsicContentSize.width <= languageLabel.frame.width &&
                languageLabel.frame.maxX <= popup.frame.minX,
                "Settings language label must fit and not collide with native popup")
@@ -96,15 +100,16 @@ import AppKit
         let bindings = [("new-child", "tab"), ("new-sibling", "return"),
                         ("new-sibling-before", "option-return"), ("new-main", "shift-return"),
                         ("new-parent", "option-tab"), ("edit-title", "command-return")]
-        let shortcutPopups = panel.contentView!.subviews.compactMap { $0 as? NSPopUpButton }
+        let shortcutPopups = views.compactMap { $0 as? NSPopUpButton }
             .filter { $0.identifier?.rawValue.hasPrefix("shortcuts-") == true }
-        let restore = panel.contentView!.subviews.compactMap { $0 as? NSButton }
+        let restore = views.compactMap { $0 as? NSButton }
             .first { $0.identifier?.rawValue == "shortcuts-restore" }
-        guard shortcutPopups.count == 6, let restore, !restore.isHidden,
-              popup.isHidden, appearancePopup.isHidden, shrink.isHidden,
+        guard shortcutPopups.count == 6, let restore, !restore.isHiddenOrHasHiddenAncestor,
+              popup.isHiddenOrHasHiddenAncestor, appearancePopup.isHiddenOrHasHiddenAncestor,
+               shrink.isHiddenOrHasHiddenAncestor,
               bindings.allSatisfy({ name, key in
                   shortcutPopups.first(where: { $0.identifier?.rawValue == "shortcuts-\(name)" })
-                    .map { !$0.isHidden && $0.numberOfItems == 12 &&
+                    .map { !$0.isHiddenOrHasHiddenAncestor && $0.numberOfItems == 12 &&
                            ($0.selectedItem?.representedObject as? String) == key } == true
               }) else {
             fputs("RED Shortcut page must show six editable persisted node commands and Restore Defaults\n", stderr)

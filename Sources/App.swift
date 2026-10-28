@@ -2362,6 +2362,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #endif
     private var pendingOpenURLs: [URL] = []
     private var settingsWindow: NSWindow?
+    var releaseChecker = ReleaseChecker()
+    var openReleaseURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    private var updateStatusKey = ""
+    private var updateStatusVersion = ""
+    private var updateReleasePage: URL?
+    private var updateRequestGeneration: UInt64 = 0
+    private var automaticUpdateGeneration: UInt64 = 0
     // Explicit window resolution is shared by production key-window routing and headless fixtures.
     func resolveSession(for key: NSWindow?) -> DocumentSession? {
         if let settingsWindow, key === settingsWindow { return nil }
@@ -3113,8 +3120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         guard ["system", "light", "dark"].contains(mode) else { return }
         defaults.set(mode, forKey: "appearance")
         applyAppearance(mode, in: menu)
-        if let popup = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSPopUpButton })
-            .first(where: { $0.identifier?.rawValue == "general-appearance" }) {
+        if let popup = settingsView("general-appearance") as? NSPopUpButton {
             popup.select(popup.itemArray.first { ($0.representedObject as? String) == mode })
         }
     }
@@ -3186,6 +3192,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if navigate && !session.findMatches.isEmpty { session.canvas.showSearchResult(session.findMatches[session.findIndex]) }
     }
 
+    private func settingsViews() -> [NSView] {
+        func walk(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + walk($0) } }
+        return settingsWindow?.contentView.map(walk) ?? []
+    }
+    private func settingsView(_ id: String) -> NSView? {
+        settingsViews().first { $0.identifier?.rawValue == id }
+    }
     @objc private func showSettings(_ sender: Any?) {
         if let settingsWindow {
             #if !HEADLESS_TEST
@@ -3193,21 +3206,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             #endif
             return
         }
-        let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 390),
+        let panel = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 620, height: 470),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let pages: [String: NSView] = Dictionary(uniqueKeysWithValues: ["general", "shortcuts", "about"].map { name in
+            let page = NSView(frame: CGRect(x: 0, y: 0, width: 620, height: 410))
+            page.identifier = NSUserInterfaceItemIdentifier("\(name)-page")
+            page.isHidden = name != "general"
+            panel.contentView?.addSubview(page)
+            return (name, page)
+        })
+        func add(_ view: NSView, _ id: String, _ frame: CGRect, hidden: Bool = false) {
+            view.identifier = NSUserInterfaceItemIdentifier(id)
+            view.frame = frame
+            view.isHidden = id == "about-channel-caution" && defaults.string(forKey: "updateChannel") != "beta"
+            let name = String(id.prefix(while: { $0 != "-" }))
+            pages[name]?.addSubview(view)
+        }
+        func heading(_ text: String, _ id: String, _ y: CGFloat, size: CGFloat = 13,
+                     hidden: Bool = false) {
+            let label = NSTextField(labelWithString: t(text))
+            label.font = .systemFont(ofSize: size, weight: size > 16 ? .semibold : .medium)
+            add(label, id, CGRect(x: 28, y: y, width: 564, height: size + 10), hidden: hidden)
+        }
         let tabs = NSSegmentedControl(labels: [t("General"), t("Keyboard Shortcuts"), t("About")],
                                       trackingMode: .selectOne, target: self, action: #selector(chooseSettingsTab(_:)))
-        tabs.frame = CGRect(x: 64, y: 310, width: 412, height: 54)
+        tabs.frame = CGRect(x: 98, y: 418, width: 424, height: 28)
         tabs.selectedSegment = 0
-        tabs.setImage(NSImage(systemSymbolName: "gearshape", accessibilityDescription: t("General")), forSegment: 0)
-        tabs.setImage(NSImage(systemSymbolName: "keyboard", accessibilityDescription: t("Keyboard Shortcuts")), forSegment: 1)
         tabs.setAccessibilityLabel(t("Settings Page"))
         panel.contentView?.addSubview(tabs)
+        heading("General", "general-page-title", 367, size: 20)
+        heading("Customize the editing experience.", "general-description", 340)
+        heading("Interface", "general-interface-heading", 298)
         let label = NSTextField(labelWithString: t("Interface Language"))
-        label.identifier = NSUserInterfaceItemIdentifier("general-Interface Language")
-        label.frame = CGRect(x: 28, y: 246, width: 130, height: 22)
-        let popup = NSPopUpButton(frame: CGRect(x: 164, y: 240, width: 344, height: 30), pullsDown: false)
-        popup.identifier = NSUserInterfaceItemIdentifier("general-language")
+        add(label, "general-Interface Language", CGRect(x: 42, y: 254, width: 182, height: 22))
+        let popup = NSPopUpButton(frame: CGRect(x: 244, y: 247, width: 330, height: 30), pullsDown: false)
         for (key, name) in [("system", "Follow System"), ("zh-Hans", "Simplified Chinese"), ("en", "English")] {
             let item = popup.menu!.addItem(withTitle: t(name), action: nil, keyEquivalent: "")
             item.representedObject = key
@@ -3216,14 +3248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         popup.setAccessibilityLabel(t("Interface Language"))
         popup.target = self
         popup.action = #selector(chooseLanguage(_:))
-        panel.contentView?.addSubview(label)
-        panel.contentView?.addSubview(popup)
+        add(popup, "general-language", popup.frame)
         let appearanceLabel = NSTextField(labelWithString: t("Appearance"))
-        appearanceLabel.identifier = NSUserInterfaceItemIdentifier("general-Appearance")
-        appearanceLabel.frame = CGRect(x: 28, y: 188, width: 130, height: 22)
-        panel.contentView?.addSubview(appearanceLabel)
-        let appearancePopup = NSPopUpButton(frame: CGRect(x: 164, y: 182, width: 344, height: 30), pullsDown: false)
-        appearancePopup.identifier = NSUserInterfaceItemIdentifier("general-appearance")
+        add(appearanceLabel, "general-Appearance", CGRect(x: 42, y: 207, width: 182, height: 22))
+        let appearancePopup = NSPopUpButton(frame: CGRect(x: 244, y: 200, width: 330, height: 30), pullsDown: false)
         for (key, name) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
             let item = appearancePopup.menu!.addItem(withTitle: t(name), action: nil, keyEquivalent: "")
             item.representedObject = key
@@ -3234,25 +3262,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         appearancePopup.setAccessibilityLabel(t("Appearance"))
         appearancePopup.target = self
         appearancePopup.action = #selector(chooseSettingsAppearance(_:))
-        panel.contentView?.addSubview(appearancePopup)
+        add(appearancePopup, "general-appearance", appearancePopup.frame)
+        heading("Nodes", "general-nodes-heading", 150)
         let shrink = NSButton(checkboxWithTitle: t("Shrink new nodes to fit content"), target: self,
                               action: #selector(chooseShrinkNewNodes(_:)))
-        shrink.identifier = NSUserInterfaceItemIdentifier("general-shrink")
-        shrink.frame = CGRect(x: 164, y: 121, width: 344, height: 30)
         shrink.setAccessibilityLabel(t("Shrink new nodes to fit content"))
         shrink.state = defaults.object(forKey: "shrinkNewNodesToFitContent") == nil ||
             defaults.bool(forKey: "shrinkNewNodesToFitContent") ? .on : .off
-        panel.contentView?.addSubview(shrink)
+        add(shrink, "general-shrink", CGRect(x: 42, y: 105, width: 532, height: 30))
+        heading("Keyboard Shortcuts", "shortcuts-page-title", 367, size: 20, hidden: true)
+        heading("Choose a unique shortcut for each node action.", "shortcuts-description", 340, hidden: true)
         for (index, command) in NodeShortcuts.commands.enumerated() {
-            let y = CGFloat(270 - index * 39)
+            let y = CGFloat(285 - index * 38)
             let title = NSTextField(labelWithString: t(command.title))
-            title.identifier = NSUserInterfaceItemIdentifier("shortcuts-label-\(command.id)")
-            title.frame = CGRect(x: 28, y: y + 4, width: 188, height: 22)
             title.alignment = .right
-            title.isHidden = true
-            panel.contentView?.addSubview(title)
-            let keys = NSPopUpButton(frame: CGRect(x: 228, y: y, width: 280, height: 30), pullsDown: false)
-            keys.identifier = NSUserInterfaceItemIdentifier("shortcuts-\(command.id)")
+            add(title, "shortcuts-label-\(command.id)", CGRect(x: 28, y: y + 4, width: 240, height: 22), hidden: true)
+            let keys = NSPopUpButton(frame: CGRect(x: 282, y: y, width: 292, height: 30), pullsDown: false)
             keys.setAccessibilityLabel(t(command.title))
             for choice in NodeShortcuts.choices {
                 let item = keys.menu!.addItem(withTitle: t(choice.label), action: nil, keyEquivalent: "")
@@ -3263,57 +3288,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             }!)
             keys.target = self
             keys.action = #selector(chooseNodeShortcut(_:))
-            keys.isHidden = true
-            panel.contentView?.addSubview(keys)
+            add(keys, "shortcuts-\(command.id)", keys.frame, hidden: true)
         }
         let restore = NSButton(title: t("Restore Defaults"), target: self, action: #selector(resetNodeShortcuts(_:)))
-        restore.identifier = NSUserInterfaceItemIdentifier("shortcuts-restore")
-        restore.frame = CGRect(x: 228, y: 24, width: 170, height: 30)
         restore.setAccessibilityLabel(t("Restore Defaults"))
-        restore.isHidden = true
-        panel.contentView?.addSubview(restore)
-        let aboutHeading = NSTextField(labelWithString: t("About OpenMindFlow"))
-        aboutHeading.identifier = NSUserInterfaceItemIdentifier("about-heading")
-        aboutHeading.font = .boldSystemFont(ofSize: 18)
-        aboutHeading.frame = CGRect(x: 28, y: 264, width: 484, height: 28)
-        aboutHeading.isHidden = true
-        panel.contentView?.addSubview(aboutHeading)
+        add(restore, "shortcuts-restore", CGRect(x: 404, y: 35, width: 170, height: 30), hidden: true)
+        heading("About OpenMindFlow", "about-page-title", 367, size: 20, hidden: true)
+        let version = NSTextField(labelWithString: "")
+        let buildVersion = Bundle.main.infoDictionary?["OpenMindFlowReleaseVersion"] as? String ??
+            Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        version.stringValue = String(format: t("Version %@"), buildVersion)
+        add(version, "about-version", CGRect(x: 28, y: 339, width: 564, height: 22), hidden: true)
         let credits = NSTextField(labelWithString: "NicoZhuang | KEEPCRAZY | YoSoAi")
-        credits.identifier = NSUserInterfaceItemIdentifier("about-credits")
-        credits.frame = CGRect(x: 28, y: 226, width: 484, height: 24)
-        credits.isHidden = true
-        panel.contentView?.addSubview(credits)
-        let statement = NSTextField(wrappingLabelWithString: t("OpenMindFlow is independently developed. Editable maps save as .mflw; MindNode v9 packages import, and supported edits export as copies without touching originals. It is not affiliated with or endorsed by IdeasOnCanvas. Open-source license unspecified."))
-        statement.identifier = NSUserInterfaceItemIdentifier("about-statement")
-        statement.frame = CGRect(x: 28, y: 137, width: 484, height: 80)
-        statement.isHidden = true
-        panel.contentView?.addSubview(statement)
+        add(credits, "about-credits", CGRect(x: 28, y: 311, width: 564, height: 22), hidden: true)
+        heading("Updates", "about-updates-heading", 278, hidden: true)
+        let channelLabel = NSTextField(labelWithString: t("Release Channel"))
+        add(channelLabel, "about-channel-label", CGRect(x: 42, y: 243, width: 182, height: 22), hidden: true)
+        let channel = NSPopUpButton(frame: CGRect(x: 244, y: 236, width: 330, height: 30), pullsDown: false)
+        for (key, title) in [("stable", "Stable"), ("beta", "Beta")] {
+            let item = channel.menu!.addItem(withTitle: t(title), action: nil, keyEquivalent: "")
+            item.representedObject = key
+        }
+        channel.select(channel.itemArray.first { $0.representedObject as? String ==
+            (defaults.string(forKey: "updateChannel") == "beta" ? "beta" : "stable") })
+        channel.setAccessibilityLabel(t("Release Channel"))
+        channel.target = self
+        channel.action = #selector(chooseUpdateChannel(_:))
+        add(channel, "about-channel", channel.frame, hidden: true)
+        let caution = NSTextField(labelWithString: t("Beta releases may be less stable than regular releases."))
+        caution.textColor = .secondaryLabelColor
+        add(caution, "about-channel-caution", CGRect(x: 244, y: 211, width: 348, height: 22), hidden: true)
         let autoUpdates = NSButton(checkboxWithTitle: t("Automatically check for updates"), target: self,
                                    action: #selector(chooseAutomaticUpdates(_:)))
-        autoUpdates.identifier = NSUserInterfaceItemIdentifier("about-auto-updates")
-        autoUpdates.frame = CGRect(x: 28, y: 91, width: 484, height: 30)
         autoUpdates.state = defaults.bool(forKey: "checkUpdatesAutomatically") ? .on : .off
-        autoUpdates.isHidden = true
-        panel.contentView?.addSubview(autoUpdates)
+        add(autoUpdates, "about-auto-updates", CGRect(x: 42, y: 172, width: 532, height: 30), hidden: true)
         let checkNow = NSButton(title: t("Check for Updates…"), target: self,
                                 action: #selector(checkForUpdates(_:)))
-        checkNow.identifier = NSUserInterfaceItemIdentifier("about-check-now")
-        checkNow.frame = CGRect(x: 28, y: 48, width: 188, height: 30)
-        checkNow.isHidden = true
-        panel.contentView?.addSubview(checkNow)
+        add(checkNow, "about-check-now", CGRect(x: 42, y: 134, width: 190, height: 30), hidden: true)
+        let status = NSTextField(wrappingLabelWithString: "")
+        status.textColor = .secondaryLabelColor
+        add(status, "about-status", CGRect(x: 244, y: 127, width: 348, height: 43), hidden: true)
+        let open = NSButton(title: t("Open GitHub Releases"), target: self, action: #selector(openReleases(_:)))
+        add(open, "about-open-releases", CGRect(x: 42, y: 98, width: 210, height: 28), hidden: true)
+        let statement = NSTextField(wrappingLabelWithString: t("OpenMindFlow is independently developed. Editable maps save as .mflw; MindNode v9 packages import, and supported edits export as copies without touching originals. It is not affiliated with or endorsed by IdeasOnCanvas. Open-source license unspecified."))
+        statement.font = .systemFont(ofSize: 10)
+        statement.textColor = .secondaryLabelColor
+        add(statement, "about-statement", CGRect(x: 28, y: 13, width: 564, height: 79), hidden: true)
         panel.title = t("Settings")
         panel.center()
         settingsWindow = panel
+        refreshUpdateStatus()
         #if !HEADLESS_TEST
         panel.makeKeyAndOrderFront(nil)
         #endif
     }
     @objc private func chooseSettingsTab(_ sender: NSSegmentedControl) {
-        for view in settingsWindow?.contentView?.subviews ?? [] {
-            guard let identifier = view.identifier?.rawValue else { continue }
-            if identifier.hasPrefix("general-") { view.isHidden = sender.selectedSegment != 0 }
-            if identifier.hasPrefix("shortcuts-") { view.isHidden = sender.selectedSegment != 1 }
-            if identifier.hasPrefix("about-") { view.isHidden = sender.selectedSegment != 2 }
+        guard let panel = settingsWindow, (0..<3).contains(sender.selectedSegment) else { return }
+        let names = ["general", "shortcuts", "about"]
+        for (index, name) in names.enumerated() {
+            settingsView("\(name)-page")?.isHidden = index != sender.selectedSegment
+        }
+        let firstIDs = ["general-language", "shortcuts-new-child", "about-channel"]
+        if let first = settingsView(firstIDs[sender.selectedSegment]) {
+            panel.makeFirstResponder(first)
         }
     }
     @objc private func showAbout(_ sender: Any?) {
@@ -3324,27 +3361,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func chooseAutomaticUpdates(_ sender: NSButton) {
         defaults.set(sender.state == .on, forKey: "checkUpdatesAutomatically")
+        if sender.state == .off {
+            automaticUpdateGeneration &+= 1
+            NSApp.dockTile.badgeLabel = nil
+        }
+    }
+    @objc private func chooseUpdateChannel(_ sender: NSPopUpButton) {
+        guard let selected = sender.selectedItem?.representedObject as? String,
+              ["stable", "beta"].contains(selected) else { return }
+        defaults.set(selected, forKey: "updateChannel")
+        settingsView("about-channel-caution")?.isHidden = selected != "beta"
+        updateRequestGeneration &+= 1
+        NSApp.dockTile.badgeLabel = nil
+        updateReleasePage = nil
+        updateStatusVersion = ""
+        updateStatusKey = ""
+        refreshUpdateStatus()
+    }
+    @objc private func openReleases(_ sender: Any?) {
+        openReleaseURL(updateReleasePage ?? ReleaseChecker.releasesPage)
+    }
+    private func refreshUpdateStatus() {
+        guard let status = settingsView("about-status") as? NSTextField else { return }
+        let text = t(updateStatusKey)
+        status.stringValue = updateStatusVersion.isEmpty ? text : String(format: text, updateStatusVersion)
     }
     @objc private func checkForUpdates(_ sender: Any?) {
-        let requestedByUser = sender != nil
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        ReleaseChecker().check(currentVersion: version) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        let version = Bundle.main.infoDictionary?["OpenMindFlowReleaseVersion"] as? String ??
+            Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let channel: ReleaseChannel = defaults.string(forKey: "updateChannel") == "beta" ? .beta : .stable
+        updateRequestGeneration &+= 1
+        let generation = updateRequestGeneration
+        let automaticGeneration = automaticUpdateGeneration
+        updateReleasePage = nil
+        if sender != nil { updateStatusKey = "Checking for updates…"; updateStatusVersion = ""; refreshUpdateStatus() }
+        releaseChecker.check(currentVersion: version, channel: channel) { [weak self] result in
+            let apply = { [weak self] in
+                guard let self, self.updateRequestGeneration == generation,
+                      (self.defaults.string(forKey: "updateChannel") == "beta" ? ReleaseChannel.beta : .stable) == channel,
+                      sender != nil || (self.defaults.bool(forKey: "checkUpdatesAutomatically") &&
+                                        self.automaticUpdateGeneration == automaticGeneration) else { return }
                 switch result {
-                case .success(let release?):
-                    let prompt = NSAlert()
-                    prompt.messageText = self.t("A newer OpenMindFlow version is available")
-                    prompt.informativeText = String(format: self.t("Version %@ is available on GitHub Releases. Open the official release page?"), release.version)
-                    prompt.addButton(withTitle: self.t("View Release"))
-                    prompt.addButton(withTitle: self.t("Later"))
-                    if prompt.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(release.pageURL) }
-                case .success(nil):
-                    if requestedByUser { self.alert("No newer release is available.", detail: "You are using the latest available public release.") }
+                case .success(.newer(let release)):
+                    self.updateStatusKey = "New version %@ available on GitHub."
+                    self.updateStatusVersion = release.version
+                    self.updateReleasePage = release.pageURL
+                    if sender == nil { NSApp.dockTile.badgeLabel = "!" }
+                case .success(.upToDate):
+                    self.updateStatusKey = "Your selected release channel is up to date."
+                    self.updateStatusVersion = ""
+                    NSApp.dockTile.badgeLabel = nil
+                case .success(.noPublishedRelease):
+                    self.updateStatusKey = "No published release for this channel."
+                    self.updateStatusVersion = ""
+                    NSApp.dockTile.badgeLabel = nil
                 case .failure(let error):
-                    if requestedByUser { self.alert("Unable to check for updates.", detail: error.localizedDescription) }
+                    if case ReleaseCheckError.accessRestricted = error {
+                        self.updateStatusKey = "Sign in to GitHub to view Releases."
+                    } else {
+                        self.updateStatusKey = "Check failed. Open GitHub Releases."
+                    }
+                    self.updateStatusVersion = ""
                 }
+                self.refreshUpdateStatus()
             }
+            if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
         }
     }
     @objc private func chooseSettingsAppearance(_ sender: NSPopUpButton) {
@@ -3372,7 +3453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     }
     @objc private func resetNodeShortcuts(_ sender: NSButton) {
         defaults.removeObject(forKey: "nodeShortcuts")
-        for popup in settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSPopUpButton }) ?? [] {
+        for popup in settingsViews().compactMap({ $0 as? NSPopUpButton }) {
             guard let id = popup.identifier?.rawValue, id.hasPrefix("shortcuts-") else { continue }
             let key = NodeShortcuts.bindings(defaults)[String(id.dropFirst("shortcuts-".count))]
             popup.select(popup.itemArray.first { ($0.representedObject as? String) == key })
@@ -3421,7 +3502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         installMenu()
         refreshLanguageForAllDocuments()
         settingsWindow?.title = t("Settings")
-        if let label = settingsWindow?.contentView?.subviews.compactMap({ $0 as? NSTextField }).first {
+        if let label = settingsView("general-Interface Language") as? NSTextField {
             label.stringValue = t("Interface Language")
         }
         sender.setAccessibilityLabel(t("Interface Language"))
@@ -3433,7 +3514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             default: break
             }
         }
-        for view in settingsWindow?.contentView?.subviews ?? [] {
+        for view in settingsViews() {
             switch view.identifier?.rawValue {
             case "general-Appearance": (view as? NSTextField)?.stringValue = t("Appearance")
             case "general-appearance":
@@ -3450,7 +3531,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             case "shortcuts-restore":
                 (view as? NSButton)?.title = t("Restore Defaults")
                 view.setAccessibilityLabel(t("Restore Defaults"))
-            case "about-heading": (view as? NSTextField)?.stringValue = t("About OpenMindFlow")
+            case "general-page-title": (view as? NSTextField)?.stringValue = t("General")
+            case "general-description": (view as? NSTextField)?.stringValue = t("Customize the editing experience.")
+            case "general-interface-heading": (view as? NSTextField)?.stringValue = t("Interface")
+            case "general-nodes-heading": (view as? NSTextField)?.stringValue = t("Nodes")
+            case "shortcuts-page-title": (view as? NSTextField)?.stringValue = t("Keyboard Shortcuts")
+            case "shortcuts-description": (view as? NSTextField)?.stringValue = t("Choose a unique shortcut for each node action.")
+            case "about-page-title": (view as? NSTextField)?.stringValue = t("About OpenMindFlow")
+            case "about-version":
+                let version = Bundle.main.infoDictionary?["OpenMindFlowReleaseVersion"] as? String ??
+                    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+                (view as? NSTextField)?.stringValue = String(format: t("Version %@"), version)
+            case "about-updates-heading": (view as? NSTextField)?.stringValue = t("Updates")
+            case "about-channel-label": (view as? NSTextField)?.stringValue = t("Release Channel")
+            case "about-channel-caution": (view as? NSTextField)?.stringValue = t("Beta releases may be less stable than regular releases.")
+            case "about-channel":
+                if let popup = view as? NSPopUpButton {
+                    popup.setAccessibilityLabel(t("Release Channel"))
+                    for item in popup.itemArray {
+                        item.title = t(item.representedObject as? String == "beta" ? "Beta" : "Stable")
+                    }
+                }
+            case "about-open-releases": (view as? NSButton)?.title = t("Open GitHub Releases")
+            case "about-status": refreshUpdateStatus()
             case "about-statement":
                 (view as? NSTextField)?.stringValue = t("OpenMindFlow is independently developed. Editable maps save as .mflw; MindNode v9 packages import, and supported edits export as copies without touching originals. It is not affiliated with or endorsed by IdeasOnCanvas. Open-source license unspecified.")
             case "about-auto-updates":
