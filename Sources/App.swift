@@ -2337,6 +2337,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     lazy var tabTransfer: DocumentTabTransfer = {
         let coordinator = DocumentTabTransfer()
         coordinator.eligibleWindows = { [weak self] in self?.windowSessions ?? [] }
+        coordinator.isOverVisibleAppWindow = { point in
+            NSApp.windows.contains { $0.isVisible && $0.frame.contains(point) }
+        }
         coordinator.createEmptyWindow = { [weak self] in self?.createWindowSession(emptyForTransfer: true) }
         return coordinator
     }()

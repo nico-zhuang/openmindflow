@@ -10,6 +10,40 @@ import AppKit
         let source = app.makeUnshownWindowSession(), destination = app.makeUnshownWindowSession()
         let document = source.active!, retained = destination.active!
         let transfer = app.tabTransfer
+        let oldMenu = NSApp.mainMenu
+        let keyboard = TrackingShortcutProbe()
+        let menu = NSMenu()
+        let top = NSMenuItem(title: "Tracking Fixture", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let shortcut = NSMenuItem(title: "Shortcut Fixture", action: #selector(TrackingShortcutProbe.fire(_:)),
+                                  keyEquivalent: "g")
+        shortcut.keyEquivalentModifierMask = [.command]
+        shortcut.target = keyboard
+        submenu.addItem(shortcut)
+        menu.addItem(top)
+        menu.setSubmenu(submenu, for: top)
+        NSApp.mainMenu = menu
+        defer { NSApp.mainMenu = oldMenu }
+        let title = source.tabStrip.subviews.first { $0.subviews.count == 2 &&
+            $0.subviews[0] is NSButton }!.subviews[0] as! NSButton
+        let point = title.convert(CGPoint(x: 8, y: 8), to: nil)
+        let shortcutKey = NSEvent.keyEvent(with: .keyDown, location: point, modifierFlags: [.command],
+            timestamp: 200, windowNumber: source.window.windowNumber, context: nil,
+            characters: "g", charactersIgnoringModifiers: "g", isARepeat: false, keyCode: 5)!
+        NSApp.sendEvent(shortcutKey)
+        assert(keyboard.invocations == 1, "AppKit normally dispatches this Cmd shortcut")
+        keyboard.invocations = 0
+        let pointerDown = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+            timestamp: 199, windowNumber: source.window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1)!
+        let pointerUp = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+            timestamp: 201, windowNumber: source.window.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 1)!
+        NSApp.postEvent(pointerUp, atStart: false)
+        NSApp.postEvent(shortcutKey, atStart: true)
+        title.mouseDown(with: pointerDown)
+        assert(keyboard.invocations == 1,
+               "pointer tracking must route an intercepted Cmd shortcut through normal AppKit dispatch")
         let farAway = CGPoint(x: 50_000, y: 50_000)
         func unchanged(_ reason: String, windows count: Int = 2) {
             assert(app.windowSessions.count == count, reason)
@@ -28,6 +62,14 @@ import AppKit
                 timestamp: timestamp, windowNumber: windowNumber ?? source.window.windowNumber, context: nil,
                 eventNumber: 1, clickCount: 1, pressure: 1)!
         }
+        let equalTimestamp = DragReleaseSignal()
+        let equalToken = UUID()
+        equalTimestamp.arm(token: equalToken, after: 100,
+                           sourceWindowNumber: source.window.windowNumber)
+        equalTimestamp.observeDequeued(event(.keyDown, timestamp: 100, keyCode: 53))
+        equalTimestamp.observeDequeued(event(.leftMouseUp, timestamp: 101))
+        assert(!equalTimestamp.positivelyReleased(token: equalToken),
+               "a dequeued Escape at drag-start timestamp vetoes later source-window mouse-up")
         let signal = DragReleaseSignal()
         let unknown = transfer.begin(document: document, source: source)
         signal.arm(token: unknown, after: 10, sourceWindowNumber: source.window.windowNumber)
@@ -84,6 +126,24 @@ import AppKit
                                 operation: [], signal: unrelatedSignal))
         unchanged("another window's mouse-up cannot authorize this source tab tearoff")
         unrelatedSignal.disarm(token: unrelated)
+        let auxiliary = SyntheticVisibleAuxiliaryWindow(contentRect:
+            CGRect(x: 45_000, y: 45_000, width: 320, height: 220), styleMask: [.titled],
+            backing: .buffered, defer: false)
+        auxiliary.isReleasedWhenClosed = false
+        assert(NSApp.windows.contains(where: { $0 === auxiliary }) && auxiliary.isVisible,
+               "fixture represents a visible auxiliary app window without ordering it")
+        let auxiliaryToken = transfer.begin(document: document, source: source)
+        let auxiliarySignal = DragReleaseSignal()
+        auxiliarySignal.arm(token: auxiliaryToken, after: 27,
+                            sourceWindowNumber: source.window.windowNumber)
+        auxiliarySignal.observeDequeued(event(.leftMouseUp, timestamp: 28))
+        let auxiliaryPoint = CGPoint(x: auxiliary.frame.midX, y: auxiliary.frame.midY)
+        assert(!transfer.finish(token: auxiliaryToken, locationOnScreen: auxiliaryPoint,
+                                operation: [], signal: auxiliarySignal),
+               "release over visible Settings/Find/Color-like app window is not a desktop tearoff")
+        unchanged("auxiliary app window cannot create a new document window")
+        auxiliarySignal.disarm(token: auxiliaryToken)
+        auxiliary.close()
 
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("local.openmindflow.test.\(UUID())"))
         let malformed = UUID()
@@ -206,8 +266,36 @@ import AppKit
                                 operation: [], signal: afterSourceClose) &&
                app.windowSessions.count == countAfterClose,
                "closed source cannot create a tearoff even with matching release event")
+        let closingSource = app.makeUnshownWindowSession()
+        let closingToken = closingSource.tabStrip.armNativeDrag(
+            document: closingSource.active!, source: closingSource, after: 60)!
+        assert(DocumentDragApplication.activeReleaseSignal != nil)
+        assert(destination.tabStrip.previewInsertion(token: closingToken, at: CGPoint(x: 4, y: 4)) != nil)
+        assert(destination.tabStrip.previewIndex != nil)
+        closingSource.window.close() // Simulate interrupted source without NSDraggingSource.endedAt.
+        assert(DocumentDragApplication.activeReleaseSignal == nil &&
+               transfer.liveSource(for: closingToken) == nil &&
+               destination.tabStrip.previewIndex == nil,
+               "source close must disarm token, signal and all insertion previews without endedAt")
+        let nextSource = app.makeUnshownWindowSession()
+        let nextToken = nextSource.tabStrip.armNativeDrag(
+            document: nextSource.active!, source: nextSource, after: 70)
+        assert(nextToken != nil && DocumentDragApplication.activeReleaseSignal != nil,
+               "after interrupted source closes, another independent tab drag may arm")
+        nextSource.window.close()
+        assert(DocumentDragApplication.activeReleaseSignal == nil)
         print("offscreen token-only drag, dequeued-release gate, cancel, destination and tearoff passed; physical production drag not tested")
     }
+}
+
+/// Offscreen window whose visibility getter models a Settings/Find/Color panel; never ordered.
+private final class SyntheticVisibleAuxiliaryWindow: NSWindow {
+    override var isVisible: Bool { true }
+}
+
+private final class TrackingShortcutProbe: NSObject {
+    var invocations = 0
+    @objc func fire(_ sender: Any?) { invocations += 1 }
 }
 
 private extension Array {

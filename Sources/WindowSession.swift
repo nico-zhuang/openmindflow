@@ -163,6 +163,8 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { prepareClose(documents: documents) }
     func windowWillClose(_ notification: Notification) {
+        // AppKit may close an interrupted source without sending NSDraggingSource.endedAt.
+        tabStrip.cancelNativeDrag()
         transferClosed = true
         transferGeneration &+= 1
         for document in documents {

@@ -11,12 +11,13 @@ final class DragReleaseSignal {
         active = (token, timestamp, sourceWindowNumber, false, vetoed.contains(token))
     }
     func observeDequeued(_ event: NSEvent) {
-        guard var state = active, event.timestamp > state.startedAt else { return }
+        guard var state = active else { return }
         if event.type == .keyDown && event.keyCode == 53 {
             state.canceled = true
             vetoed.insert(state.token)
         }
         else if event.type == .leftMouseUp && !state.canceled &&
+                    event.timestamp > state.startedAt &&
                     event.windowNumber == state.sourceWindowNumber { state.released = true }
         active = state
     }
@@ -50,6 +51,7 @@ struct DocumentDragToken {
 final class DocumentTabTransfer {
     static let pasteboardType = NSPasteboard.PasteboardType("local.openmindflow.document-tab")
     var eligibleWindows: (() -> [WindowSession])?
+    var isOverVisibleAppWindow: ((CGPoint) -> Bool)?
     var createEmptyWindow: (() -> WindowSession?)?
     private struct Entry {
         let token: DocumentDragToken
@@ -97,11 +99,13 @@ final class DocumentTabTransfer {
         guard operation.isEmpty, signal.positivelyReleased(token: token),
               let source = liveSource(for: token),
               locationOnScreen.x.isFinite, locationOnScreen.y.isFinite,
-              let eligibleWindows, let createEmptyWindow else { return false }
+              let eligibleWindows, let isOverVisibleAppWindow,
+              let createEmptyWindow else { return false }
         let windows = eligibleWindows().filter { $0.isTransferLive && $0.tabStrip.window === $0.window }
         guard windows.contains(where: { $0 === source }),
               // Canvas, chrome and another app window are never tear-off release destinations.
-              !windows.contains(where: { $0.window.frame.contains(locationOnScreen) }) else { return false }
+              !windows.contains(where: { $0.window.frame.contains(locationOnScreen) }),
+              !isOverVisibleAppWindow(locationOnScreen) else { return false }
         let preexisting = Set(windows.map(ObjectIdentifier.init))
         guard let created = createEmptyWindow() else { return false }
         func discardNewEmptyWindow() {

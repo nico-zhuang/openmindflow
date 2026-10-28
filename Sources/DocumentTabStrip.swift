@@ -124,14 +124,38 @@ final class DocumentTabStrip: NSView {
         return true
     }
     private func finishAcceptedDrag(token: UUID) {
-        guard draggingToken == token, let signal = releaseSignal else { return }
-        signal.disarm(token: token)
-        if DocumentDragApplication.activeReleaseSignal === signal {
-            DocumentDragApplication.activeReleaseSignal = nil
+        if draggingToken == token { cancelNativeDrag() }
+    }
+    func cancelNativeDrag() {
+        guard let token = draggingToken else { return }
+        if let signal = releaseSignal {
+            signal.disarm(token: token)
+            if DocumentDragApplication.activeReleaseSignal === signal {
+                DocumentDragApplication.activeReleaseSignal = nil
+            }
         }
         releaseSignal = nil
         draggingToken = nil
+        transfer?.cancel(token: token)
+        cancelInsertionPreview()
         for owner in transfer?.eligibleWindows?() ?? [] { owner.tabStrip.cancelInsertionPreview() }
+    }
+    func armNativeDrag(document: DocumentSession, source: WindowSession,
+                       after timestamp: TimeInterval) -> UUID? {
+        guard draggingToken == nil, releaseSignal == nil,
+              DocumentDragApplication.activeReleaseSignal == nil,
+              liveOwner === source, document.window === source.window,
+              source.documents.contains(where: { $0 === document }), let transfer else { return nil }
+        let token = transfer.begin(document: document, source: source)
+        guard transfer.liveSource(for: token) === source else {
+            transfer.cancel(token: token); return nil
+        }
+        let signal = DragReleaseSignal()
+        draggingToken = token
+        releaseSignal = signal
+        signal.arm(token: token, after: timestamp, sourceWindowNumber: source.window.windowNumber)
+        DocumentDragApplication.activeReleaseSignal = signal
+        return token
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -144,26 +168,20 @@ final class DocumentTabStrip: NSView {
         }
     }
     @discardableResult func beginNativeDrag(from button: NSButton, event: NSEvent) -> Bool {
-        guard draggingToken == nil, releaseSignal == nil,
-              DocumentDragApplication.activeReleaseSignal == nil,
-              window?.isVisible == true, let owner = liveOwner, let transfer,
+        guard window?.isVisible == true, let owner = liveOwner,
               let document = liveDocument(for: button, controlIndex: 0),
-              let bitmap = button.bitmapImageRepForCachingDisplay(in: button.bounds) else { return false }
-        let token = transfer.begin(document: document, source: owner)
+              let bitmap = button.bitmapImageRepForCachingDisplay(in: button.bounds),
+              let token = armNativeDrag(document: document, source: owner,
+                                        after: event.timestamp) else { return false }
         let item = NSPasteboardItem()
         guard item.setData(Data(token.uuidString.utf8), forType: DocumentTabTransfer.pasteboardType) else {
-            transfer.cancel(token: token); return false
+            cancelNativeDrag(); return false
         }
         button.cacheDisplay(in: button.bounds, to: bitmap)
         let image = NSImage(size: button.bounds.size)
         image.addRepresentation(bitmap)
         let dragging = NSDraggingItem(pasteboardWriter: item)
         dragging.setDraggingFrame(button.convert(button.bounds, to: self), contents: image)
-        let signal = DragReleaseSignal()
-        draggingToken = token
-        releaseSignal = signal
-        signal.arm(token: token, after: event.timestamp, sourceWindowNumber: owner.window.windowNumber)
-        DocumentDragApplication.activeReleaseSignal = signal
         _ = beginDraggingSession(with: [dragging], event: event, source: self)
         return true
     }
@@ -255,16 +273,7 @@ extension DocumentTabStrip: NSDraggingSource {
     }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         guard let token = draggingToken, let signal = releaseSignal else { return }
-        defer {
-            signal.disarm(token: token)
-            if DocumentDragApplication.activeReleaseSignal === signal {
-                DocumentDragApplication.activeReleaseSignal = nil
-            }
-            releaseSignal = nil
-            draggingToken = nil
-            transfer?.cancel(token: token)
-            for owner in transfer?.eligibleWindows?() ?? [] { owner.tabStrip.cancelInsertionPreview() }
-        }
+        defer { cancelNativeDrag() }
         _ = transfer?.finish(token: token, locationOnScreen: screenPoint, operation: operation, signal: signal)
     }
 }
@@ -278,7 +287,11 @@ private final class DragTabButton: NSButton {
         defer { isHighlighted = false }
         while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
                                          until: .distantFuture, inMode: .eventTracking, dequeue: true) {
-            if next.type == .keyDown { return } // Escape and uncertain key interruptions do not start a drag.
+            if next.type == .keyDown {
+                // Never swallow menu shortcuts just because the title button owns pointer tracking.
+                if next.keyCode != 53 { NSApp.sendEvent(next) }
+                return // Escape cancels without forwarding the drag-start gesture.
+            }
             if next.type == .leftMouseUp {
                 if bounds.contains(convert(next.locationInWindow, from: nil)) { performClick(nil) }
                 return
