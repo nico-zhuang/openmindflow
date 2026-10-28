@@ -44,6 +44,47 @@ hdiutil verify "$dmg"
 hash="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 reject 'existing image' bash "$packager" "$app" "$dmg"
 [[ "$(shasum -a 256 "$dmg" | awk '{print $1}')" == "$hash" ]]
+# Mock cp only after a real stage copy: a same-UID writer alters metadata and re-signs it.
+stageMock="$scratch/stage-mock-bin"
+mkdir "$stageMock"
+cat > "$stageMock/cp" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+/bin/cp "$@"
+if [[ "$*" == *"/.openmindflow-tabs-0.5-dmg-stage-"* && "$*" == *"/OpenMindFlow-Tabs-0.5.app"* ]]; then
+  target="${@: -1}"
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 99' "$target/Contents/Info.plist"
+  /usr/bin/codesign --force --sign - --timestamp=none "$target"
+fi
+MOCK
+chmod 700 "$stageMock/cp"
+reject 're-signed staged app metadata tamper' env PATH="$stageMock:$PATH" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-stage-tamper.dmg"
+[[ ! -e "$scratch/OpenMindFlow-Tabs-0.5-stage-tamper.dmg" ]] || { echo 'FAIL: staged tamper published image' >&2; exit 1; }
+# Create a real, structurally valid UDZO from a differently re-signed app with extra resource bytes.
+payloadMock="$scratch/payload-mock-bin"
+mkdir "$payloadMock"
+cat > "$payloadMock/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" != create ]]; then exec /usr/bin/hdiutil "$@"; fi
+source=''; args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[i]}" == -srcfolder ]]; then source="${args[i+1]}"; index=$((i+1)); break; fi
+done
+[[ "$source" == "$FIXTURE_SCRATCH"/.openmindflow-tabs-0.5-dmg-stage-* ]] || exit 82
+payload="$FIXTURE_SCRATCH/tampered-payload-$$"
+/bin/cp -R "$source" "$payload"
+printf 'unexpected payload resource\n' > "$payload/OpenMindFlow-Tabs-0.5.app/Contents/Resources/payload-extra.txt"
+/usr/bin/codesign --force --sign - --timestamp=none "$payload/OpenMindFlow-Tabs-0.5.app"
+/usr/bin/codesign --verify --deep --strict "$payload/OpenMindFlow-Tabs-0.5.app" || exit 83
+args[index]="$payload"
+exec /usr/bin/hdiutil "${args[@]}"
+MOCK
+chmod 700 "$payloadMock/hdiutil"
+reject 'real DMG payload resource tamper' env PATH="$payloadMock:$PATH" FIXTURE_SCRATCH="$scratch" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-payload-tamper.dmg"
+if mount | awk -v prefix="$scratch/.openmindflow-tabs-0.5-verify-mount-" 'index($0,prefix)>0 { found=1 } END { exit !found }'; then
+  echo 'FAIL: packager retained a fixture verification mount' >&2; exit 1
+fi
 # Replace a freshly created stage (same UID and mode) at the hdiutil boundary.
 # Its replacement must survive the packager EXIT trap. Retain both fixtures.
 mockbin="$scratch/mock-bin"
@@ -74,8 +115,10 @@ replacedStage="$(< "$scratch/replaced-stage-path")"
 printf 'PASS retained replacement stage: %s\n' "$replacedStage"
 # All rejection targets use a valid output basename unless the basename itself is under test.
 mkdir "$scratch/OpenMindFlow-Tabs-0.5-nested"
-reject 'image path escape with valid basename' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-nested/../OpenMindFlow-Tabs-0.5-escape.dmg"
+reject 'noncanonical indirect child with valid basename' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-nested/../OpenMindFlow-Tabs-0.5-escape.dmg"
 [[ ! -e "$scratch/OpenMindFlow-Tabs-0.5-escape.dmg" ]]
+reject 'parent escape with valid basename' bash "$packager" "$app" "$scratch/../OpenMindFlow-Tabs-0.5-escape.dmg"
+[[ ! -e "$scratch/../OpenMindFlow-Tabs-0.5-escape.dmg" ]]
 ln -s "$linkedScratch" "$scratch/OpenMindFlow-Tabs-0.5-ancestor"
 reject 'image symlink ancestor with valid basename' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-ancestor/OpenMindFlow-Tabs-0.5-escape.dmg"
 [[ ! -e "$linkedScratch/OpenMindFlow-Tabs-0.5-escape.dmg" ]]
