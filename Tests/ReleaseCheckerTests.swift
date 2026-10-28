@@ -113,6 +113,14 @@ enum ReleaseCheckerTests {
         guard case .failure = result else { fatalError("Untrusted release metadata accepted: \(result)") }
     }
 
+    static func expectIncompleteListing(_ result: Result<ReleaseCheckOutcome, Error>) {
+        guard case .failure(let error) = result,
+              case ReleaseCheckError.incompleteListing = error else {
+            fatalError("Expected incomplete release listing: \(result)")
+        }
+        assert(error.localizedDescription.contains("Releases"), "Failure must identify the Releases page")
+    }
+
     static func actualDelegate(_ scenario: String) -> (Result<ReleaseCheckOutcome, Error>, Int, Int) {
         ReleaseFixtureProtocol.configure(scenario)
         let config = URLSessionConfiguration.ephemeral
@@ -177,7 +185,9 @@ enum ReleaseCheckerTests {
         assert(request?.value(forHTTPHeaderField: "Accept") == "application/vnd.github+json")
         assert(ReleaseChecker.releasesPage.absoluteString == releasesPage)
         assert(ReleaseChannel.stable.rawValue == "stable" && ReleaseChannel.beta.rawValue == "beta")
-        expectNewer(check(data: payload([item("1.10.0")])).0, "1.10.0", "1.10.0")
+        expectNoRelease(check(data: payload([item("1.10.0")])).0)
+        expectNoRelease(check(channel: .beta, data: payload([item("1.10.0-beta.1")])).0)
+        expectNewer(check(current: "v1.9.9", data: payload([item("v1.10.0")])).0, "1.10.0")
 
         let shuffled = payload([item("v1.9.0"), item("v1.11.0-beta.3"), item("v1.10.0"),
                                 item("v1.2.99"), item("v1.11.0"), item("v1.11.0-beta.10")])
@@ -201,6 +211,17 @@ enum ReleaseCheckerTests {
         expectUpToDate(check(current: "1.11.0", data: payload([item("v1.11.0")])).0)
         expectUpToDate(check(current: "2.0.0", data: payload([item("v1.11.0")])).0)
         expectNoRelease(check(data: payload([])).0)
+
+        // A full first page cannot prove there is no older eligible release beyond it.
+        let thirtyBetas = (1...30).map { item("v1.10.0-beta.\($0)") }
+        expectIncompleteListing(check(data: payload(thirtyBetas)).0)
+        let staleStableBehindBetas = Array(thirtyBetas.prefix(29)) + [item("v1.8.0")]
+        expectIncompleteListing(check(data: payload(staleStableBehindBetas)).0)
+        expectNoRelease(check(data: payload(Array(thirtyBetas.prefix(29)))).0)
+        expectUpToDate(check(data: payload(Array(thirtyBetas.prefix(28)) + [item("v1.8.0")])).0)
+        expectNewer(check(data: payload(Array(thirtyBetas.prefix(29)) + [item("v1.10.0")])).0,
+                    "1.10.0")
+        expectNewer(check(channel: .beta, data: payload(thirtyBetas)).0, "1.10.0-beta.30")
 
         let decoys = payload([item("v100.0.0", draft: true),
                               item("v99.0.0", prerelease: true),

@@ -17,7 +17,7 @@ enum ReleaseCheckOutcome {
 }
 
 enum ReleaseCheckError: LocalizedError {
-    case invalidVersion, invalidResponse, untrustedMetadata, tooLarge, accessRestricted
+    case invalidVersion, invalidResponse, untrustedMetadata, tooLarge, accessRestricted, incompleteListing
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +26,7 @@ enum ReleaseCheckError: LocalizedError {
         case .untrustedMetadata: "The release page or metadata could not be verified."
         case .tooLarge: "The release response exceeds the 128 KiB metadata limit."
         case .accessRestricted: "GitHub Releases cannot be accessed anonymously. Sign in to GitHub in your browser to view this repository's Releases."
+        case .incompleteListing: "GitHub returned 30 Releases; a newer eligible release may be on a later page. Open GitHub Releases in your browser to verify."
         }
     }
 }
@@ -132,7 +133,8 @@ struct ReleaseChecker {
                 throw ReleaseCheckError.untrustedMetadata
             }
             guard !draft.boolValue else { continue }
-            let version = rawTag.hasPrefix("v") ? String(rawTag.dropFirst()) : rawTag
+            guard rawTag.hasPrefix("v") else { continue }
+            let version = String(rawTag.dropFirst())
             guard let parsed = ReleaseVersion(version),
                   (parsed.beta != nil) == prerelease.boolValue,
                   channel == .beta || parsed.beta == nil else { continue }
@@ -145,8 +147,9 @@ struct ReleaseChecker {
                 best = (parsed, ReleaseInfo(version: version, pageURL: page))
             }
         }
-        guard let best else { return .noPublishedRelease }
-        return best.0 > installed ? .newer(best.1) : .upToDate
+        if let best, best.0 > installed { return .newer(best.1) }
+        guard json.count < maxReleases else { throw ReleaseCheckError.incompleteListing }
+        return best == nil ? .noPublishedRelease : .upToDate
     }
 
     private static func liveFetch(_ request: URLRequest,
