@@ -94,6 +94,16 @@ import AppKit
         assert(a.active === second && b.active === secondWindowDocument && a.tabStrip.selectedID == secondID)
         check("zh-Hans", untitled: "未命名", modified: "已修改", close: "关闭标签", new: "新建标签",
               horizontal: "水平标签", vertical: "垂直标签")
+        assert(L10n.text("Rename Tab", defaults: defaults) == "重命名标签",
+               "inline rename accessibility label must be localized")
+        let renameTitle = controls(a)[0].0
+        let doubleClick = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [],
+            timestamp: 10, windowNumber: a.window.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 2, pressure: 1)!
+        renameTitle.mouseDown(with: doubleClick)
+        let renameField = renameTitle.superview!.subviews.compactMap { $0 as? NSTextField }.first!
+        assert(renameField.accessibilityLabel() == "重命名标签")
+        assert(a.tabStrip.control(renameField, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:))))
         let zhKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option],
                                      timestamp: 0, windowNumber: a.window.windowNumber, context: nil,
                                      characters: "h", charactersIgnoringModifiers: "h", isARepeat: false, keyCode: 4)!

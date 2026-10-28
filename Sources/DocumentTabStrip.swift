@@ -22,6 +22,7 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
     private weak var editingDocument: DocumentSession?
     private weak var titleEditor: NSTextField?
     private var cancelEditing = false
+    private var pendingEditorText: String?
     private let addButton = NSButton(title: "+", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
@@ -52,9 +53,32 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
            zip(rows, documents).allSatisfy({ $0.document === $1 }) {
             for row in rows {
                 (row.view as? TabChromeRow)?.selected = selectedID == id(for: row.document)
-                (row.view.subviews.first as? NSButton)?.state = selectedID == id(for: row.document) ? .on : .off
+                guard let title = row.view.subviews.first as? DragTabButton,
+                      let close = row.view.subviews.dropFirst().first as? NSButton else { continue }
+                let name = row.document.displayTabTitle(defaults: defaults)
+                title.title = name + (row.document.dirty ? " •" : "")
+                title.state = selectedID == id(for: row.document) ? .on : .off
+                title.setAccessibilityLabel(name + (row.document.dirty ? ", " + L10n.text("Modified", defaults: defaults) : ""))
+                title.setAccessibilityCloseName(L10n.text("Close Tab", defaults: defaults))
+                close.setAccessibilityLabel(L10n.text("Close Tab", defaults: defaults) + ": " + name)
             }
-            return // A background refresh cannot discard unsaved keystrokes or the field editor.
+            addButton.setAccessibilityLabel(L10n.text("New Tab", defaults: defaults))
+            return // Keep the live field, but refresh sibling chrome and AX metadata.
+        }
+        if let field = titleEditor {
+            let document = editingDocument
+            let text = pendingEditorText ?? field.currentEditor()?.string ?? field.stringValue
+            titleEditor = nil
+            editingDocument = nil
+            pendingEditorText = nil
+            field.delegate = nil
+            field.removeFromSuperview()
+            if let document, let owner = liveOwner,
+               owner.documents.contains(where: { $0 === document }), document.window === owner.window,
+               !cancelEditing, NativeMapFile.normalizedTabTitle(text) != nil {
+                _ = document.renameTab(to: text)
+            }
+            cancelEditing = false
         }
         titleEditor = nil
         editingDocument = nil
@@ -89,12 +113,20 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
             row.onHover = { [weak row, weak close] hovered in
                 guard let row, let close, row.superview != nil else { return }
                 row.hovered = hovered
+                row.hoverGeneration &+= 1
+                let generation = row.hoverGeneration
+                if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    close.alphaValue = hovered ? 1 : 0
+                    close.isHidden = !hovered
+                    return
+                }
                 close.isHidden = false
                 NSAnimationContext.runAnimationGroup { context in
-                    context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                    context.duration = 0.12
                     close.animator().alphaValue = hovered ? 1 : 0
                 } completionHandler: { [weak row, weak close] in
-                    guard let row, let close, !row.hovered else { return }
+                    guard let row, let close, row.superview != nil,
+                          row.hoverGeneration == generation, !row.hovered else { return }
                     close.isHidden = true
                 }
             }
@@ -238,15 +270,18 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
         field.setAccessibilityLabel(L10n.text("Rename Tab", defaults: defaults))
         row.addSubview(field, positioned: .above, relativeTo: sender)
         editingDocument = document
+        pendingEditorText = nil
         titleEditor = field
         _ = window?.makeFirstResponder(field)
-        // selectText tears down a field editor in an unshown test window.
-        if window?.isVisible == true { field.selectText(nil) }
+        // A visible non-key window cannot host a field editor in an accessory process.
+        // Selecting there sends a premature end-editing notification and removes this field.
+        if window?.isKeyWindow == true, let activeEditor = field.currentEditor(),
+           window?.firstResponder === activeEditor { field.selectText(nil) }
     }
     fileprivate func selectAfterEditorBlur(from sender: NSButton) -> Bool {
         guard let editor = titleEditor, let document = liveDocument(for: sender, controlIndex: 0),
               editingDocument !== document else { return false }
-        let valid = NativeMapFile.normalizedTabTitle(editor.stringValue) != nil
+        let valid = NativeMapFile.normalizedTabTitle(editor.currentEditor()?.string ?? editor.stringValue) != nil
         if valid { window?.makeFirstResponder(self) }
         guard valid else { return true }
         // The blur rebuilds the original button before its mouse-up; deliver this click once.
@@ -257,19 +292,27 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
     }
     func control(_ control: NSControl, textShouldEndEditing fieldEditor: NSText) -> Bool {
         guard control === titleEditor else { return true }
-        return cancelEditing || NativeMapFile.normalizedTabTitle(control.stringValue) != nil
+        guard !cancelEditing else { return true }
+        guard NativeMapFile.normalizedTabTitle(fieldEditor.string) != nil else {
+            pendingEditorText = nil
+            return false
+        }
+        pendingEditorText = fieldEditor.string
+        return true
     }
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let field = notification.object as? NSTextField, field === titleEditor else { return }
         let document = editingDocument
         let canceled = cancelEditing
+        let committedText = pendingEditorText ?? field.stringValue
         titleEditor = nil
         editingDocument = nil
         cancelEditing = false
+        pendingEditorText = nil
         field.removeFromSuperview()
         guard !canceled, let document, let owner = liveOwner,
               owner.documents.contains(where: { $0 === document }), document.window === owner.window else { return }
-        _ = document.renameTab(to: field.stringValue)
+        _ = document.renameTab(to: committedText)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard control === titleEditor else { return false }
@@ -279,9 +322,10 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
             return true
         }
         if selector == #selector(NSResponder.insertNewline(_:)) {
-            if NativeMapFile.normalizedTabTitle(control.stringValue) != nil {
+            if NativeMapFile.normalizedTabTitle(textView.string) != nil {
+                pendingEditorText = textView.string
                 window?.makeFirstResponder(self)
-            }
+            } else { pendingEditorText = nil }
             return true
         }
         return false
@@ -381,6 +425,7 @@ extension DocumentTabStrip: NSDraggingSource {
 private final class TabChromeRow: NSView {
     var selected = false { didSet { needsDisplay = true } }
     var hovered = false
+    var hoverGeneration: UInt64 = 0
     var onHover: ((Bool) -> Void)?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

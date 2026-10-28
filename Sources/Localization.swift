@@ -34,7 +34,7 @@ enum L10n {
         "MindMap": "思维导图", "Quit MindMap": "退出思维导图", "File": "文件", "Edit": "编辑",
         "View": "视图", "Node": "节点", "Save": "保存", "Undo": "撤销", "Redo": "重做",
         "Cut": "剪切", "Copy": "复制", "Paste": "粘贴", "Select All": "全选",
-        "New Window": "新建窗口", "New Tab": "新建标签", "Close Tab": "关闭标签",
+        "New Window": "新建窗口", "New Tab": "新建标签", "Close Tab": "关闭标签", "Rename Tab": "重命名标签",
         "Horizontal Tabs": "水平标签", "Vertical Tabs": "垂直标签", "Modified": "已修改",
         "Open Map…": "打开导图…", "Import MindNode…": "导入 MindNode…",
         "Save As…": "另存为…", "Save As MindNode Copy…": "另存 MindNode 副本…",
