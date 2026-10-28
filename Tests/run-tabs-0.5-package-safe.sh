@@ -44,10 +44,44 @@ hdiutil verify "$dmg"
 hash="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 reject 'existing image' bash "$packager" "$app" "$dmg"
 [[ "$(shasum -a 256 "$dmg" | awk '{print $1}')" == "$hash" ]]
-reject 'image path escape' bash "$packager" "$app" "$scratch/../escape.dmg"
+# Replace a freshly created stage (same UID and mode) at the hdiutil boundary.
+# Its replacement must survive the packager EXIT trap. Retain both fixtures.
+mockbin="$scratch/mock-bin"
+mkdir "$mockbin"
+cat > "$mockbin/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" != create ]]; then exec /usr/bin/hdiutil "$@"; fi
+stage=''
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == -srcfolder ]]; then stage="$2"; break; fi
+  shift
+done
+[[ -n "$stage" && "$stage" == "$FIXTURE_SCRATCH"/.openmindflow-tabs-0.5-dmg-stage-* &&
+   ! -L "$stage" && "$(cd "$stage" && pwd -P)" == "$stage" &&
+   "$(stat -f %u "$stage")" == "$(id -u)" && "$(stat -f %Lp "$stage")" == 700 &&
+   ! -e "$stage-original" ]] || exit 81
+mv -- "$stage" "$stage-original"
+mkdir -m 700 "$stage"
+printf 'replacement must survive\n' > "$stage/sentinel"
+printf '%s\n' "$stage" > "$FIXTURE_SCRATCH/replaced-stage-path"
+exit 73
+MOCK
+chmod 700 "$mockbin/hdiutil"
+reject 'same-UID stage replacement' env PATH="$mockbin:$PATH" FIXTURE_SCRATCH="$scratch" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-stage-replacement.dmg"
+replacedStage="$(< "$scratch/replaced-stage-path")"
+[[ -f "$replacedStage/sentinel" ]] || { echo 'FAIL: packager deleted same-UID replacement stage' >&2; exit 1; }
+printf 'PASS retained replacement stage: %s\n' "$replacedStage"
+# All rejection targets use a valid output basename unless the basename itself is under test.
+mkdir "$scratch/OpenMindFlow-Tabs-0.5-nested"
+reject 'image path escape with valid basename' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-nested/../OpenMindFlow-Tabs-0.5-escape.dmg"
+[[ ! -e "$scratch/OpenMindFlow-Tabs-0.5-escape.dmg" ]]
+ln -s "$linkedScratch" "$scratch/OpenMindFlow-Tabs-0.5-ancestor"
+reject 'image symlink ancestor with valid basename' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-ancestor/OpenMindFlow-Tabs-0.5-escape.dmg"
+[[ ! -e "$linkedScratch/OpenMindFlow-Tabs-0.5-escape.dmg" ]]
 ln -s "$dmg" "$scratch/OpenMindFlow-Tabs-0.5-linked.dmg"
 reject 'image symlink' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-linked.dmg"
-reject 'invalid image extension' bash "$packager" "$app" "$scratch/out.zip"
+reject 'invalid image extension with valid prefix' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-invalid.zip"
 cp -R "$app" "$scratch/Other.app"
 reject 'arbitrary app name' bash "$packager" "$scratch/Other.app" "$scratch/OpenMindFlow-Tabs-0.5-arbitrary.dmg"
 cp "$plist" "$scratch/original-info.plist"
@@ -56,12 +90,15 @@ for change in 'CFBundleIdentifier wrong.id' 'CFBundleShortVersionString 0.4.0' '
   key="${change%% *}"; value="${change#* }"
   /usr/libexec/PlistBuddy -c "Set :$key $value" "$plist"
   codesign --force --sign - --timestamp=none "$app"
+  codesign --verify --deep --strict "$app" || { echo "FAIL: negative $key fixture has invalid signature" >&2; exit 1; }
   reject "validly re-signed $key" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-invalid-${key//:/-}.dmg"
   cp "$scratch/original-info.plist" "$plist"
   codesign --force --sign - --timestamp=none "$app"
+  codesign --verify --deep --strict "$app"
 done
 printf altered >> "$icon"
 codesign --force --sign - --timestamp=none "$app"
+codesign --verify --deep --strict "$app" || { echo 'FAIL: negative icon fixture has invalid signature' >&2; exit 1; }
 reject 'validly re-signed icon' bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-invalid-icon.dmg"
 cp "$scratch/original-icon.icns" "$icon"
 codesign --force --sign - --timestamp=none "$app"

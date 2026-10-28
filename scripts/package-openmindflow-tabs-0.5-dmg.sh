@@ -5,13 +5,14 @@ if [[ $# != 2 || "$1" != /* || "$2" != /* ]]; then
   echo 'Usage: package-openmindflow-tabs-0.5-dmg.sh /private/tmp/openmindflow-local-*/OpenMindFlow-Tabs-0.5.app /private/tmp/openmindflow-local-*/OpenMindFlow-Tabs-0.5-UNIQUE.dmg' >&2; exit 2
 fi
 app="$1"; dmg="$2"; parent="${app%/*}"
+dmgParent="${dmg%/*}"; dmgName="${dmg##*/}"
 if [[ ! -d "$parent" || -L "$parent" ]]; then echo 'Private scratch missing' >&2; exit 2; fi
 canonical="$(cd "$parent" && pwd -P)"
-if [[ "$canonical" != "$parent" || "$parent" != /private/tmp/openmindflow-local-* ||
+if [[ "$canonical" != "$parent" || ! "$parent" =~ ^/private/tmp/openmindflow-local-[A-Za-z0-9]+$ ||
       "$(stat -f %u "$parent")" != "$(id -u)" || "$(stat -f %Lp "$parent")" != 700 ||
       "$app" != "$parent/OpenMindFlow-Tabs-0.5.app" || ! -d "$app" || -L "$app" ||
-      "$dmg" != "$parent/OpenMindFlow-Tabs-0.5-"*.dmg ||
-      "${dmg##*/}" == OpenMindFlow-Tabs-0.5-.dmg || -e "$dmg" || -L "$dmg" ]]; then
+      "$dmgParent" != "$parent" || ! "$dmgName" =~ ^OpenMindFlow-Tabs-0[.]5-[A-Za-z0-9][A-Za-z0-9._-]*[.]dmg$ ||
+      -e "$dmg" || -L "$dmg" ]]; then
   echo 'Refusing escaped, arbitrary, protected, existing or symlink path' >&2; exit 2
 fi
 if [[ -n "$(find "$app" -type l -print -quit)" ]]; then echo 'Refusing app symlinks' >&2; exit 2; fi
@@ -39,13 +40,21 @@ check CFBundleDocumentTypes:0:CFBundleTypeRole Editor
 [[ "$(shasum -a 256 "$icon" | awk '{print $1}')" == 3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3 ]] || { echo 'Wrong icon' >&2; exit 2; }
 codesign --verify --deep --strict --verbose=2 "$app"
 [[ "$(codesign -dv "$app" 2>&1 | awk -F= '/^Signature=/{print $2}')" == adhoc ]] || { echo 'Non-ad-hoc signature' >&2; exit 2; }
+parentIdentity="$(stat -f '%d:%i' "$parent")"
 stage="$(mktemp -d "$parent/.openmindflow-tabs-0.5-dmg-stage-XXXXXXXX")"
 [[ ! -L "$stage" && "$(cd "$stage" && pwd -P)" == "$stage" &&
    "$(stat -f %u "$stage")" == "$(id -u)" && "$(stat -f %Lp "$stage")" == 700 ]] || exit 2
+stageIdentity="$(stat -f '%d:%i' "$stage")"
 cleanup() {
-  if [[ -d "$stage" && ! -L "$stage" && "$stage" == "$parent"/.openmindflow-tabs-0.5-dmg-stage-* &&
-        "$(cd "$stage" && pwd -P)" == "$stage" && "$(stat -f %u "$stage")" == "$(id -u)" &&
-        "$(stat -f %Lp "$stage")" == 700 ]]; then rm -rf -- "$stage"; fi
+  # A same-UID process can replace a pathname. Never recursively remove a replacement.
+  if [[ -d "$parent" && ! -L "$parent" && "$(cd "$parent" && pwd -P)" == "$parent" &&
+        "$(stat -f '%d:%i' "$parent")" == "$parentIdentity" &&
+        "$(stat -f %u "$parent")" == "$(id -u)" && "$(stat -f %Lp "$parent")" == 700 &&
+        -d "$stage" && ! -L "$stage" && "$stage" == "$parent"/.openmindflow-tabs-0.5-dmg-stage-* &&
+        "$(cd "$stage" && pwd -P)" == "$stage" && "$(stat -f '%d:%i' "$stage")" == "$stageIdentity" &&
+        "$(stat -f %u "$stage")" == "$(id -u)" && "$(stat -f %Lp "$stage")" == 700 ]]; then
+    rm -rf -- "$stage"
+  fi
 }
 trap cleanup EXIT
 cp -R "$app" "$stage/OpenMindFlow-Tabs-0.5.app"
