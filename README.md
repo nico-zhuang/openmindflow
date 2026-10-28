@@ -1,9 +1,10 @@
 # OpenMindFlow — 独立 macOS 思维导图编辑器
 
-## 0.5.0 多窗口标签候选（独立于 0.4；发布检查待 Lead 完成）
+## 0.5.0 多窗口标签本地候选（独立于 0.4；实体交互验收待完成）
 
-- 独立构建/打包脚本使用 bundle ID `local.openmindflow.tabs.20261027`、版本 `0.5.0`／build `6`，保留 `.mflw` 的 `local.openmindflow.document` Editor 关联和 SHA-256 为 `3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3` 的图标。仅在新建的私有 `/private/tmp/openmindflow-local-*` 目录生成候选，绝不覆盖 0.4 原包。当前不在此处宣称已经发表 0.5 DMG/ZIP；后续只由独立审查和最终封装负责人验证并交付。ad-hoc 签名只能校验字节完整性，不证明发布者身份、代码来源或公证。
-- **用户已在 0.5 签名预览中亲手验证三项操作：**⌘N 后跨窗口拖入标签、拖出到桌面松手产生另一独立窗口、Escape 取消后再次拖动成功。这些手测不覆盖同窗口标签重排、关闭源窗口最后一个标签的行为、实际完整键盘访问（FKA）／Shift-F10／VoiceOver、Finder 双击文稿，或原 MindNode 应用对导出副本的接受；以上仍待分别验收，不将离屏/合成测试冒充实体交互验证，也不宣称功能完整。
+- 独立构建/打包脚本使用 bundle ID `local.openmindflow.tabs.20261027`、版本 `0.5.0`／build `6`，保留 `.mflw` 的 `local.openmindflow.document` Editor 关联和 SHA-256 为 `3749b7b5f220896506f5851f488ecfd74b543e5e8ac71f3fc909b6ebf4b25af3` 的图标。仅在新建的私有 `/private/tmp/openmindflow-local-*` 目录生成候选，绝不覆盖 0.4 原包。本机已从 `a1394d0` 源码制作独立 0.5 候选：[App](</private/tmp/openmindflow-local-97SG7S72/OpenMindFlow-Tabs-0.5.app>)、[DMG](</private/tmp/openmindflow-local-97SG7S72/OpenMindFlow-Tabs-0.5-candidate-build6.dmg>)（SHA-256 `abd4ab455e060a99cfb018377df2b3058be3d35c1414553ce9e222f17c56f61f`）、[ZIP](</private/tmp/openmindflow-local-97SG7S72/OpenMindFlow-Tabs-0.5-candidate-build6.zip>)（SHA-256 `7d1222efa85975360602ab514c64405d78c50db2bcf7037de062aeff39881649`）；可执行文件 SHA-256 `b5f2250968f8cea0076e5e4b449166bddb96fa524dc66bb75e3a0ddb953be009`。这是私有临时目录里的本地交付，不是公开发布；ad-hoc 签名只能校验字节完整性，不证明发布者身份、代码来源或公证。
+- **用户已在先前的独立签名拖拽预览（不是上方新包）中亲手验证三项操作：**⌘N 后跨窗口拖入标签、拖出到桌面松手产生另一独立窗口、Escape 取消后再次拖动成功。这些手测不覆盖同窗口标签重排、关闭源窗口最后一个标签的行为、实际完整键盘访问（FKA）／Shift-F10／VoiceOver、Finder 双击文稿，或原 MindNode 应用对导出副本的接受；以上仍待分别验收，不将离屏/合成测试冒充实体交互验证，也不宣称功能完整。
+- 标签栏现支持双击标题就地重命名（Return/失焦提交、Escape 取消）、悬停渐显轻量关闭、纵排 `＋` 居中及亮/暗模式当前标签高亮；仅普通 Save 持久化标题，不改 Finder 文件名、思维导图根标题或原 `.mindnode`。最后提交 `a1394d0` 后，隔离共享模块 **74/74 安全无头套件**加独立 MapModel、TabChrome 七项相邻回归通过；独立完整0.5打包安全套件、生产链接、ZIP 解压验签/逐文件比对、DMG 再次只读挂载及 0.4 App/DMG/ZIP 哈希比对通过。最新候选的新标签实机手感、真实 MindNode 应用互操作仍待本人确认。
 - 默认 `.mflw` 使用 `OMFLW001` 魔数、长度和 SHA-256 校验及二进制 property list 负载，**并非换后缀 JSON**。`.mindnode` 导入仅针对支持的 v9 二进制 plist 包/文件，原件不被自动保存覆盖；单独的导出副本仅允许可保真的有限改动，不支持的新增节点等编辑会拒绝 `.mindnode` 导出，但仍可另存 `.mflw`。合成文件经自己的 importer 复读不等于真实 MindNode 应用接受，不能承诺所有未知改动无损转换。
 - 以下 0.4 段落仅记载历史候选当时的功能和验收状态，其中“当前仍是单窗口”只对 **0.4** 成立，不应解读为本节 0.5 的现状。
 
