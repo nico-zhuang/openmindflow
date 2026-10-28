@@ -118,7 +118,11 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if active === document {
             active = documents.indices.contains(min(index, documents.count - 1))
                 ? documents[min(index, documents.count - 1)] : documents.last
-            if let active { tabRoot.display(active.splitController); window.makeFirstResponder(active.canvas) }
+            if let active {
+                tabRoot.display(active.splitController)
+                active.onTitleChange?()
+                window.makeFirstResponder(active.canvas)
+            }
             else { tabRoot.display(nil) }
         }
         refreshTabs()

@@ -60,7 +60,12 @@ final class DocumentTabTransfer {
             try (reparent ?? { document, target in target.tabRoot.display(document.splitController) })(document, target)
         } catch {
             if target.tabRoot.workbench !== oldTargetWorkbench { target.tabRoot.display(oldTargetWorkbench) }
-            if source.tabRoot.workbench !== oldSourceWorkbench { source.tabRoot.display(oldSourceWorkbench) }
+            if source.tabRoot.workbench !== oldSourceWorkbench ||
+                (oldSourceWorkbench != nil &&
+                 (oldSourceWorkbench?.parent !== source.tabRoot ||
+                  oldSourceWorkbench?.view.superview !== source.tabRoot.layoutView)) {
+                source.tabRoot.display(oldSourceWorkbench)
+            }
             return false
         }
         source.transferDetach(document)

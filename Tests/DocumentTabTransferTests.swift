@@ -39,9 +39,13 @@ import Darwin
         let foreign = transfer.begin(document: d, source: source)
         unchanged(foreign, "foreign ownership")
         let stale = transfer.begin(document: c, source: source)
+        assert(source.activate(c))
         source.remove(c)
         unchanged(stale, "removed original")
         source.insert(c, at: 1)
+        assert(source.activate(c)) // Rebind a deliberately removed fixture before any later transfer.
+        assert(c.window === source.window)
+        unchanged(stale, "reinserted original remains stale")
         assert(source.activate(b))
         let oldModel = a.canvas.model, oldCanvas = a.canvas, oldSplit = a.splitController
         let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
@@ -70,20 +74,39 @@ import Darwin
         b.inspector.noteTextView.string = String(repeating: "界", count: 22_000)
         unchanged(reject, "invalid outgoing source editor")
         b.inspector.noteTextView.string = ""
+        assert(source.activate(a))
+        let sourceTitle = source.window.title, targetTitle = target.window.title
+        let sourceSelected = source.tabStrip.selectedID, targetSelected = target.tabStrip.selectedID
+        let sourceRegistry = app.resolveSession(for: source.window)
+        let targetRegistry = app.resolveSession(for: target.window)
         let failure = transfer.begin(document: a, source: source)
         transfer.reparent = { document, destination in
             destination.tabRoot.display(document.splitController)
+            assert(document.splitController.parent === destination.tabRoot)
+            assert(document.splitController.view.superview === destination.tabRoot.layoutView)
             throw POSIXError(.EIO)
         }
-        unchanged(failure, "injected reparent refusal")
+        unchanged(failure, "active source reparent refusal")
+        assert(a.splitController === oldSplit && a.canvas === oldCanvas && a.canvas.model === oldModel)
+        assert(a.splitController.parent === source.tabRoot)
+        assert(a.splitController.view.superview === source.tabRoot.layoutView)
+        assert(d.splitController.parent === target.tabRoot)
+        assert(d.splitController.view.superview === target.tabRoot.layoutView)
+        assert(a.window === source.window && d.window === target.window)
+        assert(source.tabStrip.selectedID == sourceSelected && target.tabStrip.selectedID == targetSelected)
+        assert(source.window.title == sourceTitle && target.window.title == targetTitle)
+        assert(app.resolveSession(for: source.window) === sourceRegistry)
+        assert(app.resolveSession(for: target.window) === targetRegistry)
+        assert(a.dirty == dirty && a.mindNodeArchive == nil && archive == nil && a.fileURL == url && a.nativeIdentity == identity)
+        let rollbackBytes = try Data(contentsOf: url)
+        assert(rollbackBytes == bytes)
         transfer.reparent = nil
-        let currentBytes = try Data(contentsOf: url)
-        assert(currentBytes == bytes)
-        assert(source.activate(a))
         let move = transfer.begin(document: a, source: source)
         assert(transfer.move(token: move, to: target, insertion: 0))
         order(source, [c,b]); order(target, [a,d])
         assert(source.active === c && target.active === a && a.window === target.window)
+        assert(source.window.title == targetTitle) // The surviving C has the original untitled title.
+        assert(target.window.title == sourceTitle) // The moved A retains its saved, dirty title.
         assert(a.canvas === oldCanvas && a.canvas.model === oldModel && a.splitController === oldSplit && a.dirty == dirty && a.mindNodeArchive == nil && archive == nil && a.fileURL == url && a.nativeIdentity == identity)
         assert(a.splitController.parent === target.tabRoot)
         assert(app.resolveSession(for: target.window) === a && app.primarySessionForTesting === a)
