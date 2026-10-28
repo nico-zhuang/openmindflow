@@ -276,7 +276,7 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
         // A visible non-key window cannot host a field editor in an accessory process.
         // Selecting there sends a premature end-editing notification and removes this field.
         if window?.isKeyWindow == true, let activeEditor = field.currentEditor(),
-           window?.firstResponder === activeEditor { field.selectText(nil) }
+           window?.firstResponder === activeEditor { activeEditor.selectAll(nil) }
     }
     fileprivate func selectAfterEditorBlur(from sender: NSButton) -> Bool {
         guard let editor = titleEditor, let document = liveDocument(for: sender, controlIndex: 0),
