@@ -50,7 +50,7 @@ stage="$(mktemp -d "$parent/.openmindflow-tabs-0.5-dmg-stage-XXXXXXXX")"
 [[ ! -L "$stage" && "$(cd "$stage" && pwd -P)" == "$stage" &&
    "$(stat -f %u "$stage")" == "$(id -u)" && "$(stat -f %Lp "$stage")" == 700 ]] || exit 2
 stageIdentity="$(stat -f '%d:%i' "$stage")"
-mountpoint=''; mountIdentity=''; mountDevice=''
+mountpoint=''; mountIdentity=''; mountDirectoryIdentity=''; mountDevice=''
 mount_is_ours() {
   [[ -d "$parent" && ! -L "$parent" && "$(cd "$parent" && pwd -P)" == "$parent" &&
      "$(stat -f '%d:%i' "$parent")" == "$parentIdentity" &&
@@ -63,19 +63,57 @@ mount_is_ours() {
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :DeviceNode' "$stage/disk-info.plist" 2>/dev/null)" == "$mountDevice" &&
      "$(/usr/libexec/PlistBuddy -c 'Print :MountPoint' "$stage/disk-info.plist" 2>/dev/null)" == "$mountpoint" ]]
 }
+# Attach can succeed even when its stdout is missing, malformed, or has no
+# mount-point entity. In that case the parsed device is unavailable; resolve
+# only this exact image path from the system attachment table, requiring one
+# matching image and a diskutil-confirmed whole disk image before ejecting.
+attached_image_device() {
+  hdiutil info -plist | /usr/bin/python3 -c '
+import plistlib, re, subprocess, sys
+try:
+    images = plistlib.loads(sys.stdin.buffer.read()).get("images", [])
+    matches = [image for image in images if image.get("image-path") == sys.argv[1]]
+    if len(matches) != 1:
+        sys.exit(1 if not matches else 2)
+    entities = matches[0].get("system-entities", [])
+    if not entities:
+        sys.exit(2)
+    device = entities[0].get("dev-entry", "")
+    if not re.fullmatch(r"/dev/disk[0-9]+", device):
+        sys.exit(2)
+    disk = plistlib.loads(subprocess.check_output(
+        ["/usr/sbin/diskutil", "info", "-plist", device], stderr=subprocess.DEVNULL))
+    if disk.get("DeviceNode") != device or disk.get("WholeDisk") is not True or disk.get("BusProtocol") != "Disk Image":
+        sys.exit(2)
+    print(device)
+except (KeyError, ValueError, OSError, subprocess.CalledProcessError):
+    sys.exit(2)
+' "$dmg"
+}
 detach_ours() {
-  [[ -z "$mountDevice" ]] && return 0
-  mount_is_ours || { echo 'Mount identity changed; refusing unsafe detach' >&2; return 1; }
-  hdiutil detach "$mountDevice" || return 1
+  local imageDevice status
+  imageDevice="$(attached_image_device)" && status=0 || status=$?
+  if [[ "$status" == 1 ]]; then
+    # An absent image is benign only if no prior parsed attachment remains.
+    [[ -z "$mountDevice" ]] && return 0
+    echo 'Previously mounted image disappeared; refusing unsafe cleanup' >&2; return 1
+  fi
+  [[ "$status" == 0 ]] || { echo 'Image identity ambiguous; refusing unsafe detach' >&2; return 1; }
+  hdiutil detach "$imageDevice" || return 1
   mountDevice=''
   return 0
 }
 cleanup() {
   # Detach only the very disk mounted at our verified exact path. Never delete a mounted directory.
   detach_ours || return 0
-  if [[ -n "$mountpoint" && -d "$mountpoint" && ! -L "$mountpoint" &&
+  if [[ -n "$mountpoint" && -d "$parent" && ! -L "$parent" &&
+         "$(cd "$parent" && pwd -P)" == "$parent" &&
+         "$(stat -f '%d:%i' "$parent")" == "$parentIdentity" &&
+         -d "$mountpoint" && ! -L "$mountpoint" &&
         "$(cd "$mountpoint" && pwd -P)" == "$mountpoint" &&
-        "$(stat -f '%d:%i' "$mountpoint")" == "$mountIdentity" ]]; then
+        "$(stat -f '%d:%i' "$mountpoint")" == "$mountDirectoryIdentity" &&
+         "$(stat -f %u "$mountpoint")" == "$(id -u)" && "$(stat -f %Lp "$mountpoint")" == 700 ]] &&
+       ! mount | awk -v path="$mountpoint" 'index($0," on "path" (")>0 { found=1 } END { exit !found }'; then
     rmdir -- "$mountpoint" 2>/dev/null || :
   fi
   # A same-UID process can replace a pathname. Never recursively remove a replacement.
@@ -104,6 +142,7 @@ hdiutil imageinfo "$dmg"
 mountpoint="$(mktemp -d "$parent/.openmindflow-tabs-0.5-verify-mount-XXXXXXXX")"
 [[ ! -L "$mountpoint" && "$(cd "$mountpoint" && pwd -P)" == "$mountpoint" &&
    "$(stat -f %u "$mountpoint")" == "$(id -u)" && "$(stat -f %Lp "$mountpoint")" == 700 ]] || exit 2
+mountDirectoryIdentity="$(stat -f '%d:%i' "$mountpoint")"
 hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" -plist "$dmg" > "$stage/attach.plist"
 for ((i=0; i<32; i++)); do
   candidateMount="$(/usr/libexec/PlistBuddy -c "Print :system-entities:$i:mount-point" "$stage/attach.plist" 2>/dev/null)" || continue

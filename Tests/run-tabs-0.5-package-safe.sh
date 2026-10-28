@@ -42,6 +42,67 @@ bash "$packager" "$app" "$dmg"
 [[ -s "$dmg" ]]
 hdiutil verify "$dmg"
 hash="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+# Successful detach must remove the original empty mktemp directory, not compare its
+# inode to the mounted volume's root inode (which necessarily differs).
+mountDirs=("$scratch"/.openmindflow-tabs-0.5-verify-mount-*)
+[[ ! -e "${mountDirs[0]}" ]] || { echo 'FAIL: successful packaging left verification mount directory' >&2; exit 1; }
+# The mock performs a real attachment and only corrupts the returned plist. This
+# reproduces a partial/complete attach whose device cannot be parsed from stdout.
+attachedImageSnapshot() {
+  /usr/bin/hdiutil info -plist | /usr/bin/python3 -c '
+import plistlib, sys
+p = plistlib.loads(sys.stdin.buffer.read())
+for image in p.get("images", []):
+    path = image.get("image-path", "")
+    devices = sorted(e.get("dev-entry", "") for e in image.get("system-entities", []) if e.get("dev-entry"))
+    print(path + "\t" + ",".join(devices))
+' | LC_ALL=C sort
+}
+beforeAttachments="$(attachedImageSnapshot)"
+attachMock="$scratch/attach-mock-bin"
+mkdir "$attachMock"
+cat > "$attachMock/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" != attach ]]; then exec /usr/bin/hdiutil "$@"; fi
+image="${@: -1}"
+[[ "$image" == "$FIXTURE_IMAGE" ]] || exit 84
+if [[ "${FIXTURE_NO_MOUNT:-0}" == 1 ]]; then
+  /usr/bin/hdiutil attach -readonly -nobrowse -nomount -plist "$image" > "$FIXTURE_SCRATCH/actual-attach-no-mount.plist"
+else
+  /usr/bin/hdiutil "$@" > "$FIXTURE_SCRATCH/actual-attach.plist"
+fi
+# Confirm a genuine image attachment, then make the caller see unusable plist.
+/usr/bin/python3 - "$FIXTURE_IMAGE" <<'PY'
+import plistlib, subprocess, sys
+images = plistlib.loads(subprocess.check_output(['/usr/bin/hdiutil', 'info', '-plist']))['images']
+assert len([i for i in images if i.get('image-path') == sys.argv[1]]) == 1
+PY
+printf '<not a valid plist>\n'
+MOCK
+chmod 700 "$attachMock/hdiutil"
+invalidAttachedDmg="$scratch/OpenMindFlow-Tabs-0.5-attach-invalid-$$.dmg"
+if env PATH="$attachMock:$PATH" FIXTURE_SCRATCH="$scratch" FIXTURE_IMAGE="$invalidAttachedDmg" bash "$packager" "$app" "$invalidAttachedDmg" > "$scratch/attach-invalid.log" 2>&1; then
+  echo 'FAIL: accepted invalid attach plist' >&2; exit 1
+fi
+[[ -s "$invalidAttachedDmg" ]] || { echo 'FAIL: rejected invalid attach did not produce inspectable private image' >&2; exit 1; }
+[[ "$(< "$scratch/attach-invalid.log")" == *'Missing mounted disk identity'* ]] || { echo 'FAIL: invalid attach rejected for unrelated reason' >&2; exit 1; }
+[[ "$(attachedImageSnapshot)" == "$beforeAttachments" ]] || { echo 'FAIL: attach failure leaked a disk or touched unrelated attachment' >&2; exit 1; }
+noMountDmg="$scratch/OpenMindFlow-Tabs-0.5-attach-no-mount-$$.dmg"
+if env PATH="$attachMock:$PATH" FIXTURE_SCRATCH="$scratch" FIXTURE_IMAGE="$noMountDmg" FIXTURE_NO_MOUNT=1 bash "$packager" "$app" "$noMountDmg" > "$scratch/attach-no-mount.log" 2>&1; then
+  echo 'FAIL: accepted attached image without mounted payload' >&2; exit 1
+fi
+[[ -s "$noMountDmg" ]] || { echo 'FAIL: unmounted attachment lacked private inspectable image' >&2; exit 1; }
+[[ "$(< "$scratch/attach-no-mount.log")" == *'Missing mounted disk identity'* ]] || { echo 'FAIL: unmounted attach rejected for unrelated reason' >&2; exit 1; }
+/usr/bin/python3 - "$scratch/actual-attach-no-mount.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as stream:
+    entities = plistlib.load(stream)['system-entities']
+assert entities and not any(entity.get('mount-point') for entity in entities)
+PY
+[[ "$(attachedImageSnapshot)" == "$beforeAttachments" ]] || { echo 'FAIL: unmounted attach leaked a disk or touched unrelated attachment' >&2; exit 1; }
+mountDirs=("$scratch"/.openmindflow-tabs-0.5-verify-mount-*)
+[[ ! -e "${mountDirs[0]}" ]] || { echo 'FAIL: attach failure left verification mount directory' >&2; exit 1; }
 reject 'existing image' bash "$packager" "$app" "$dmg"
 [[ "$(shasum -a 256 "$dmg" | awk '{print $1}')" == "$hash" ]]
 # Mock cp only after a real stage copy: a same-UID writer alters metadata and re-signs it.
@@ -81,7 +142,17 @@ args[index]="$payload"
 exec /usr/bin/hdiutil "${args[@]}"
 MOCK
 chmod 700 "$payloadMock/hdiutil"
-reject 'real DMG payload resource tamper' env PATH="$payloadMock:$PATH" FIXTURE_SCRATCH="$scratch" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-payload-tamper.dmg"
+payloadLog="$scratch/payload-rejection.log"
+if env PATH="$payloadMock:$PATH" FIXTURE_SCRATCH="$scratch" bash "$packager" "$app" "$scratch/OpenMindFlow-Tabs-0.5-payload-tamper.dmg" > "$payloadLog" 2>&1; then
+  echo 'FAIL: accepted real DMG payload resource tamper' >&2; exit 1
+fi
+[[ "$(< "$payloadLog")" == *'Mounted app differs from verified stage'* ]] || { echo 'FAIL: rejected payload without mounted-byte comparison' >&2; exit 1; }
+[[ -s "$scratch/OpenMindFlow-Tabs-0.5-payload-tamper.dmg" ]]
+hdiutil verify "$scratch/OpenMindFlow-Tabs-0.5-payload-tamper.dmg"
+payloads=("$scratch"/tampered-payload-*)
+[[ ${#payloads[@]} == 1 && -f "${payloads[0]}/OpenMindFlow-Tabs-0.5.app/Contents/Resources/payload-extra.txt" ]]
+codesign --verify --deep --strict "${payloads[0]}/OpenMindFlow-Tabs-0.5.app"
+echo 'PASS rejected: real DMG payload resource tamper (mounted byte mismatch)'
 if mount | awk -v prefix="$scratch/.openmindflow-tabs-0.5-verify-mount-" 'index($0,prefix)>0 { found=1 } END { exit !found }'; then
   echo 'FAIL: packager retained a fixture verification mount' >&2; exit 1
 fi
