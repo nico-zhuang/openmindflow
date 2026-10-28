@@ -2452,6 +2452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             if let owner = self.windowSessions.first(where: { $0.window === window }),
                owner.active !== session { return }
             window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+            self.windowSessions.first(where: { $0.window === window })?.refreshTabs()
         }
         session.onFindChange = { [weak self, weak session] in
             guard let self, let session, self.isLiveSession(session) else { return }
@@ -2460,7 +2461,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         if register {
             sessionsByWindow[ObjectIdentifier(window)] = session
             if primarySession == nil { primarySession = session }
-            window.contentViewController = session.splitController
+            if !windowSessions.contains(where: { $0.window === window }) {
+                window.contentViewController = session.splitController // Historical standalone fixture API.
+            }
             session.onTitleChange?()
         }
         return session
@@ -2487,7 +2490,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                                     backing: .buffered, defer: false)
         nativeWindow.isReleasedWhenClosed = false
         nativeWindow.minSize = NSSize(width: 640, height: 400)
-        let coordinator = WindowSession(window: nativeWindow, toolbarTemplate: self)
+        let coordinator = WindowSession(window: nativeWindow, toolbarTemplate: self, defaults: defaults)
+        coordinator.onNewTab = { [weak self, weak coordinator] in
+            guard let self, let coordinator else { return }
+            self.createTab(in: coordinator)
+        }
+        coordinator.onCloseTab = { [weak self, weak coordinator] document in
+            guard let self, let coordinator else { return }
+            _ = self.closeDocument(document, in: coordinator)
+        }
         coordinator.confirmClose = { [weak self] document in
             self?.confirmDiscardOrSave(for: document) ?? false
         }
@@ -2522,6 +2533,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
     #if HEADLESS_TEST
     func makeUnshownWindowSession() -> WindowSession { createWindowSession() }
     #endif
+    private func createTab(in owner: WindowSession) {
+        guard owner.active?.commitPendingEditors() ?? true else { return }
+        let root = MapNode(id: UUID(), title: t("Central idea"), children: [], folded: false)
+        let canvas = MapCanvas(model: MapModel(roots: [root], selected: root.id))
+        canvas.onImageError = { [weak self] error in self?.alert("Could not import image", detail: error.localizedDescription) }
+        canvas.onVideoError = { [weak self] error in self?.alert("Could not import video", detail: error.localizedDescription) }
+        let document = installSession(canvas: canvas, in: owner.window, register: false)
+        owner.insert(document)
+        _ = owner.activate(document)
+        owner.window.contentView?.layoutSubtreeIfNeeded()
+        canvas.fitMapInView()
+    }
+    @objc func newTab(_ sender: Any?) {
+        guard let owner = windowSessions.first(where: { $0.window === foregroundDocumentWindow }) else {
+            newWindow(sender)
+            return
+        }
+        createTab(in: owner)
+    }
+    @objc func closeTab(_ sender: Any?) {
+        guard let owner = windowSessions.first(where: { $0.window === foregroundDocumentWindow }),
+              let document = owner.active else { return }
+        _ = closeDocument(document, in: owner)
+    }
     @objc private func newWindow(_ sender: Any?) {
         let created = createWindowSession()
         #if !HEADLESS_TEST
@@ -3317,6 +3352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
                 .first?.setAccessibilityLabel(t("Next Result"))
         }
         for owner in windowSessions {
+            owner.tabStrip.localize()
             guard let toolbar = owner.window.toolbar else { continue }
             for item in toolbar.items {
                 guard let translated = self.toolbar(toolbar, itemForItemIdentifier: item.itemIdentifier,
@@ -3413,6 +3449,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         let file = NSMenuItem(title: t("File"), action: nil, keyEquivalent: "")
         let fileMenu = NSMenu(title: t("File"))
         fileMenu.addItem(withTitle: t("New Window"), action: #selector(newWindow(_:)), keyEquivalent: "n").target = self
+        fileMenu.addItem(withTitle: t("New Tab"), action: #selector(newTab(_:)), keyEquivalent: "t").target = self
+        fileMenu.addItem(withTitle: t("Close Tab"), action: #selector(closeTab(_:)), keyEquivalent: "w").target = self
         fileMenu.addItem(withTitle: t("Open Map…"), action: #selector(openFile(_:)), keyEquivalent: "o").target = self
         let importMindNode = fileMenu.addItem(withTitle: t("Import MindNode…"), action: #selector(openMindNode(_:)), keyEquivalent: "o")
         importMindNode.keyEquivalentModifierMask = [.command, .shift]
@@ -3494,7 +3532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             item.keyEquivalentModifierMask = useCustom ? (choice?.modifiers ?? modifiers) : modifiers
             item.target = self
         }
-        nodeMenu.addItem(withTitle: t("Font…"), action: #selector(showNodeFont(_:)), keyEquivalent: "t").target = self
+        nodeMenu.addItem(withTitle: t("Font…"), action: #selector(showNodeFont(_:)), keyEquivalent: "").target = self
         nodeMenu.addItem(withTitle: t("Create Relationship"), action: #selector(createNodeRelationship(_:)), keyEquivalent: "").target = self
         node.submenu = nodeMenu
         main.addItem(node)

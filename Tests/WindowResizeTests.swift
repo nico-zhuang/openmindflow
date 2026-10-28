@@ -15,9 +15,15 @@ enum WindowResizeTests {
         let delegate = AppDelegate(defaults: defaults)
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification,
                                                               object: app)) // Own synthetic initial map only; no app.run.
-        guard let window = app.windows.first(where: { $0.contentViewController is NSSplitViewController }),
-              let split = window.contentViewController as? NSSplitViewController,
+        guard let owner = delegate.windowSessions.first,
+               let session = owner.active,
+               let window = app.windows.first(where: { $0 === owner.window }),
+               window.contentViewController === owner.tabRoot,
+               owner.tabRoot.workbench === session.splitController,
+               session.splitController.parent === owner.tabRoot,
+              let split = owner.tabRoot.workbench,
               let canvas = split.splitViewItems[1].viewController.view as? MapCanvas,
+               canvas === session.canvas,
               let root = canvas.model.roots.first else {
             fputs("Synthetic AppDelegate did not create its own workbench window\n", stderr)
             for window in app.windows { window.orderOut(nil) }

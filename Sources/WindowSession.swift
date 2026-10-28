@@ -9,11 +9,32 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     var onClose: ((WindowSession) -> Void)?
     var onRemove: ((WindowSession, DocumentSession) -> Void)?
     private let toolbarTemplate: AppDelegate
+    private let defaults: UserDefaults
+    let tabStrip = DocumentTabStrip(frame: .zero)
+    lazy var tabRoot = DocumentTabRoot(strip: tabStrip)
+    var onNewTab: (() -> Void)?
+    var onCloseTab: ((DocumentSession) -> Void)?
+    private(set) var orientation: DocumentTabOrientation
 
-    init(window: NSWindow, toolbarTemplate: AppDelegate) {
+    init(window: NSWindow, toolbarTemplate: AppDelegate, defaults: UserDefaults = .standard) {
         self.window = window
         self.toolbarTemplate = toolbarTemplate
+        self.defaults = defaults
+        orientation = DocumentTabOrientation(rawValue: defaults.string(forKey: "openmindflow-tab-orientation") ?? "") ?? .horizontal
         super.init()
+        tabStrip.defaults = defaults
+        tabStrip.orientation = orientation
+        tabStrip.onSelect = { [weak self] id in
+            guard let self, let document = self.documents.first(where: { self.tabStrip.id(for: $0) == id }) else { return }
+            _ = self.activate(document)
+        }
+        tabStrip.onClose = { [weak self] id in
+            guard let self, let document = self.documents.first(where: { self.tabStrip.id(for: $0) == id }) else { return }
+            self.onCloseTab?(document)
+        }
+        tabStrip.onNewTab = { [weak self] in self?.onNewTab?() }
+        tabStrip.onOrientationChange = { [weak self] orientation in self?.setOrientation(orientation) }
+        window.contentViewController = tabRoot
         window.delegate = self
         let toolbar = NSToolbar(identifier: NSToolbar.Identifier("MindMap.\(UUID().uuidString)"))
         toolbar.delegate = self
@@ -24,7 +45,8 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func insert(_ document: DocumentSession, at index: Int? = nil) {
         guard !documents.contains(where: { $0 === document }) else { return }
         documents.insert(document, at: max(0, min(index ?? documents.count, documents.count)))
-        if active == nil { activate(document) }
+        if active == nil { _ = activate(document) }
+        refreshTabs()
     }
     @discardableResult func activate(_ document: DocumentSession) -> Bool {
         guard documents.contains(where: { $0 === document }) else { return false }
@@ -35,10 +57,34 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         active?.canvas.invalidateRelationshipColorPanelOwnership()
         active = document
         document.window = window
-        window.contentViewController = document.splitController
+        tabRoot.display(document.splitController)
+        refreshTabs()
         document.onTitleChange?()
         window.makeFirstResponder(document.canvas)
         return true
+    }
+    func refreshTabs() {
+        tabStrip.documents = documents
+        tabStrip.selectedID = active.map { tabStrip.id(for: $0) }
+    }
+    func setOrientation(_ chosen: DocumentTabOrientation) {
+        guard chosen != orientation else { return }
+        let canvas = active?.canvas
+        window.contentView?.layoutSubtreeIfNeeded()
+        let oldScreen = canvas.map { window.convertToScreen($0.convert(.zero, to: nil)).origin }
+        let frame = window.frame
+        orientation = chosen
+        defaults.set(chosen.rawValue, forKey: "openmindflow-tab-orientation")
+        tabStrip.orientation = chosen
+        tabRoot.layoutView.needsLayout = true
+        window.contentView?.layoutSubtreeIfNeeded()
+        if window.frame != frame { window.setFrame(frame, display: false) }
+        if let canvas, let oldScreen {
+            let newScreen = window.convertToScreen(canvas.convert(.zero, to: nil)).origin
+            // The canvas is vertically flipped: negate screen-space Y motion, not map zoom.
+            canvas.shiftViewport(by: CGPoint(x: oldScreen.x - newScreen.x,
+                                             y: newScreen.y - oldScreen.y))
+        }
     }
     private func detachOwnedPanels(from document: DocumentSession) {
         let panel = document.findWindow
@@ -58,8 +104,9 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         if active === document {
             active = nil
             if let next = documents.first { _ = activate(next) }
-            else { window.contentViewController = nil }
+            else { tabRoot.display(nil) }
         }
+        refreshTabs()
         detachOwnedPanels(from: document)
         document.window = nil
         onRemove?(self, document)
