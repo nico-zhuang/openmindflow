@@ -18,6 +18,7 @@ internal struct LoadedDocument {
     let nativeURL: URL?
     let digest: Data?
     let identity: NativeMapFile.FileIdentity?
+    var tabTitle: String? = nil
 }
 
 final class DocumentSession {
@@ -28,6 +29,8 @@ final class DocumentSession {
     private(set) var fileURL: URL?
     private(set) var mindNodeArchive: MindNodeArchive?
     private(set) var dirty = false
+    private(set) var tabTitleOverride: String?
+    private var savedTabTitleOverride: String?
     weak var window: NSWindow?
     var onTitleChange: (() -> Void)?
     var onFindChange: (() -> Void)?
@@ -107,9 +110,20 @@ final class DocumentSession {
         OwnMapDocument(roots: canvas.model.roots, relationships: canvas.model.relationships,
                        theme: canvas.model.theme, canvasColor: canvas.model.canvasColor)
     }
+    @discardableResult
+    func renameTab(to raw: String) -> Bool {
+        guard let title = NativeMapFile.normalizedTabTitle(raw) else { return false }
+        tabTitleOverride = title
+        syncDirty()
+        return true
+    }
+    func displayTabTitle(defaults: UserDefaults) -> String {
+        tabTitleOverride ?? fileURL?.lastPathComponent ?? L10n.text("Untitled", defaults: defaults)
+    }
     func syncDirty() {
         dirty = canvas.model.roots != savedRoots || canvas.model.relationships != savedRelationships ||
-            canvas.model.theme != savedTheme || canvas.model.canvasColor != savedCanvasColor
+            canvas.model.theme != savedTheme || canvas.model.canvasColor != savedCanvasColor ||
+            tabTitleOverride != savedTabTitleOverride
         onTitleChange?()
     }
     func preflightMap(at url: URL) throws -> LoadedDocument {
@@ -119,7 +133,8 @@ final class DocumentSession {
                 try PropertyListDecoder().decode(MindNodeArchive.self, from: $0)
             }
             return LoadedDocument(document: result.payload.document, archive: archive,
-                                  nativeURL: url, digest: result.digest, identity: result.identity)
+                                  nativeURL: url, digest: result.digest, identity: result.identity,
+                                  tabTitle: result.payload.tabTitle)
         }
         guard url.lastPathComponent.hasSuffix(".mindmap.json") else { throw DocumentOperationError.unsupported }
         return LoadedDocument(document: try readOwnDocument(url), archive: nil,
@@ -138,6 +153,8 @@ final class DocumentSession {
         canvas.embeddedTheme = loaded.archive?.imported.theme
         mindNodeArchive = loaded.archive
         fileURL = loaded.nativeURL
+        tabTitleOverride = loaded.tabTitle
+        savedTabTitleOverride = loaded.tabTitle
         savedNativeSHA256 = loaded.digest
         savedNativeIdentity = loaded.identity
         savedRoots = document.roots
@@ -190,7 +207,8 @@ final class DocumentSession {
             encoder.outputFormat = .binary
             archiveData = try encoder.encode(mindNodeArchive)
         } else { archiveData = nil }
-        let payload = NativeMapFile.Payload(document: document, mindNodeArchive: archiveData)
+        let payload = NativeMapFile.Payload(document: document, mindNodeArchive: archiveData,
+                                            tabTitle: tabTitleOverride)
         if fileURL != nil && savedNativeSHA256 == nil { throw NativeMapFile.FileError.conflict }
         #if HEADLESS_TEST
         if ProcessInfo.processInfo.environment["MINDMAP_PANEL_ACTION"] == "save-failure" { throw POSIXError(.EIO) }
@@ -203,7 +221,8 @@ final class DocumentSession {
               result.payload.document.relationships == document.relationships,
               result.payload.document.theme == document.theme,
               result.payload.document.canvasColor == document.canvasColor,
-              result.payload.mindNodeArchive == archiveData else { throw NativeMapFile.FileError.conflict }
+              result.payload.mindNodeArchive == archiveData,
+              result.payload.tabTitle == tabTitleOverride else { throw NativeMapFile.FileError.conflict }
         fileURL = url
         savedNativeSHA256 = result.digest
         savedNativeIdentity = result.identity
@@ -211,6 +230,7 @@ final class DocumentSession {
         savedRelationships = document.relationships
         savedTheme = document.theme
         savedCanvasColor = document.canvasColor
+        savedTabTitleOverride = tabTitleOverride
         dirty = false
         onTitleChange?()
     }

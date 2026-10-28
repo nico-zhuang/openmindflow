@@ -7,6 +7,14 @@ enum NativeMapFile {
     struct Payload: Codable {
         var document: OwnMapDocument
         var mindNodeArchive: Data?
+        var tabTitle: String? = nil
+    }
+
+    static func normalizedTabTitle(_ raw: String) -> String? {
+        guard !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+        guard !title.isEmpty, title.count <= 128, title.utf8.count <= 255 else { return nil }
+        return title
     }
 
     struct FileIdentity: Equatable {
@@ -119,6 +127,7 @@ enum NativeMapFile {
             throw FileError.corrupt
         }
         let payload = try PropertyListDecoder().decode(Payload.self, from: body)
+        guard payload.tabTitle.map({ normalizedTabTitle($0) == $0 }) ?? true else { throw FileError.corrupt }
         try checkOwnDocument(payload.document)
         let identity = FileIdentity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
         return (payload, Data(SHA256.hash(data: bytes)), identity)
@@ -202,6 +211,7 @@ enum NativeMapFile {
         let (parent, name) = try parentDescriptor(for: url)
         defer { close(parent) }
         try checkOwnDocument(payload.document)
+        guard payload.tabTitle.map({ normalizedTabTitle($0) == $0 }) ?? true else { throw FileError.corrupt }
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
         let body = try encoder.encode(payload)

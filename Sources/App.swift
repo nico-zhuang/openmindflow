@@ -2462,13 +2462,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             if let owner = self.windowSessions.first(where: { $0.window === window }) {
                 guard owner.documents.contains(where: { $0 === session }) else { return }
                 if owner.active === session {
-                    window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+                    window.title = "\(session.displayTabTitle(defaults: self.defaults))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
                 }
                 owner.refreshTabs()
             } else {
                 // Standalone fixture sessions retain their historical title behavior.
                 guard self.sessionsByWindow[ObjectIdentifier(window)] === session else { return }
-                window.title = "\(session.fileURL?.lastPathComponent ?? self.t("Untitled"))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
+                window.title = "\(session.displayTabTitle(defaults: self.defaults))\(session.dirty ? " •" : "") — \(self.t("OpenMindFlow"))"
             }
         }
         session.onFindChange = { [weak self, weak session] in
