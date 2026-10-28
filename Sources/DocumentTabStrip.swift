@@ -227,6 +227,16 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        let canvas = NSColor.windowBackgroundColor
+        let ink = NSColor.labelColor
+        (canvas.blended(withFraction: 0.11, of: ink) ?? canvas).withAlphaComponent(1).setFill()
+        bounds.fill()
+        (canvas.blended(withFraction: 0.38, of: ink) ?? ink).withAlphaComponent(1).setFill()
+        if orientation == .horizontal {
+            CGRect(x: 0, y: bounds.maxY - 1, width: bounds.width, height: 1).fill()
+        } else {
+            CGRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
+        }
         guard let index = previewIndex else { return }
         NSColor.controlAccentColor.setFill()
         if orientation == .horizontal {
