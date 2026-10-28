@@ -102,8 +102,23 @@ import Darwin
         let foregroundColor = a.canvas.model.canvasColor
         assert(foregroundColor != beforeCanvas,
                "foreground A must still accept its own color callback, as when shared panel is key")
-        let temporaryParent = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
-        precondition(temporaryParent.path.hasPrefix("/"))
+        func admittedTemporaryParent(_ url: URL) -> (URL, stat)? {
+            let parent = url.resolvingSymlinksInPath()
+            var identity = stat()
+            guard parent.path.hasPrefix("/"), parent.resolvingSymlinksInPath() == parent,
+                  lstat(parent.path, &identity) == 0, identity.st_uid == getuid(),
+                  identity.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+                  (identity.st_mode & 0o022 == 0 || identity.st_mode & 0o1000 != 0) else {
+                return nil
+            }
+            return (parent, identity)
+        }
+        // Some macOS temp roots are world-writable without the sticky bit; use a private cache root then.
+        let privateCache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches", isDirectory: true)
+        let (temporaryParent, temporaryParentIdentity) =
+            admittedTemporaryParent(FileManager.default.temporaryDirectory) ??
+            admittedTemporaryParent(privateCache)!
         func privateDirectory(_ prefix: String) -> (URL, stat) {
             let directory = temporaryParent.appendingPathComponent("\(prefix)\(UUID())", isDirectory: true)
             try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
@@ -132,13 +147,20 @@ import Darwin
             for (directory, identity) in [(exportDirectory, ownedDirectory),
                                           (unadmittedDirectory, unadmittedIdentity)] {
                 var current = stat()
+                var currentParent = stat()
                 if directory.path.hasPrefix("/") &&
                     directory.deletingLastPathComponent().resolvingSymlinksInPath() == temporaryParent &&
                     directory.resolvingSymlinksInPath() == directory &&
                     lstat(directory.path, &current) == 0 &&
                     current.st_dev == identity.st_dev && current.st_ino == identity.st_ino &&
                     current.st_uid == getuid() && current.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) &&
-                    current.st_mode & 0o777 == 0o700 {
+                    current.st_mode & 0o777 == 0o700 &&
+                    temporaryParent.resolvingSymlinksInPath() == temporaryParent &&
+                    lstat(temporaryParent.path, &currentParent) == 0 &&
+                    currentParent.st_dev == temporaryParentIdentity.st_dev &&
+                    currentParent.st_ino == temporaryParentIdentity.st_ino &&
+                    currentParent.st_uid == temporaryParentIdentity.st_uid &&
+                    currentParent.st_mode == temporaryParentIdentity.st_mode {
                     try? FileManager.default.removeItem(at: directory)
                 }
             }
