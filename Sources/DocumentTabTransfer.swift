@@ -59,7 +59,12 @@ final class DocumentTabTransfer {
         do {
             try (reparent ?? { document, target in target.tabRoot.display(document.splitController) })(document, target)
         } catch {
-            if target.tabRoot.workbench !== oldTargetWorkbench { target.tabRoot.display(oldTargetWorkbench) }
+            if target.tabRoot.workbench !== oldTargetWorkbench ||
+                (oldTargetWorkbench != nil &&
+                 (oldTargetWorkbench?.parent !== target.tabRoot ||
+                  oldTargetWorkbench?.view.superview !== target.tabRoot.layoutView)) {
+                target.tabRoot.display(oldTargetWorkbench)
+            }
             if source.tabRoot.workbench !== oldSourceWorkbench ||
                 (oldSourceWorkbench != nil &&
                  (oldSourceWorkbench?.parent !== source.tabRoot ||
