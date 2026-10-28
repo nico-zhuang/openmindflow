@@ -51,6 +51,7 @@ stage="$(mktemp -d "$parent/.openmindflow-tabs-0.5-dmg-stage-XXXXXXXX")"
    "$(stat -f %u "$stage")" == "$(id -u)" && "$(stat -f %Lp "$stage")" == 700 ]] || exit 2
 stageIdentity="$(stat -f '%d:%i' "$stage")"
 mountpoint=''; mountIdentity=''; mountDirectoryIdentity=''; mountDevice=''
+attemptedAttach=0; ownDetached=0
 mount_is_ours() {
   [[ -d "$parent" && ! -L "$parent" && "$(cd "$parent" && pwd -P)" == "$parent" &&
      "$(stat -f '%d:%i' "$parent")" == "$parentIdentity" &&
@@ -105,7 +106,11 @@ detach_ours() {
 }
 cleanup() {
   # Detach only the very disk mounted at our verified exact path. Never delete a mounted directory.
-  detach_ours || return 0
+  # EXIT may run before attach or after our successful detach. Neither state
+  # owns an image, even if another process subsequently attaches this pathname.
+  if [[ "$attemptedAttach" == 1 && "$ownDetached" == 0 ]]; then
+    detach_ours || return 0
+  fi
   if [[ -n "$mountpoint" && -d "$parent" && ! -L "$parent" &&
          "$(cd "$parent" && pwd -P)" == "$parent" &&
          "$(stat -f '%d:%i' "$parent")" == "$parentIdentity" &&
@@ -143,6 +148,12 @@ mountpoint="$(mktemp -d "$parent/.openmindflow-tabs-0.5-verify-mount-XXXXXXXX")"
 [[ ! -L "$mountpoint" && "$(cd "$mountpoint" && pwd -P)" == "$mountpoint" &&
    "$(stat -f %u "$mountpoint")" == "$(id -u)" && "$(stat -f %Lp "$mountpoint")" == 700 ]] || exit 2
 mountDirectoryIdentity="$(stat -f '%d:%i' "$mountpoint")"
+# An exact image pathname identifies the source, not who attached it. Refuse
+# an image already attached before our invocation attempts its own attach.
+preAttachStatus=0
+attached_image_device > /dev/null && preAttachStatus=0 || preAttachStatus=$?
+[[ "$preAttachStatus" == 1 ]] || { echo 'Image already attached or attachment identity ambiguous before own attach' >&2; exit 2; }
+attemptedAttach=1
 hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" -plist "$dmg" > "$stage/attach.plist"
 for ((i=0; i<32; i++)); do
   candidateMount="$(/usr/libexec/PlistBuddy -c "Print :system-entities:$i:mount-point" "$stage/attach.plist" 2>/dev/null)" || continue
@@ -158,4 +169,5 @@ validate_app "$mountpoint/OpenMindFlow-Tabs-0.5.app"
 [[ "$(manifest "$mountpoint")" == "$stagedManifest" ]] || { echo 'Mounted app differs from verified stage' >&2; exit 2; }
 [[ -L "$mountpoint/Applications" && "$(readlink "$mountpoint/Applications")" == /Applications ]] || { echo 'Wrong Applications shortcut' >&2; exit 2; }
 detach_ours || exit 2
+ownDetached=1
 printf 'Private 0.5 candidate DMG: %s\n' "$dmg"

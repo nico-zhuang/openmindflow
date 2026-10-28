@@ -20,7 +20,21 @@ before="$(shasum -a 256 "${protected[@]}")"
 reject() { local label="$1"; shift; if "$@"; then echo "FAIL: accepted $label" >&2; exit 1; fi; echo "PASS rejected: $label"; }
 app="$scratch/OpenMindFlow-Tabs-0.5.app"
 dmg="$scratch/OpenMindFlow-Tabs-0.5-$(date +%s)-$$.dmg"
-bash "$builder" "$app"
+if [[ -n "${TABS_05_SIGNED_FIXTURE_APP:-}" ]]; then
+  # Focused shell regression may reuse a verified signed app from a prior private DMG
+  # while the UI agent changes Swift inputs. Default runs still compile production Sources.
+  fixture="$TABS_05_SIGNED_FIXTURE_APP"
+  fixtureParent="${fixture%/*}"
+  [[ "$fixture" == "$fixtureParent/OpenMindFlow-Tabs-0.5.app" &&
+     "$fixtureParent" =~ ^/private/tmp/openmindflow-local-[A-Za-z0-9]+$ &&
+     ! -L "$fixtureParent" && "$(cd "$fixtureParent" && pwd -P)" == "$fixtureParent" &&
+     "$(stat -f %u "$fixtureParent")" == "$(id -u)" && "$(stat -f %Lp "$fixtureParent")" == 700 &&
+     -d "$fixture" && ! -L "$fixture" ]] || { echo 'Invalid private signed fixture' >&2; exit 1; }
+  codesign --verify --deep --strict "$fixture"
+  /bin/cp -R "$fixture" "$app"
+else
+  bash "$builder" "$app"
+fi
 plist="$app/Contents/Info.plist"
 icon="$app/Contents/Resources/OpenMindFlow.icns"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" == local.openmindflow.tabs.20261027 ]]
@@ -59,6 +73,76 @@ for image in p.get("images", []):
 ' | LC_ALL=C sort
 }
 beforeAttachments="$(attachedImageSnapshot)"
+# Return only the unambiguous whole disk for one exact private image; this is
+# also the ONLY device the fixture may detach. Never sweep other attachments.
+fixtureImageDevice() {
+  /usr/bin/hdiutil info -plist | /usr/bin/python3 -c '
+import plistlib, re, subprocess, sys
+images = plistlib.loads(sys.stdin.buffer.read()).get("images", [])
+matches = [image for image in images if image.get("image-path") == sys.argv[1]]
+if len(matches) != 1: sys.exit(1)
+entities = matches[0].get("system-entities", [])
+if not entities: sys.exit(2)
+device = entities[0].get("dev-entry", "")
+if not re.fullmatch(r"/dev/disk[0-9]+", device): sys.exit(2)
+info = plistlib.loads(subprocess.check_output(
+    ["/usr/sbin/diskutil", "info", "-plist", device], stderr=subprocess.DEVNULL))
+if info.get("DeviceNode") != device or info.get("WholeDisk") is not True or info.get("BusProtocol") != "Disk Image": sys.exit(2)
+print(device)
+' "$1"
+}
+# The mock creates a genuine image, then attaches it itself before the
+# packager's attach call. Image pathname alone must NOT confer ownership.
+preExistingMock="$scratch/pre-existing-mock-bin"
+mkdir "$preExistingMock"
+cat > "$preExistingMock/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" != create ]]; then exec /usr/bin/hdiutil "$@"; fi
+/usr/bin/hdiutil "$@"
+image="${@: -1}"
+[[ "$image" == "$FIXTURE_IMAGE" ]] || exit 84
+/usr/bin/hdiutil attach -readonly -nobrowse -nomount -plist "$image" > "$FIXTURE_SCRATCH/pre-existing-attach.plist"
+MOCK
+chmod 700 "$preExistingMock/hdiutil"
+preExistingDmg="$scratch/OpenMindFlow-Tabs-0.5-pre-existing-$$.dmg"
+preExistingLog="$scratch/pre-existing-rejection.log"
+if env PATH="$preExistingMock:$PATH" FIXTURE_SCRATCH="$scratch" FIXTURE_IMAGE="$preExistingDmg" bash "$packager" "$app" "$preExistingDmg" > "$preExistingLog" 2>&1; then
+  echo 'FAIL: accepted pre-existing exact-image attachment' >&2; exit 1
+fi
+if preExistingDevice="$(fixtureImageDevice "$preExistingDmg")"; then
+  /usr/bin/hdiutil detach "$preExistingDevice"
+  [[ "$(attachedImageSnapshot)" == "$beforeAttachments" ]] || { echo 'FAIL: fixture attachment cleanup changed other disks' >&2; exit 1; }
+  [[ "$(< "$preExistingLog")" == *'already attached'* ]] || { echo 'FAIL: rejection was not the pre-attach guard' >&2; exit 1; }
+  echo 'PASS rejected: pre-existing exact-image attachment retained until fixture detach'
+else
+  echo 'FAIL: packager detached image attached by create mock before its own attach' >&2; exit 1
+fi
+# After a successful own detach, the mock creates a new third-party -nomount
+# attachment in the tiny gap before EXIT. The trap must not double-detach it.
+postDetachMock="$scratch/post-detach-mock-bin"
+mkdir "$postDetachMock"
+cat > "$postDetachMock/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" != detach ]]; then exec /usr/bin/hdiutil "$@"; fi
+/usr/bin/hdiutil "$@"
+[[ -f "$FIXTURE_IMAGE" ]] || exit 85
+/usr/bin/hdiutil attach -readonly -nobrowse -nomount -plist "$FIXTURE_IMAGE" > "$FIXTURE_SCRATCH/post-detach-attach.plist"
+MOCK
+chmod 700 "$postDetachMock/hdiutil"
+postDetachDmg="$scratch/OpenMindFlow-Tabs-0.5-post-detach-$$.dmg"
+postDetachLog="$scratch/post-detach.log"
+if ! env PATH="$postDetachMock:$PATH" FIXTURE_SCRATCH="$scratch" FIXTURE_IMAGE="$postDetachDmg" bash "$packager" "$app" "$postDetachDmg" > "$postDetachLog" 2>&1; then
+  echo 'FAIL: own successful detach packaging failed' >&2; exit 1
+fi
+if postDetachDevice="$(fixtureImageDevice "$postDetachDmg")"; then
+  /usr/bin/hdiutil detach "$postDetachDevice"
+  [[ "$(attachedImageSnapshot)" == "$beforeAttachments" ]] || { echo 'FAIL: post-detach fixture cleanup changed other disks' >&2; exit 1; }
+  echo 'PASS retained: third-party attachment after own successful detach'
+else
+  echo 'FAIL: EXIT double-detached a later exact-image attachment' >&2; exit 1
+fi
 attachMock="$scratch/attach-mock-bin"
 mkdir "$attachMock"
 cat > "$attachMock/hdiutil" <<'MOCK'
