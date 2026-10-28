@@ -2576,7 +2576,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
             guard let owner = liveOwner(session.window), owner.active === session else { return nil }
             return owner
         }
-        // Settings and other floating panels may use a live main document, not a stale cached owner.
+        // Only known auxiliary windows may borrow the live main document.
+        guard key === settingsWindow || key is NSColorPanel else { return nil }
         return liveOwner(main)
     }
     @objc func newTab(_ sender: Any?) {

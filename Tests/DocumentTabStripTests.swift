@@ -139,6 +139,32 @@ import AppKit
                "Settings may use only an explicitly live main document")
         app.closeTab(nil)
         assert(b.documents.count == 1, "Command-W from Settings with live main document closes its tab")
+        let unknown = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        let counts = [a.documents.count, b.documents.count, c.documents.count]
+        let active = [a.active!, b.active!, c.active!]
+        func assertUnchanged(_ context: String) {
+            assert(app.windowSessions.count == 3 &&
+                   [a.documents.count, b.documents.count, c.documents.count] == counts &&
+                   a.active === active[0] && b.active === active[1] && c.active === active[2], context)
+        }
+        app.foregroundWindowForTesting = unknown
+        app.newTab(nil)
+        assertUnchanged("Command-T from unknown key window must not target a different main document")
+        app.closeTab(nil)
+        assertUnchanged("Command-W from unknown key window must not close a different main document")
+        first.findWindow = nil // Retain the old panel as key after detaching it from its document.
+        app.foregroundWindowForTesting = findPanel
+        app.newTab(nil)
+        assertUnchanged("Command-T from detached Find panel must not target a different main document")
+        app.closeTab(nil)
+        assertUnchanged("Command-W from detached Find panel must not close a different main document")
+        app.foregroundWindowForTesting = NSColorPanel.shared
+        app.newTab(nil)
+        assert(b.documents.count == counts[1] + 1 && a.documents.count == counts[0],
+               "Shared color panel may route Command-T through its live main document")
+        app.closeTab(nil)
+        assertUnchanged("Shared color panel may route Command-W through its live main document")
         app.foregroundWindowForTesting = nil
         app.mainWindowForTesting = nil
         assert(!a.window.isVisible && !b.window.isVisible && !c.window.isVisible)
