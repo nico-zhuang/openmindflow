@@ -37,7 +37,10 @@ import Darwin
         let settings = NSApp.windows.first { $0.title == "Settings" }!
         assert(app.resolveSession(for: settings) == nil,
                "an explicit settings owner must not inherit a headless document anchor")
-        let language = settings.contentView!.subviews.compactMap { $0 as? NSPopUpButton }
+        func settingsDescendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + settingsDescendants($0) }
+        }
+        let language = settingsDescendants(settings.contentView!).compactMap { $0 as? NSPopUpButton }
             .first { $0.identifier?.rawValue == "general-language" }!
         language.select(language.itemArray.first { $0.representedObject as? String == "zh-Hans" })
         _ = app.perform(NSSelectorFromString("chooseLanguage:"), with: language)
