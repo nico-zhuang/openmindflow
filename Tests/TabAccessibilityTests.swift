@@ -94,13 +94,18 @@ import AppKit
         assert(!a.tabStrip.performKeyEquivalent(with: zhKey), "Command-Option-H belongs to Hide Others, not tabs")
         assert(a.tabStrip.accessibilityCustomActions()?.first?.handler?() == true && a.orientation == .horizontal)
         assert(b.orientation == .horizontal && b.active === secondWindowDocument)
+        let detachedStrip = DocumentTabStrip(frame: .zero)
+        var detachedCalls = 0
+        detachedStrip.onOrientationChange = { _ in detachedCalls += 1 }
+        assert(detachedStrip.accessibilityCustomActions()?.last?.handler?() == false && detachedCalls == 0,
+               "orientation actions reject strips without a registered live window owner")
         let staleAction = b.tabStrip.accessibilityCustomActions()!.last!
         let staleMenuItem = b.tabStrip.menu(for: zhKey)!.item(withTitle: "垂直标签")!
         b.window.close()
         assert(staleAction.handler?() == false, "closed tabs reject delayed accessibility operations")
         assert(NSApp.sendAction(staleMenuItem.action!, to: staleMenuItem.target, from: staleMenuItem))
         assert(b.orientation == .horizontal, "closed tabs reject delayed context-menu actions")
-        print("offscreen EN/ZH tab AX names, states, actions, keyboard orientation and all-window language refresh passed")
+        print("offscreen EN/ZH tab AX names, states, guarded orientation handlers and all-window language refresh passed; physical keyboard menu unverified")
     }
 }
 
