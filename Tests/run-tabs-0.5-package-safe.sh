@@ -118,6 +118,58 @@ if preExistingDevice="$(fixtureImageDevice "$preExistingDmg")"; then
 else
   echo 'FAIL: packager detached image attached by create mock before its own attach' >&2; exit 1
 fi
+# A failing hdiutil info must not look like Python's definite "no matching image"
+# exit 1 under pipefail. Create and attach a real exact-image fixture first.
+infoFailureMock="$scratch/info-failure-mock-bin"
+mkdir "$infoFailureMock"
+cat > "$infoFailureMock/hdiutil" <<'MOCK'
+#!/bin/bash
+set -euo pipefail
+case "$1" in
+  create)
+    /usr/bin/hdiutil "$@"
+    image="${@: -1}"
+    [[ "$image" == "$FIXTURE_IMAGE" ]] || exit 84
+    /usr/bin/hdiutil attach -readonly -nobrowse -nomount -plist "$image" > "$FIXTURE_SCRATCH/info-failure-attach.plist"
+    ;;
+  info)
+    if [[ "$2" == -plist && ! -e "$FIXTURE_SCRATCH/info-failure-once" ]]; then
+      /usr/bin/hdiutil info -plist
+      printf 'precheck was queried\n' > "$FIXTURE_SCRATCH/info-failure-once"
+      exit 1
+    fi
+    exec /usr/bin/hdiutil "$@"
+    ;;
+  attach)
+    printf 'packager attempted attach after failed info\n' > "$FIXTURE_SCRATCH/info-failure-own-attach"
+    exit 86
+    ;;
+  *) exec /usr/bin/hdiutil "$@" ;;
+esac
+MOCK
+chmod 700 "$infoFailureMock/hdiutil"
+infoFailureDmg="$scratch/OpenMindFlow-Tabs-0.5-info-failure-$$.dmg"
+infoFailureLog="$scratch/info-failure-rejection.log"
+infoFailureStatus=0
+if env PATH="$infoFailureMock:$PATH" FIXTURE_SCRATCH="$scratch" FIXTURE_IMAGE="$infoFailureDmg" bash "$packager" "$app" "$infoFailureDmg" > "$infoFailureLog" 2>&1; then
+  infoFailureStatus=0
+else
+  infoFailureStatus=$?
+fi
+# Evaluate before cleanup, but detach only the exact independently verified
+# fixture device if still present. Even a failed assertion must not orphan it.
+infoFailureDevice=''; infoFailureDeviceStatus=0
+infoFailureDevice="$(fixtureImageDevice "$infoFailureDmg")" || infoFailureDeviceStatus=$?
+if [[ "$infoFailureDeviceStatus" == 0 ]]; then
+  /usr/bin/hdiutil detach "$infoFailureDevice"
+fi
+[[ "$(attachedImageSnapshot)" == "$beforeAttachments" ]] || { echo 'FAIL: failed-info fixture cleanup changed other disks' >&2; exit 1; }
+[[ "$infoFailureStatus" != 0 && -s "$infoFailureDmg" && -f "$scratch/info-failure-once" &&
+   "$infoFailureDeviceStatus" == 0 && ! -e "$scratch/info-failure-own-attach" &&
+   "$(< "$infoFailureLog")" == *'attachment identity ambiguous before own attach'* ]] || {
+  echo "FAIL: failed-info precheck touched third-party attachment or attempted attach (status $infoFailureStatus, fixture status $infoFailureDeviceStatus)" >&2; exit 1;
+}
+echo 'PASS rejected: failed info precheck retained exact third-party attachment'
 # After a successful own detach, the mock creates a new third-party -nomount
 # attachment in the tiny gap before EXIT. The trap must not double-detach it.
 postDetachMock="$scratch/post-detach-mock-bin"

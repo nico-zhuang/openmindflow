@@ -69,7 +69,11 @@ mount_is_ours() {
 # only this exact image path from the system attachment table, requiring one
 # matching image and a diskutil-confirmed whole disk image before ejecting.
 attached_image_device() {
-  hdiutil info -plist | /usr/bin/python3 -c '
+  local infoPlist="$stage/attached-images.plist"
+  # A failed hdiutil query is ambiguous, even if it emitted valid plist bytes.
+  # Do not conflate its exit 1 with the parser's definite absent-image exit 1.
+  hdiutil info -plist > "$infoPlist" || return 2
+  /usr/bin/python3 -c '
 import plistlib, re, subprocess, sys
 try:
     images = plistlib.loads(sys.stdin.buffer.read()).get("images", [])
@@ -89,7 +93,7 @@ try:
     print(device)
 except (KeyError, ValueError, OSError, subprocess.CalledProcessError):
     sys.exit(2)
-' "$dmg"
+' "$dmg" < "$infoPlist"
 }
 detach_ours() {
   local imageDevice status
