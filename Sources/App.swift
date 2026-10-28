@@ -2510,6 +2510,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSOp
         coordinator.confirmClose = { [weak self] document in
             self?.confirmDiscardOrSave(for: document) ?? false
         }
+        coordinator.onTransfer = { [weak self] owner, _ in
+            guard let self else { return }
+            self.sessionsByWindow[ObjectIdentifier(owner.window)] = owner.active
+            // The moved primary remains live; neither the transfer nor empty source close retires it.
+        }
         coordinator.onRemove = { [weak self] owner, removed in
             guard let self else { return }
             if self.findSession === removed { self.findSession = nil }

@@ -3,6 +3,11 @@ import AppKit
 /// Owns a native window and its document selection. Toolbar actions never consult the key window.
 final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     let window: NSWindow
+    let id = UUID()
+    private(set) var transferGeneration: UInt64 = 0
+    var onTransfer: ((WindowSession, DocumentSession) -> Void)?
+    private var transferClosed = false
+    var isTransferLive: Bool { !transferClosed && window.delegate === self }
     private(set) var documents: [DocumentSession] = []
     private(set) var active: DocumentSession?
     var confirmClose: ((DocumentSession) -> Bool)?
@@ -45,6 +50,7 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     func insert(_ document: DocumentSession, at index: Int? = nil) {
         guard !documents.contains(where: { $0 === document }) else { return }
         documents.insert(document, at: max(0, min(index ?? documents.count, documents.count)))
+        transferGeneration &+= 1
         if active == nil { _ = activate(document) }
         refreshTabs()
     }
@@ -98,9 +104,42 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
         document.inspector.colorPanelModel = nil
         document.canvas.invalidateRelationshipColorPanelOwnership()
     }
+    /// Array-only ownership change: never clears document state or invokes close callbacks.
+    func transferReorder(from source: Int, to destination: Int) {
+        let document = documents.remove(at: source)
+        documents.insert(document, at: destination)
+        transferGeneration &+= 1
+        refreshTabs()
+    }
+    func transferDetach(_ document: DocumentSession) {
+        guard let index = documents.firstIndex(where: { $0 === document }) else { return }
+        documents.remove(at: index)
+        transferGeneration &+= 1
+        if active === document {
+            active = documents.indices.contains(min(index, documents.count - 1))
+                ? documents[min(index, documents.count - 1)] : documents.last
+            if let active { tabRoot.display(active.splitController); window.makeFirstResponder(active.canvas) }
+            else { tabRoot.display(nil) }
+        }
+        refreshTabs()
+        onTransfer?(self, document)
+    }
+    func transferAttach(_ document: DocumentSession, at index: Int) {
+        documents.insert(document, at: index)
+        transferGeneration &+= 1
+        active?.inspector.colorPanelModel = nil
+        active?.canvas.invalidateRelationshipColorPanelOwnership()
+        active = document
+        document.window = window
+        refreshTabs()
+        document.onTitleChange?()
+        window.makeFirstResponder(document.canvas)
+        onTransfer?(self, document)
+    }
     func remove(_ document: DocumentSession) {
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
         documents.remove(at: index)
+        transferGeneration &+= 1
         if active === document {
             active = nil
             if let next = documents.first { _ = activate(next) }
@@ -120,6 +159,8 @@ final class WindowSession: NSObject, NSWindowDelegate, NSToolbarDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { prepareClose(documents: documents) }
     func windowWillClose(_ notification: Notification) {
+        transferClosed = true
+        transferGeneration &+= 1
         for document in documents {
             detachOwnedPanels(from: document)
             document.window = nil

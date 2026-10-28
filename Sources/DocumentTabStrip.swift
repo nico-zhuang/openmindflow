@@ -78,7 +78,12 @@ final class DocumentTabStrip: NSView {
     }
     func insertionIndex(at point: CGPoint) -> Int {
         let coordinate = orientation == .horizontal ? point.x : point.y
-        return max(0, min(documents.count, Int(max(0, coordinate) / (orientation == .horizontal ? 154 : 35) + 0.5)))
+        let extent: CGFloat = orientation == .horizontal ? 154 : 35
+        // The insertion boundary is the midpoint of each live tab, in either layout.
+        for index in documents.indices where coordinate < (CGFloat(index) + 0.5) * extent {
+            return index
+        }
+        return documents.count
     }
     private func liveDocument(for sender: NSButton, controlIndex: Int) -> DocumentSession? {
         guard let row = rows.first(where: {
@@ -126,7 +131,11 @@ final class DocumentTabRoot: NSViewController {
     required init?(coder: NSCoder) { fatalError("Programmatic view only") }
     var layoutView: DocumentTabRootView { view as! DocumentTabRootView }
     func display(_ split: NSSplitViewController?) {
-        if let workbench { workbench.view.removeFromSuperview(); workbench.removeFromParent() }
+        // Reparenting may already have detached this split into another window.
+        if let workbench, workbench.parent === self {
+            workbench.view.removeFromSuperview()
+            workbench.removeFromParent()
+        }
         workbench = split
         if let split {
             addChild(split)
