@@ -281,9 +281,8 @@ final class DocumentTabStrip: NSView, NSTextFieldDelegate {
     fileprivate func selectAfterEditorBlur(from sender: NSButton) -> Bool {
         guard let editor = titleEditor, let document = liveDocument(for: sender, controlIndex: 0),
               editingDocument !== document else { return false }
-        let valid = NativeMapFile.normalizedTabTitle(editor.currentEditor()?.string ?? editor.stringValue) != nil
-        if valid { window?.makeFirstResponder(self) }
-        guard valid else { return true }
+        guard NativeMapFile.normalizedTabTitle(editor.currentEditor()?.string ?? editor.stringValue) != nil,
+              window?.makeFirstResponder(self) == true else { return true }
         // The blur rebuilds the original button before its mouse-up; deliver this click once.
         if let current = liveOwner, current.documents.contains(where: { $0 === document }) {
             onSelect(id(for: document))

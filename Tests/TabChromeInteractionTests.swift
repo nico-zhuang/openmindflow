@@ -38,10 +38,8 @@ import AppKit
         let orderedDouble = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [],
             timestamp: 9, windowNumber: ordered.window.windowNumber, context: nil,
             eventNumber: 0, clickCount: 2, pressure: 1)!
-        FileHandle.standardError.write(Data("rename boundary before: visible=\(ordered.window.isVisible), key=\(ordered.window.isKeyWindow), active=\(NSApp.isActive)\n".utf8))
         assert(ordered.window.isVisible && !ordered.window.isKeyWindow)
         orderedTitle.mouseDown(with: orderedDouble)
-        FileHandle.standardError.write(Data("rename boundary after: firstResponder=\(String(describing: ordered.window.firstResponder)), subviews=\(orderedRow.subviews.map { String(describing: type(of: $0)) })\n".utf8))
         assert(orderedRow.subviews.contains { $0 is NSTextField }, "visible non-key double-click must preserve inline editor")
         ordered.window.orderOut(nil)
         click(2)
@@ -215,6 +213,17 @@ import AppKit
         assert(third !== second)
         let stale = title.accessibilityCustomActions()!.first!
         assert(stale.handler?() == false, "detached title must fail closed")
+        let previouslyActive = owner.active!
+        let detachedEditButton = rows()[0].subviews[0] as! NSButton
+        detachedEditButton.mouseDown(with: cancelEvent)
+        let detachedField = rows()[0].subviews.compactMap { $0 as? NSTextField }.first!
+        detachedField.stringValue = "Pending without window"
+        assert(detachedField.superview != nil, "editor exists before fixture detachment")
+        strip.removeFromSuperview()
+        assert(strip.window == nil, "exercise refused blur without a hosting window")
+        let otherTabButton = rows()[2].subviews[0] as! NSButton
+        otherTabButton.mouseDown(with: single)
+        assert(owner.active === previouslyActive, "refused blur must not activate another document")
         print("offscreen inline edit, persistent close AX, selected state and vertical geometry passed; physical pointer/VoiceOver unverified")
     }
 }
