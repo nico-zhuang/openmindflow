@@ -10,11 +10,13 @@
     <a href="README.md" aria-label="切换到简体中文"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-%E5%88%87%E6%8D%A2-596579?style=for-the-badge" alt="简体中文 · 阅读中文版"></a>
     <a href="README.en.md" aria-label="Current language: English"><img src="https://img.shields.io/badge/English-Current-19a9a2?style=for-the-badge" alt="English · Current page"></a>
   </p>
-  <p><a href="https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1" aria-label="Open v0.6.1 download page (authorized accounts only for now)"><img src="https://img.shields.io/badge/Download-v0.6.1-1c3556?style=for-the-badge" alt="Download v0.6.1 · authorized accounts only for now"></a></p>
+  <p><a href="https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1" aria-label="Open public v0.6.1 download page"><img src="https://img.shields.io/badge/Download-v0.6.1-1c3556?style=for-the-badge" alt="Download v0.6.1 · GitHub Release"></a></p>
   <p><a href="#quick-start">Install and run</a> · <a href="#core-experience">Core experience</a> · <a href="#current-status-and-known-limits">Current status</a></p>
 </div>
 
-> **Product imagery:** There is no verified screenshot or interaction GIF of an **actual v0.6.1 application window** yet. The image above is a project icon, not a UI screenshot; older offscreen prototype renders are not presented as this version's interface. We will add real product imagery only after checking its version, permissions, and content.
+<p align="center"><img src="docs/images/openmindflow-workflow.png" width="900" alt="Original product workflow diagram: ideas, structure and actions branch from a topic and are saved to an independent .mflw document; not an app screenshot"></p>
+
+> **Imagery note:** This is an **original diagram of implemented concepts, not a v0.6.1 application-window screenshot**. There is no verified real-window screenshot or interaction GIF yet; old offscreen prototype renders are not presented as the current UI. We will add real product imagery only after checking its version, permissions, and content.
 
 OpenMindFlow is for people who want to turn ideas into maps they can continue editing: start with a topic, add nodes, rearrange branches, and switch between a canvas and an outline. It is an independently developed macOS app and does not require MindNode to be installed. Its MindNode v9 interoperability covers only a defined subset, as explained below.
 
@@ -34,7 +36,7 @@ These capabilities exist in the **source at the v0.6.1 tag**, with automated ver
 
 **System:** macOS 26 or later on Apple Silicon (arm64). The released **v0.6.1 / build 8** is labeled Stable as a product release channel—not as Apple notarization or proof of broad desktop acceptance.
 
-1. The repository and Releases are **still private**. With an authorized GitHub browser session, open the [v0.6.1 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1) and download the [DMG](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.dmg) or [ZIP](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.zip). The App does not ask for a GitHub token or automatically download and install updates.
+1. The repository and Releases are now **public**. Open the [v0.6.1 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1) and download the [DMG](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.dmg) or [ZIP](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.zip). The App does not ask for a GitHub token or automatically download and install updates.
 2. For the DMG, open it in Finder and check that it contains the OpenMindFlow App and an `/Applications` shortcut; if you choose to install it in Applications, drag the App onto that shortcut yourself. For the ZIP, use Finder / Archive Utility or the verified `ditto` command below; **do not use `unzip -q`** to scatter AppleDouble `._` files into the signed App. Check the file and its origin against your macOS security policy before opening it. Real Finder drag-and-drop, installation, and first launch have not been independently tested in this round.
 3. Once the App opens, create a map, add nodes, and save an `.mflw` document. Keep independent backups of important work while coverage grows. The App is **ad-hoc signed only**: it has no Developer ID signature, Apple notarization, or automatic installer. Code-signature integrity is not publisher identity; do not turn off macOS protections just to try it.
 
@@ -62,7 +64,7 @@ On macOS, run `shasum -a 256 PATH_TO_DOWNLOADED_FILE` and compare the result wit
 
 ### Build from source (optional)
 
-The default `main` branch still has an earlier App prototype. Its old `build.sh` is **not** the v0.6.1 builder. With Swift command-line tools and SSH read access to the repository, use the frozen [v0.6.1 tag](https://github.com/nico-zhuang/openmindflow/tree/v0.6.1) and the dedicated builder in a new, privately owned scratch directory:
+The default `main` branch still has an earlier App prototype. Its old `build.sh` is **not** the v0.6.1 builder. With Swift command-line tools, use the tested SSH clone below (requiring GitHub SSH access) and the frozen [v0.6.1 tag](https://github.com/nico-zhuang/openmindflow/tree/v0.6.1) and the dedicated builder in a new, privately owned scratch directory:
 
 ```bash
 scratch="$(mktemp -d /private/tmp/openmindflow-local-XXXXXXXX)"
@@ -72,9 +74,9 @@ bash "$scratch/source/scripts/build-openmindflow-0.6.1-stable-local.sh" \
 codesign --verify --deep --strict "$scratch/OpenMindFlow-Stable-0.6.1.app"
 ```
 
-The `mktemp` command above creates a fresh private directory; the script requires an owned `0700` directory matching `/private/tmp/openmindflow-local-*` and refuses to replace an existing App. **This exact clone/build/signature-verification sequence succeeded in this round on macOS 26.5 / arm64**; compilation emitted AVFoundation deprecated-API warnings. The isolated ad-hoc build is not installed or launched automatically. GUI launch and Finder installation still need separate hands-on checks.
+The `mktemp` command above creates a fresh private directory; the script requires an owned `0700` directory matching `/private/tmp/openmindflow-local-*` and refuses to replace an existing App. **This exact clone/build/signature-verification sequence succeeded in this round on macOS 26.5 / arm64**; compilation emitted AVFoundation deprecated-API warnings. The public repository also supports HTTPS cloning, but this host could not complete the HTTPS Git connection during this round, so only the SSH clone/build sequence above is claimed as locally verified. The isolated ad-hoc build is not installed or launched automatically. GUI launch and Finder installation still need separate hands-on checks.
 
-**Upgrading from v0.6.0:** Its old binary pins the pre-rename repository address and rejects redirects; download v0.6.1 manually from the new Release. The previous [v0.6.0 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.0) and its assets remain available to authorized accounts.
+**Upgrading from v0.6.0:** Its old binary pins the pre-rename repository address and rejects redirects; download v0.6.1 manually from the new Release. The previous [v0.6.0 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.0) and its assets remain available from this public repository.
 
 ## Current status and known limits
 
@@ -85,14 +87,18 @@ The `mktemp` command above creates a fresh private directory; the script require
 
 ## Relationship to MindNode
 
+<p align="center"><img src="docs/images/openmindflow-interoperability.png" width="900" alt="Original interoperability-boundary diagram: limited read-only MindNode v9 import, native .mflw save, and only supported edits exported as a new copy; not an app screenshot"></p>
+
+*Conceptual boundary diagram, not a screenshot of either application or a claim of full-format compatibility.*
+
 OpenMindFlow is developed independently, with MindNode's mind-mapping experience and v9 file interoperability as points of study. It is **not an official MindNode / IdeasOnCanvas product and is not affiliated with or endorsed by them**. The MindNode name and trademarks belong to their respective owners; the limited compatibility here does not imply official support. The maintainer still needs to review third-party code, graphics, and applicable licensing. This is not a legal conclusion.
 
 ## What comes next
 
 1. Verify the current signed build's real desktop interactions, Finder document association, system accessibility, and actual MindNode acceptance of exported copies; add a compliant real-window screenshot and demo only after that review.
 2. Refine the supported MindNode v9 subset, rejection messages, and export-to-new-copy guidance while keeping originals read-only.
-3. Resolve source/icon/third-party rights, private Git history before publication, and future distribution signing, notarization, and external feedback workflow. These are not promised shipped features.
+3. The repository is public and Issues are enabled. Next, review icon/third-party/source rights, the scope of historical metadata cleanup, and future distribution signing, notarization, and contribution guidance. These are not promised shipped features.
 
 ## Feedback, source, and licensing
 
-GitHub **Issues are currently disabled**, and there is no established public contribution process or `LICENSE` file. Reading the source or downloading a build does not itself grant a general modification, redistribution, or open-source license. The maintainer will decide when privacy, rights, and issue intake are ready. Earlier design and development notes are available in the [previous README at v0.6.1](https://github.com/nico-zhuang/openmindflow/blob/v0.6.1/README.md); local paths in historical documents are not public download links.
+[GitHub Issues](https://github.com/nico-zhuang/openmindflow/issues) are now open for reproducible bug reports, your macOS version, expected/actual results, and **synthetic examples without personal documents**. Do not attach private `.mindnode` originals or sensitive logs. There is no established public contribution process or `LICENSE` file: reading the source or downloading a build does not itself grant a general modification, redistribution, or open-source license. Please agree on the scope in an Issue before submitting a PR. Earlier design and development notes are available in the [previous README at v0.6.1](https://github.com/nico-zhuang/openmindflow/blob/v0.6.1/README.md); local paths in historical documents are not public download links.

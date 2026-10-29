@@ -10,11 +10,13 @@
     <a href="README.md" aria-label="当前语言：简体中文"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-%E5%BD%93%E5%89%8D-19a9a2?style=for-the-badge" alt="简体中文 · 当前页面"></a>
     <a href="README.en.md" aria-label="Switch to English"><img src="https://img.shields.io/badge/English-Switch%20language-596579?style=for-the-badge" alt="English · Read in English"></a>
   </p>
-  <p><a href="https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1" aria-label="打开 v0.6.1 下载页面（目前仅授权账号可访问）"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-v0.6.1-1c3556?style=for-the-badge" alt="下载 v0.6.1 · 目前仅授权账号可访问"></a></p>
+  <p><a href="https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1" aria-label="打开公开的 v0.6.1 下载页面"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-v0.6.1-1c3556?style=for-the-badge" alt="下载 v0.6.1 · GitHub Release"></a></p>
   <p><a href="#快速开始">安装与运行</a> · <a href="#核心体验">核心体验</a> · <a href="#当前状态与已知限制">当前状态</a></p>
 </div>
 
-> **产品展示说明**：目前没有经过核对的 **v0.6.1 实际应用窗口截图或操作 GIF**。上方展示的是项目图标，不是界面截图；旧原型的离屏画布图也不会冒充当前版本。取得真实窗口素材并完成权限与内容审查后再补充展示。
+<p align="center"><img src="docs/images/openmindflow-workflow.png" width="900" alt="原创功能流程示意：从主题分出想法、结构、行动，再保存为独立 .mflw 文稿；不是应用截图"></p>
+
+> **配图说明**：上图是根据已实现能力绘制的**原创功能示意，不是 v0.6.1 应用窗口截图**。目前仍无经过核对的真实窗口截图或操作 GIF；旧原型离屏画布也不冒充当前界面。取得可核实的实机素材并完成权限与内容审查后再补充。
 
 OpenMindFlow 面向想把思路整理成可继续编辑的导图文稿的人：从一个主题出发，添加节点、调整分支与布局，在画布和大纲之间切换。它是一款独立开发的 macOS 应用，不要求先安装 MindNode；对 MindNode v9 文件的互通只有明确的部分支持，详见下文。
 
@@ -34,7 +36,7 @@ OpenMindFlow 面向想把思路整理成可继续编辑的导图文稿的人：�
 
 **系统：**macOS 26 或更新版本、Apple Silicon（arm64）。已发行的 **v0.6.1／build 8** 是产品的 Stable 渠道标签，不代表 Apple 公证或已经完成广泛桌面验收。
 
-1. 目前仓库及 Release **仍为私有**：在获得访问权限的 GitHub 浏览器会话打开 [v0.6.1 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1)，下载 [DMG](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.dmg) 或 [ZIP](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.zip)。应用不收取 GitHub 令牌，也不会自动下载安装更新。
+1. 仓库与 Release 现已**公开**：直接打开 [v0.6.1 Release](https://github.com/nico-zhuang/openmindflow/releases/tag/v0.6.1)，下载 [DMG](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.dmg) 或 [ZIP](https://github.com/nico-zhuang/openmindflow/releases/download/v0.6.1/OpenMindFlow-Stable-0.6.1-20261029.zip)。应用不收取 GitHub 令牌，也不会自动下载安装更新。
 2. 选 DMG 时用 Finder 打开，确认其中的 OpenMindFlow App 和 `/Applications` 快捷方式；若选择安装到“应用程序”，由你确认后拖入该快捷方式。选 ZIP 时用 Finder／归档实用工具，或使用下方已验证的 `ditto` 解压命令；**不要用 `unzip -q`** 把 AppleDouble `._` 文件散落进已签名 App。打开前按自己的 macOS 安全策略核对来源与校验值；真实 Finder 拖放、安装及首次启动尚未在本轮独立验收。
 3. 启动后可新建导图、添加节点，再把作品保存为 `.mflw`；重要文稿在扩展测试覆盖前保留独立备份。App 仅使用 **ad-hoc 签名**，无 Developer ID 签名、Apple 公证或自动安装器；签名校验不证明发布者身份，遇到系统拦截请不要为了试用而关闭系统保护。
 
@@ -62,7 +64,7 @@ codesign --verify --deep --strict "$unpacked/OpenMindFlow-Stable-0.6.1.app"
 
 ### 从源码构建（可选）
 
-默认 `main` 的 Swift 仍是早期原型，**不能**把旧 `build.sh` 当成 v0.6.1 构建方法。要构建已发行版本，应具备 Swift 命令行工具和仓库 SSH 读取权限，使用固定的 [v0.6.1 tag](https://github.com/nico-zhuang/openmindflow/tree/v0.6.1)，在全新、本人所有的私有临时目录中运行专用构建脚本：
+默认 `main` 的 Swift 仍是早期原型，**不能**把旧 `build.sh` 当成 v0.6.1 构建方法。要构建已发行版本，应具备 Swift 命令行工具；下方采用本机已验证的 SSH 克隆（需 GitHub SSH 访问），公开仓库也允许 HTTPS 克隆，但本轮主机连接 GitHub HTTPS 超时，未完成该路径复验，使用固定的 [v0.6.1 tag](https://github.com/nico-zhuang/openmindflow/tree/v0.6.1)，在全新、本人所有的私有临时目录中运行专用构建脚本：
 
 ```bash
 scratch="$(mktemp -d /private/tmp/openmindflow-local-XXXXXXXX)"
@@ -85,14 +87,18 @@ codesign --verify --deep --strict "$scratch/OpenMindFlow-Stable-0.6.1.app"
 
 ## 与 MindNode 的关系
 
+<p align="center"><img src="docs/images/openmindflow-interoperability.png" width="900" alt="原创兼容边界示意：只读导入部分 MindNode v9 文件，保存到 .mflw，仅有限修改可导出新副本；非应用截图"></p>
+
+*功能边界示意，不是 MindNode 或 OpenMindFlow 的实际界面截图，也不表示完整格式兼容。*
+
 OpenMindFlow 是独立开发的软件，以 MindNode 的思维导图体验及 v9 文件互操作为研究参照；**不是 MindNode／IdeasOnCanvas 的官方产品，也没有官方隶属或背书**。MindNode 名称与商标属于其权利人；这里的兼容范围不等于官方格式完整支持。第三方代码、素材与适用许可仍须由维护者进一步审查，不做法律结论。
 
 ## 接下来的工作
 
 1. 补做当前签名版的真实桌面交互、Finder 文稿关联、系统辅助功能及原 MindNode 接受副本验收；取得合规的真实窗口截图后再制作演示。
 2. 把 MindNode v9 文件边界、拒绝原因与导出新副本的用户提示继续收紧，并维持原件只读保护。
-3. 明确图标/第三方素材与源码的授权、私人历史记录的公开处理方式，以及未来发行签名、公证和外部反馈流程；这些不是已承诺上线的功能。
+3. 仓库已公开且已开放 Issues；后续再梳理图标/第三方素材与源码的授权、私人历史记录的清理范围，以及正式发行签名、公证与贡献流程。这些不是已承诺上线的功能。
 
 ## 反馈、源码与许可
 
-目前仓库 **Issues 未启用**，也没有正式外部贡献流程或 `LICENSE` 文件；请勿把当前可读源码或下载包理解为获得修改、再分发或开源许可证。维护者完成隐私、权利和受理流程后，再决定开放反馈入口及贡献规则。历史设计与早期实验记录可从[v0.6.1 旧版 README](https://github.com/nico-zhuang/openmindflow/blob/v0.6.1/README.md)检索；其中的本机测试路径不是公开下载入口。
+现已开放 [GitHub Issues](https://github.com/nico-zhuang/openmindflow/issues)，可提交复现步骤、macOS 版本、预期/实际结果和**不含私人文稿的**合成样例；请勿公开上传个人 `.mindnode` 原件或含敏感内容的日志。项目尚无正式外部贡献流程或 `LICENSE` 文件；公开可读源码与下载包**不自动授予修改、再分发或开源许可证**，提 PR 前请先通过 Issue 与维护者确认范围。历史设计与早期实验记录可从[v0.6.1 旧版 README](https://github.com/nico-zhuang/openmindflow/blob/v0.6.1/README.md)检索；其中的本机测试路径不是公开下载入口。
