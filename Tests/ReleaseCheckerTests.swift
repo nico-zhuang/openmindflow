@@ -61,8 +61,8 @@ private final class ReleaseFixtureProtocol: URLProtocol {
 
 @main
 enum ReleaseCheckerTests {
-    static let endpoint = URL(string: "https://api.github.com/repos/nico-zhuang/mindnode-reconstruction/releases?per_page=30")!
-    static let releasesPage = "https://github.com/nico-zhuang/mindnode-reconstruction/releases"
+    static let endpoint = URL(string: "https://api.github.com/repos/nico-zhuang/openmindflow/releases?per_page=30")!
+    static let releasesPage = "https://github.com/nico-zhuang/openmindflow/releases"
 
     static func item(_ tag: String, draft: Any = false, prerelease: Any? = nil,
                      page: String? = nil) -> [String: Any] {
@@ -242,15 +242,16 @@ enum ReleaseCheckerTests {
                        "1.2.3+meta", "v1.2.3/../other", "v99999999999999999999999.0.0"] {
             expectNoRelease(check(data: payload([item(badTag)])).0)
         }
-        for badPage in ["http://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0",
-                        "https://github.com.evil.example/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0",
-                        "https://github.com@evil.example/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0",
-                        "https://github.com:444/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0",
+        for badPage in ["https://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0",
+                         "http://github.com/nico-zhuang/openmindflow/releases/tag/v1.10.0",
+                        "https://github.com.evil.example/nico-zhuang/openmindflow/releases/tag/v1.10.0",
+                        "https://github.com@evil.example/nico-zhuang/openmindflow/releases/tag/v1.10.0",
+                        "https://github.com:444/nico-zhuang/openmindflow/releases/tag/v1.10.0",
                         "https://github.com/nico-zhuang/other/releases/tag/v1.10.0",
-                        "https://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0?download=1",
-                        "https://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0#asset",
-                        "https://github.com/nico-zhuang/mindnode-reconstruction/releases/tag/%761.10.0",
-                        "/nico-zhuang/mindnode-reconstruction/releases/tag/v1.10.0"] {
+                        "https://github.com/nico-zhuang/openmindflow/releases/tag/v1.10.0?download=1",
+                        "https://github.com/nico-zhuang/openmindflow/releases/tag/v1.10.0#asset",
+                        "https://github.com/nico-zhuang/openmindflow/releases/tag/%761.10.0",
+                        "/nico-zhuang/openmindflow/releases/tag/v1.10.0"] {
             expectNoRelease(check(data: payload([item("v1.10.0", page: badPage)])).0)
         }
         for invalid in [payload([item("v1.10.0", draft: "false")]),
@@ -268,7 +269,13 @@ enum ReleaseCheckerTests {
         }
         for status in [301, 302, 307, 500] { rejected(check(status: status).0) }
         rejected(check(responseURL: URL(string: "https://example.org/redirect")!).0)
-        rejected(check(responseURL: URL(string: "https://api.github.com/repos/nico-zhuang/mindnode-reconstruction/releases/latest")!).0)
+        let oldRepositoryResponse = check(responseURL: URL(string:
+            "https://api.github.com/repos/nico-zhuang/mindnode-reconstruction/releases?per_page=30")!).0
+        guard case .failure(let oldError) = oldRepositoryResponse,
+              case ReleaseCheckError.invalidResponse = oldError else {
+            fatalError("Renamed repository must reject the old API URL: \(oldRepositoryResponse)")
+        }
+        rejected(check(responseURL: URL(string: "https://api.github.com/repos/nico-zhuang/openmindflow/releases/latest")!).0)
         rejected(check(responseURL: nil).0)
         rejected(check(nonHTTP: true).0)
         rejected(check(failure: URLError(.timedOut)).0)

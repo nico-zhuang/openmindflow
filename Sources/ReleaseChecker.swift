@@ -70,8 +70,8 @@ private struct ReleaseVersion: Comparable {
 
 struct ReleaseChecker {
     typealias Fetch = (URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void
-    static let endpoint = URL(string: "https://api.github.com/repos/nico-zhuang/mindnode-reconstruction/releases?per_page=30")!
-    static let releasesPage = URL(string: "https://github.com/nico-zhuang/mindnode-reconstruction/releases")!
+    static let endpoint = URL(string: "https://api.github.com/repos/nico-zhuang/openmindflow/releases?per_page=30")!
+    static let releasesPage = URL(string: "https://github.com/nico-zhuang/openmindflow/releases")!
     private static let maxBytes = 128 * 1024
     private static let maxReleases = 30
     private let fetch: Fetch
